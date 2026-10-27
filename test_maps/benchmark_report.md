@@ -10,14 +10,14 @@ across representative real-world SCX workload kernels. Enforces strict gates:
 
 | Kernel | Workload Description | v1 Triggers | v2 Triggers | Δ Triggers | v1 Payload | v2 Payload | Δ Payload | v1 Time | v2 Time | Speedup | Budget Gate |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Kernel 1** | Compound Arithmetic & Bitwise Math | 344 | 62 | -82.0% | 121,327 B | 24,040 B | -80.2% | 167.3 ms | 119.1 ms | 1.40x | ✅ PASS |
-| **Kernel 2** | Control Flow & Reactive Primitives | 499 | 28 | -94.4% | 153,431 B | 9,016 B | -94.1% | 162.1 ms | 111.5 ms | 1.45x | ✅ PASS |
-| **Kernel 3** | Functions & Inlining | 385 | 42 | -89.1% | 134,163 B | 12,232 B | -90.9% | 169.8 ms | 107.9 ms | 1.57x | ✅ PASS |
-| **Kernel 4** | Memory & Entities | 343 | 176 | -48.7% | 124,231 B | 47,592 B | -61.7% | 142.8 ms | 116.0 ms | 1.23x | ✅ PASS |
-| **Kernel 5** | Strings & Formatting | 508 | 2 | -99.6% | 179,119 B | 4,488 B | -97.5% | 173.6 ms | 108.8 ms | 1.60x | ✅ PASS |
-| **Kernel 6** | Full Map Payload Compilation | 559 | 134 | -76.0% | 194,795 B | 34,920 B | -82.1% | 176.3 ms | 120.6 ms | 1.46x | ✅ PASS |
-| **Kernel 7** | TypeScript Frontend Lowering | 584 | 7 | -98.8% | 194,903 B | 5,944 B | -97.0% | 175.6 ms | 118.2 ms | 1.49x | ✅ PASS |
-| **TOTAL** | **Aggregate Corpus** | **3,222** | **451** | **-86.0%** | **1,101,969 B** | **138,232 B** | **-87.5%** | **1167.4 ms** | **802.0 ms** | **1.46x** | **✅ PASS** |
+| **Kernel 1** | Compound Arithmetic & Bitwise Math | 344 | 62 | -82.0% | 116,663 B | 24,040 B | -79.4% | 149.4 ms | 111.9 ms | 1.34x | ✅ PASS |
+| **Kernel 2** | Control Flow & Reactive Primitives | 499 | 28 | -94.4% | 153,803 B | 9,016 B | -94.1% | 157.4 ms | 109.1 ms | 1.44x | ✅ PASS |
+| **Kernel 3** | Functions & Inlining | 385 | 42 | -89.1% | 136,851 B | 12,232 B | -91.1% | 140.6 ms | 106.3 ms | 1.32x | ✅ PASS |
+| **Kernel 4** | Memory & Entities | 343 | 176 | -48.7% | 130,495 B | 47,592 B | -63.5% | 139.5 ms | 122.7 ms | 1.14x | ✅ PASS |
+| **Kernel 5** | Strings & Formatting | 508 | 2 | -99.6% | 176,499 B | 4,488 B | -97.5% | 173.4 ms | 114.4 ms | 1.52x | ✅ PASS |
+| **Kernel 6** | Full Map Payload Compilation | 559 | 134 | -76.0% | 195,311 B | 34,920 B | -82.1% | 169.7 ms | 115.5 ms | 1.47x | ✅ PASS |
+| **Kernel 7** | TypeScript Frontend Lowering | 584 | 7 | -98.8% | 195,255 B | 5,944 B | -97.0% | 208.3 ms | 111.7 ms | 1.87x | ✅ PASS |
+| **TOTAL** | **Aggregate Corpus** | **3,222** | **451** | **-86.0%** | **1,104,877 B** | **138,232 B** | **-87.5%** | **1138.1 ms** | **791.6 ms** | **1.44x** | **✅ PASS** |
 
 ## Architectural Optimization Insights
 
@@ -51,4 +51,4 @@ across representative real-world SCX workload kernels. Enforces strict gates:
 
 - **All Budget Gates Met**: `v2_triggers <= v1_triggers`, `v2_payload_bytes <= v1_payload_bytes`, `v2_compile_ms <= v1_compile_ms * 1.5`.
 - **Deterministic Output**: Seeded and unseeded builds maintain exact byte-for-byte reproducibility.
-- **Generated Timestamp**: 2026-10-27 09:01:23Z
+- **Generated Timestamp**: 2026-10-27 09:45:07Z
