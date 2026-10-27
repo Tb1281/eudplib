@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 eudkit-core = { path = "../eudkit-core" }
+eudkit-ts = { path = "../eudkit-ts" }
 
 [dev-dependencies]
 eudplib-stormlib = { path = "../eudplib-stormlib", default-features = false }

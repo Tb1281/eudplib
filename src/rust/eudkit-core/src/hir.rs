@@ -1333,6 +1333,18 @@ impl HirModule {
         &self.func_ptrs[id.0 as usize]
     }
 
+    pub fn functions(&self) -> &[HirFunction] {
+        &self.functions
+    }
+
+    pub fn functions_mut(&mut self) -> &mut [HirFunction] {
+        &mut self.functions
+    }
+
+    pub fn variables(&self) -> &[HirVar] {
+        &self.vars
+    }
+
     fn dump_stmt(out: &mut String, stmt: &HirStmt, indent: usize) {
         let pad = " ".repeat(indent);
         match stmt {
