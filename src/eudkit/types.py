@@ -1678,18 +1678,40 @@ class Player:
 
 
 class _OnceContextManager:
-    """Context manager for `with once:` and `with once(conditions):` blocks.
+    """Context manager and callback runner for `with once():` and `once(cb)` blocks.
     
     Guarantees the block executes at most once during the game. If conditions are provided,
     waits until they are satisfied on a trigger loop pass before executing.
     """
 
-    def __init__(self, conditions: Condition | Sequence[Condition] | None = None) -> None:
+    def __init__(
+        self,
+        conditions: Condition | Sequence[Condition] | None = None,
+        callback: Callable[[], Any] | None = None,
+    ) -> None:
         self.conditions = conditions
+        if callback is not None:
+            sess = _active_builder_session.get()
+            if sess is None:
+                raise RuntimeError("once(...) callback must be executed inside an active eudkit block")
+            with sess.once(conditions):
+                callback()
 
     def __call__(
-        self, conditions: Condition | Sequence[Condition] | None = None
-    ) -> _OnceContextManager:
+        self,
+        conditions: Any = None,
+        callback: Callable[[], Any] | None = None,
+    ) -> Any:
+        # Support once(callback) or @once
+        if callable(conditions) and callback is None and not isinstance(conditions, (Condition, ExprLike)):
+            callback = conditions
+            conditions = None
+        if callback is not None:
+            sess = _active_builder_session.get()
+            if sess is None:
+                raise RuntimeError("once(...) callback must be executed inside an active eudkit block")
+            with sess.once(conditions):
+                return callback()
         return _OnceContextManager(conditions)
 
     def __enter__(self) -> None:
@@ -1710,18 +1732,30 @@ once = _OnceContextManager()
 
 
 class _WhenContextManager:
-    """Context manager for `with when(conditions):` blocks.
+    """Context manager and callback runner for `with when(conditions):` and `when(conditions, cb)` blocks.
     
     Standing reactive rule that executes every trigger loop while conditions evaluate to true.
     """
 
-    def __init__(self, conditions: Condition | Sequence[Condition]) -> None:
+    def __init__(
+        self,
+        conditions: Condition | Sequence[Condition],
+        callback: Callable[[], Any] | None = None,
+    ) -> None:
         self.conditions = conditions
+        if callback is not None:
+            sess = _active_builder_session.get()
+            if sess is None:
+                raise RuntimeError("when(...) callback must be executed inside an active eudkit block")
+            with sess.when(conditions):
+                callback()
 
     def __call__(
-        self, conditions: Condition | Sequence[Condition]
+        self,
+        conditions: Condition | Sequence[Condition],
+        callback: Callable[[], Any] | None = None,
     ) -> _WhenContextManager:
-        return _WhenContextManager(conditions)
+        return _WhenContextManager(conditions, callback)
 
     def __enter__(self) -> None:
         sess = _active_builder_session.get()
@@ -1739,17 +1773,31 @@ when = _WhenContextManager
 
 
 class _UntilContextManager:
-    """Context manager for `with until(condition):` blocks.
+    """Context manager and callback runner for `with until(condition):` and `until(condition, cb)` blocks.
     
     Executes every trigger loop until `condition` evaluates to true, at which point
     the block permanently deactivates and never executes again.
     """
 
-    def __init__(self, condition: Condition) -> None:
+    def __init__(
+        self,
+        condition: Condition,
+        callback: Callable[[], Any] | None = None,
+    ) -> None:
         self.condition = condition
+        if callback is not None:
+            sess = _active_builder_session.get()
+            if sess is None:
+                raise RuntimeError("until(...) callback must be executed inside an active eudkit block")
+            with sess.until(condition):
+                callback()
 
-    def __call__(self, condition: Condition) -> _UntilContextManager:
-        return _UntilContextManager(condition)
+    def __call__(
+        self,
+        condition: Condition,
+        callback: Callable[[], Any] | None = None,
+    ) -> _UntilContextManager:
+        return _UntilContextManager(condition, callback)
 
     def __enter__(self) -> None:
         sess = _active_builder_session.get()
@@ -1767,20 +1815,31 @@ until = _UntilContextManager
 
 
 class _AfterContextManager:
-    """Context manager for `with after(loops):` blocks.
+    """Context manager and callback runner for `with after(loops):` and `after(loops, cb)` blocks.
     
     Counts down the specified number of StarCraft trigger loops and executes once.
     Avoids native `Wait()` actions which freeze trigger threads and desync multiplayer.
-    
-    In standard maps, 1 loop occurs roughly every ~31 frames (~1.3s on Fastest speed).
-    Under an EUD Turbo Trigger / Hyper Trigger, 1 loop executes every game tick (24 times/second).
     """
 
-    def __init__(self, loops: int) -> None:
+    def __init__(
+        self,
+        loops: int,
+        callback: Callable[[], Any] | None = None,
+    ) -> None:
         self.loops = loops
+        if callback is not None:
+            sess = _active_builder_session.get()
+            if sess is None:
+                raise RuntimeError("after(...) callback must be executed inside an active eudkit block")
+            with sess.after(loops):
+                callback()
 
-    def __call__(self, loops: int) -> _AfterContextManager:
-        return _AfterContextManager(loops)
+    def __call__(
+        self,
+        loops: int,
+        callback: Callable[[], Any] | None = None,
+    ) -> _AfterContextManager:
+        return _AfterContextManager(loops, callback)
 
     def __enter__(self) -> None:
         sess = _active_builder_session.get()
@@ -1798,20 +1857,31 @@ after = _AfterContextManager
 
 
 class _EveryContextManager:
-    """Context manager for `with every(loops):` blocks.
+    """Context manager and callback runner for `with every(loops):` and `every(loops, cb)` blocks.
     
     Periodic clock rule that fires repeatedly every `loops` trigger cycles.
     Deterministic, multiplayer-safe, and independent of fragile engine `Wait()` calls.
-    
-    In standard maps, 1 loop occurs roughly every ~31 frames (~1.3s on Fastest speed).
-    Under an EUD Turbo Trigger / Hyper Trigger, 1 loop executes every game tick (24 times/second).
     """
 
-    def __init__(self, loops: int) -> None:
+    def __init__(
+        self,
+        loops: int,
+        callback: Callable[[], Any] | None = None,
+    ) -> None:
         self.loops = loops
+        if callback is not None:
+            sess = _active_builder_session.get()
+            if sess is None:
+                raise RuntimeError("every(...) callback must be executed inside an active eudkit block")
+            with sess.every(loops):
+                callback()
 
-    def __call__(self, loops: int) -> _EveryContextManager:
-        return _EveryContextManager(loops)
+    def __call__(
+        self,
+        loops: int,
+        callback: Callable[[], Any] | None = None,
+    ) -> _EveryContextManager:
+        return _EveryContextManager(loops, callback)
 
     def __enter__(self) -> None:
         sess = _active_builder_session.get()
