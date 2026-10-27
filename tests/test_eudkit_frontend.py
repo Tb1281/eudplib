@@ -126,10 +126,12 @@ class TestEudkitPythonFrontend(unittest.TestCase):
                 step += delta
 
             with session.if_(step >= 10):
-                SetResources(Player1, Add, 200, Ore)
-                CreateUnit(1, "Terran Marine", "Anywhere", Player1)
+                session.do(
+                    SetResources(Player1, Add, 200, Ore),
+                    CreateUnit(1, "Terran Marine", "Anywhere", Player1),
+                )
             with session.elif_(step == 5):
-                SetResources(Player1, Add, 50, Gas)
+                session.do(SetResources(Player1, Add, 50, Gas))
             with session.else_():
                 step += 1
 
@@ -818,7 +820,7 @@ class TestEudkitPythonFrontend(unittest.TestCase):
 
         with session.main_loop("secondary_loop"):
             with session.if_(IsUserCP()):
-                f_eprintln("Secondary local text: %d", score)
+                session.f_eprintln("Secondary local text: %d", score)
 
         hir_text = session.dump_hir()
         self.assertIn("IsUserCP()", hir_text)
@@ -1091,6 +1093,66 @@ class TestEudkitPythonFrontend(unittest.TestCase):
             s_ast_2.compile(out_ast_2)
             self.assertEqual(out_ast.read_bytes(), out_ast_2.read_bytes(), "reactive loop compilations must be byte-for-byte deterministic")
 
+    def test_pure_actionspec_and_no_ambient_side_effects(self):
+        import eudkit
+        from eudkit import (
+            ActionSpec,
+            Add,
+            Always,
+            Ore,
+            Player1,
+            SetDeaths,
+            SetResources,
+            SetTo,
+            eud,
+        )
+
+        # 1. ActionSpec instantiation must have zero ambient side-effects
+        session = eudkit.Session(TESTMAP_PATH)
+
+        with session.main_loop("main"):
+            # Creating ActionSpecs inside a session scope must not emit actions
+            act1 = SetResources(Player1, Add, 100, Ore)
+            act2 = SetDeaths(Player1, SetTo, 5, "Terran Marine")
+            self.assertIsInstance(act1, ActionSpec)
+            self.assertIsInstance(act2, ActionSpec)
+
+        # With no explicit session.do(...) or trigger, HIR has 0 actions
+        hir_after_instantiation = session.dump_hir()
+        self.assertNotIn("SetResources", hir_after_instantiation)
+        self.assertNotIn("SetDeaths", hir_after_instantiation)
+
+        # 2. session.trigger must cleanly resolve actions without double-emission
+        session2 = eudkit.Session(TESTMAP_PATH)
+        with session2.main_loop("main"):
+            session2.trigger(
+                Always(),
+                [SetResources(Player1, Add, 100, Ore)],
+            )
+
+        hir_trigger = session2.dump_hir()
+        # Verify exactly 1 SetResources appears in HIR
+        self.assertEqual(hir_trigger.count("SetResources"), 1)
+
+        # 3. session.do explicitly resolves and pushes actions
+        session3 = eudkit.Session(TESTMAP_PATH)
+        with session3.main_loop("main"):
+            session3.do(
+                SetResources(Player1, Add, 200, Ore),
+                SetDeaths(Player1, SetTo, 10, "Terran Marine"),
+            )
+
+        hir_do = session3.dump_hir()
+        self.assertEqual(hir_do.count("SetResources"), 1)
+        self.assertEqual(hir_do.count("SetDeaths"), 1)
+
+        # 4. Global _in_ast_lowering is eliminated
+        import eudkit.types as types
+        import eudkit.ast_lowering as ast_lowering
+        self.assertFalse(hasattr(types, "_in_ast_lowering"))
+        self.assertFalse(hasattr(ast_lowering, "_in_ast_lowering"))
+
 
 if __name__ == "__main__":
     unittest.main()
+

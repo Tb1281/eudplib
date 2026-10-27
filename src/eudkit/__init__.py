@@ -147,10 +147,19 @@ class _EudNamespace:
     ) -> LoopRange:
         return loop_range(start, stop, step)
 
+    def do(self, *actions: Any) -> None:
+        from .types import _active_builder_session
+
+        sess = _active_builder_session.get()
+        if sess is None:
+            raise RuntimeError("No active session found for eud.do")
+        sess.do(*actions)
+
 
 eud = _EudNamespace()
 fn = eud.fn
 func_ptr = eud.func_ptr
+do = eud.do
 
 __all__ = [
     "EPD",
@@ -241,6 +250,7 @@ __all__ = [
     "bread_epd",
     "bwrite_epd",
     "displayText",
+    "do",
     "dwread_epd",
     "dwwrite_epd",
     "epdread_epd",

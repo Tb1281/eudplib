@@ -12,9 +12,6 @@ if TYPE_CHECKING:
 _active_builder_session: contextvars.ContextVar[Session | None] = (
     contextvars.ContextVar("eudkit_active_builder_session", default=None)
 )
-_in_ast_lowering: contextvars.ContextVar[bool] = (
-    contextvars.ContextVar("eudkit_in_ast_lowering", default=False)
-)
 
 # Player IDs
 Player1 = 0
@@ -621,15 +618,12 @@ ExprLike = int | Expr | Var | MaskedVar
 
 
 class ActionSpec:
-    """Represents a StarCraft trigger action (either emitted in a builder scope or passed to `session.trigger`)."""
+    """Represents a StarCraft trigger action (either emitted via `session.do` or passed to `session.trigger`)."""
 
     def __init__(
         self, builder: Callable[[Session], _rust_eudkit.RawAction]
     ) -> None:
         self._builder = builder
-        active = _active_builder_session.get()
-        if active is not None and not _in_ast_lowering.get():
-            active._raw.push_action(self.resolve(active))
 
     def resolve(self, session: Session) -> _rust_eudkit.RawAction:
         return self._builder(session)
@@ -1253,8 +1247,7 @@ def dwwrite_epd(
         else:
             raise RuntimeError("dwwrite_epd requires an active Session or Var target")
     act = SetDeaths(epd, SetTo, value, 0)
-    if sess is not None and (_in_ast_lowering.get() or _active_builder_session.get() is None):
-        sess._raw.push_action(act.resolve(sess))
+    sess.do(act)
 
 
 def wwrite_epd(
@@ -1275,8 +1268,7 @@ def wwrite_epd(
         else (value << 16 if isinstance(value, int) else (value << 16))
     )
     act = SetDeathsX(epd, SetTo, shifted_val, 0, mask)
-    if sess is not None and (_in_ast_lowering.get() or _active_builder_session.get() is None):
-        sess._raw.push_action(act.resolve(sess))
+    sess.do(act)
 
 
 def bwrite_epd(
@@ -1294,8 +1286,7 @@ def bwrite_epd(
     mask = 0xFF << shift
     shifted_val = (value << shift) if isinstance(value, int) else (value << shift)
     act = SetDeathsX(epd, SetTo, shifted_val, 0, mask)
-    if sess is not None and (_in_ast_lowering.get() or _active_builder_session.get() is None):
-        sess._raw.push_action(act.resolve(sess))
+    sess.do(act)
 
 
 class Array:
@@ -1576,8 +1567,8 @@ class CUnit:
         m = value if mask is None else mask
         act = SetDeathsX(self._epd + 55, SetTo, value, 0, m)
         sess = self._session or _active_builder_session.get()
-        if sess is not None and (_in_ast_lowering.get() or _active_builder_session.get() is None):
-            sess._raw.push_action(act.resolve(sess))
+        if sess is not None:
+            sess.do(act)
 
     def clear_status_flag(self, mask: int) -> None:
         self.set_status_flag(0, mask)
