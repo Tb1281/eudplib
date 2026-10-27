@@ -1036,6 +1036,45 @@ class TestEudkitPythonFrontend(unittest.TestCase):
         if out_path.exists():
             out_path.unlink()
 
+    def test_string_buffer_and_eud_string_adapters(self):
+        """Verify modern StringBuffer, EUDString, and DBString adapters."""
+        import eudkit
+        from eudkit import DBString, EUDString, StringBuffer
+
+        session = eudkit.Session(TESTMAP_PATH)
+        score = session.var(100, name="score")
+        minerals = session.var(500, name="minerals")
+
+        # 1. Capacity constructor and session helper
+        sb = session.string_buffer(512)
+        es = EUDString("Initial EUDString template: %s")
+        db = DBString(256)
+
+        # 2. Address and EPD inspection
+        self.assertGreater(sb.id, 0)
+        self.assertGreater(sb.address, 0)
+        self.assertGreater(sb.epd, 0)
+        self.assertIn("StringBuffer", repr(sb))
+
+        # 3. Formatting actions inside function
+        @session.fn
+        def string_workload():
+            sb.format("Score: %d, Min: %d", score, minerals)
+            sb.printf("Status update: %d", score)
+            sb.insert(0, "Prefix: %d", score)
+            sb.append(" Suffix: %d", minerals)
+            sb.display()
+            sb.print_at(0, "Line 0: %d", score)
+            es.display()
+            db.format("DBString %d", score)
+
+        out_path = Path(tempfile.gettempdir()) / "test_string_buffer.scx"
+        rep = session.compile(out_path)
+        self.assertGreater(rep.trigger_count, 0)
+        self.assertGreater(rep.payload_size, 0)
+        if out_path.exists():
+            out_path.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

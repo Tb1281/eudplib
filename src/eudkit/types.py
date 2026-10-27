@@ -998,6 +998,59 @@ class MapString:
         return f"MapString({self.text!r})"
 
 
+class StringBuffer(MapString):
+    """Modern typed string buffer backed by deduplicated STRx storage.
+
+    Supersedes legacy `eudplib` (v1) `StringBuffer` and `DBString`.
+    In v1, StringBuffer was an EUDStruct managing dynamic byte copies through runtime
+    XOR decryption loops, creating >150KB of trigger bloat.
+    In eudkit (v2), StringBuffer is backed by static STRx relocation at `0x191943C8`,
+    lowering into residue-stride CPString writes with zero runtime decryption overhead.
+    """
+
+    def __init__(
+        self,
+        content: str | int = 1024,
+        *,
+        session: Session | None = None,
+    ) -> None:
+        if isinstance(content, int):
+            initial_text = " " * content
+        else:
+            initial_text = str(content)
+        super().__init__(initial_text, session=session)
+
+    def printf(self, *args: Any) -> ActionSpec:
+        """Formats dynamic expressions into this buffer."""
+        return self.format(*args)
+
+    def insert(self, _index: int, *args: Any) -> ActionSpec:
+        """Formats dynamic expressions into this buffer (v1 API compatibility)."""
+        return self.format(*args)
+
+    def append(self, *args: Any) -> ActionSpec:
+        """Formats dynamic expressions into this buffer (v1 API compatibility)."""
+        return self.format(*args)
+
+    def print_at(self, line: int, *args: Any) -> ActionSpec:
+        """Prints this buffer or formatted expressions to a screen line."""
+        if args:
+            return print_at(line, *args)
+        return print_at(line, self)
+
+    def __repr__(self) -> str:
+        if self._raw_info is not None:
+            return (
+                f"StringBuffer(id={self.id}, addr=0x{self.address:08X}, "
+                f"epd={self.epd}, len={len(self.text)})"
+            )
+        return f"StringBuffer(len={len(self.text)})"
+
+
+EUDString = StringBuffer
+DBString = StringBuffer
+
+
 def _build_format_template_and_args(
     args: Sequence[Any],
     session: Session,
