@@ -1,2 +1,2 @@
 pub mod ini;
-pub mod transpiler;
+pub mod migrator;

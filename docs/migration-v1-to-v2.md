@@ -30,7 +30,7 @@ Legacy `eudplib` relied on global mutable Python state, immediate trigger instan
 ### Migrating an entire `.edd` or `.eds` project
 
 ```bash
-# Migrates project.edd, transpiles referenced .eps files, and outputs eudkit.toml
+# Migrates project.edd, converts referenced .eps files, and outputs eudkit.toml
 eudkit migrate project.edd
 
 # Compile the migrated project into a valid .scx map

@@ -365,3 +365,50 @@ fn cli_build_with_obscurate_flag_and_seed_produces_deterministic_scx() {
     assert!(chk.section(b"TRIG").is_some());
     assert!(chk.section(b"MRGN").is_some());
 }
+
+#[test]
+fn cli_watch_command_and_build_with_watch_flag() {
+    let root = repo_root();
+    let testmap = root.join("tests/unittests/testmap.scx");
+    let temp = tempfile::tempdir().unwrap();
+
+    let out_watch = temp.path().join("watch_out.scx");
+    let out_build_watch = temp.path().join("build_watch_out.scx");
+
+    // 1. Run `eudkit watch --input ... --output ... --once`
+    let watch_run = Command::new(eudkit_bin())
+        .arg("watch")
+        .arg("--input")
+        .arg(&testmap)
+        .arg("--output")
+        .arg(&out_watch)
+        .arg("--once")
+        .output()
+        .expect("should execute eudkit watch --once");
+    assert!(
+        watch_run.status.success(),
+        "watch failed: {}",
+        String::from_utf8_lossy(&watch_run.stderr)
+    );
+    let watch_stdout = String::from_utf8_lossy(&watch_run.stdout);
+    assert!(watch_stdout.contains("watch mode") || watch_stdout.contains("Built"));
+    assert!(out_watch.exists(), "watch --once should produce output map");
+
+    // 2. Run `eudkit build --watch ... --once`
+    let build_watch_run = Command::new(eudkit_bin())
+        .arg("build")
+        .arg("--watch")
+        .arg("--input")
+        .arg(&testmap)
+        .arg("--output")
+        .arg(&out_build_watch)
+        .arg("--once")
+        .output()
+        .expect("should execute eudkit build --watch --once");
+    assert!(
+        build_watch_run.status.success(),
+        "build --watch failed: {}",
+        String::from_utf8_lossy(&build_watch_run.stderr)
+    );
+    assert!(out_build_watch.exists(), "build --watch --once should produce output map");
+}

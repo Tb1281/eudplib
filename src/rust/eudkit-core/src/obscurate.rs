@@ -114,11 +114,13 @@ fn randomize_player_expr(expr: &mut ValueExpr, u: u16) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StringRestoreItem {
     pub address: u32,
+    pub mask_dwords: Vec<u32>,
     pub orig_dwords: Vec<u32>,
 }
 
-/// Scrambles static string literals in `MapContext`'s string table with seeded XOR encryption.
-/// Returns restore items needed to reconstruct the original plaintext strings in memory at startup.
+/// Scrambles static string literals in `MapContext`'s string table with seeded masking.
+/// Returns restore items needed to reconstruct the original plaintext strings in memory at startup
+/// via additive decryption triggers, avoiding plaintext string leakage in action fields.
 pub fn encrypt_static_strings(
     map_ctx: &mut MapContext,
     rng: &mut ObscureRng,
@@ -149,15 +151,39 @@ pub fn encrypt_static_strings(
             orig_dwords.push(u32::from_le_bytes(chunk.try_into().unwrap()));
         }
 
-        // Apply seeded XOR byte scrambling to the string bytes in datatb
-        let key = rng.gen_range(1, 255) as u8;
+        // Apply seeded additive scrambling to the string bytes in datatb so that
+        // adding mask_dwords at runtime will decrypt memory to original plaintext.
+        let mut mask_dwords = Vec::new();
         let target_str = &mut tbl.datatb_mut()[data_idx];
-        for b in target_str.iter_mut() {
-            *b ^= key;
+        let num_dwords = (orig_bytes.len() + 3) / 4;
+
+        for j in 0..num_dwords {
+            if j * 4 + 4 <= orig_bytes.len() {
+                let orig_val =
+                    u32::from_le_bytes(orig_bytes[j * 4..j * 4 + 4].try_into().unwrap());
+                let mask_val = rng.next_u32();
+                let scrambled_val = orig_val.wrapping_sub(mask_val);
+                target_str[j * 4..j * 4 + 4].copy_from_slice(&scrambled_val.to_le_bytes());
+                mask_dwords.push(mask_val);
+            } else {
+                let k = orig_bytes.len() - j * 4;
+                let mut orig_bytes_k = [0u8; 4];
+                orig_bytes_k[..k].copy_from_slice(&orig_bytes[j * 4..]);
+                let orig_k = u32::from_le_bytes(orig_bytes_k);
+                let mask_val = if orig_k > 1 {
+                    rng.gen_range(1, orig_k)
+                } else {
+                    0
+                };
+                let scrambled_k = orig_k - mask_val;
+                target_str[j * 4..].copy_from_slice(&scrambled_k.to_le_bytes()[..k]);
+                mask_dwords.push(mask_val);
+            }
         }
 
         restores.push(StringRestoreItem {
             address,
+            mask_dwords,
             orig_dwords,
         });
     }
@@ -254,9 +280,10 @@ pub fn build_obscuration_restore_triggers(
         }
     }
 
-    // 2. String restore actions (write original plaintext dwords to 0x191943C8 + offset)
+    // 2. String restore actions: emit additive decryption triggers (+ mask_val)
+    // so that plaintext string bytes are not leaked in the action fields.
     for item in string_restores {
-        for (j, &orig_val) in item.orig_dwords.iter().enumerate() {
+        for (j, &mask_val) in item.mask_dwords.iter().enumerate() {
             let target_epd = epd(item.address + 4 * (j as u32));
             actions.push(pack_chk_action(
                 0,
@@ -264,10 +291,10 @@ pub fn build_obscuration_restore_triggers(
                 0,
                 0,
                 target_epd,
-                orig_val as i32,
+                mask_val as i32,
                 0,
                 45, // SetDeaths
-                7,  // SetTo
+                8,  // Add
                 20,
                 0,
             ));

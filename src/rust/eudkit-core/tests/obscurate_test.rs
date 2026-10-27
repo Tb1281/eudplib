@@ -203,12 +203,17 @@ fn test_obscurate_true_seeded_determinism_and_scx_validity() {
     assert!(chk.section(b"TRIG").is_some());
     assert!(chk.section(b"MRGN").is_some());
 
-    // 4. String protection: plaintext string literal should NOT appear unencrypted in STRx
+    // 4. String protection: plaintext string literal should NOT appear unencrypted in STRx or TRIG
     let strx = chk.section(b"STRx").unwrap();
+    let trig = chk.section(b"TRIG").unwrap();
     let needle = b"Protected Mission Objective";
     assert!(
         !strx.windows(needle.len()).any(|w| w == needle),
         "obscurate=true must scramble static string literals in STRx"
+    );
+    assert!(
+        !trig.windows(needle.len()).any(|w| w == needle),
+        "obscurate=true must not leak plaintext strings in TRIG restore actions"
     );
 
     // 5. Debug comment stripped: comment text should not appear anywhere in TRIG or STRx
