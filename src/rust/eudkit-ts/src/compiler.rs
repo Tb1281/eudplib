@@ -1,7 +1,7 @@
 use crate::error::{EudkitTsError, Result};
 use eudkit_core::hir::{
-    epd, parse_format_template, CmpOp, Comparison, HirBasicBlock, HirBinOp, HirExpr, HirFunction,
-    HirModule, HirStmt, HirTerminator, HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget,
+    epd, parse_format_template, CmpOp, Comparison, HirBinOp, HirBuilder, HirExpr,
+    HirModule, HirStmt, HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget,
     ReactiveRule, ResourceType, StockAction, StockCondition, VarId,
 };
 use eudkit_core::map_context::MapContext;
@@ -12,11 +12,12 @@ use oxc_span::SourceType;
 use std::collections::HashMap;
 
 pub struct TsCompiler<'a> {
-    hir: HirModule,
+    builder: HirBuilder,
     map_ctx: &'a MapContext,
     constants: HashMap<String, i32>,
     vars: HashMap<String, VarId>,
-    functions: HashMap<String, usize>, // name -> function index in hir
+    functions: HashMap<String, usize>, // name -> function index
+    function_decls: Vec<(String, bool, Vec<VarId>, usize, Option<bool>)>,
     current_fn_idx: Option<usize>,
     loop_vars: HashMap<String, i32>, // compile-time loop counters
     struct_vars: HashMap<String, HirExpr>, // e.g. u -> unit_epd
@@ -79,11 +80,12 @@ impl<'a> TsCompiler<'a> {
         constants.insert("Cleared".to_string(), 3);
 
         Self {
-            hir: HirModule::new(module_name),
+            builder: HirBuilder::new(module_name),
             map_ctx,
             constants,
             vars: HashMap::new(),
             functions: HashMap::new(),
+            function_decls: Vec::new(),
             current_fn_idx: None,
             loop_vars: HashMap::new(),
             struct_vars: HashMap::new(),
@@ -101,15 +103,15 @@ impl<'a> TsCompiler<'a> {
             self.lower_function_stmt(stmt)?;
         }
 
-        // If no main function exists, create a default main loop
-        if !self.hir.functions.iter().any(|f| f.is_main_loop) {
-            let mut main_fn = HirFunction::new_main_loop("main");
-            let bb = main_fn.add_block(HirBasicBlock::new("entry"));
-            main_fn.block_mut(bb).set_terminator(HirTerminator::Return);
-            self.hir.add_function(main_fn);
+        // If no main function exists, ensure main loop exists
+        if !self.function_decls.iter().any(|d| d.1) {
+            self.builder.begin_function("main", true, Vec::new(), 0, Some(false));
+            self.builder.end_function().map_err(|e| EudkitTsError::Compile(e.to_string()))?;
         }
 
-        Ok(self.hir)
+        self.builder
+            .finish()
+            .map_err(|e| EudkitTsError::Compile(e.to_string()))
     }
 
     fn visit_top_level_stmt(&mut self, stmt: &Statement) -> Result<()> {
@@ -181,7 +183,7 @@ impl<'a> TsCompiler<'a> {
                             var_name.to_string()
                         };
 
-                        let id = self.hir.add_var(&name, init_val);
+                        let id = self.builder.add_var(&name, init_val);
                         self.vars.insert(var_name.to_string(), id);
                         continue;
                     }
@@ -223,14 +225,14 @@ impl<'a> TsCompiler<'a> {
 
                 // Default: regular variable
                 if let Ok(cval) = self.eval_const_expr(init) {
-                    let id = self.hir.add_var(var_name, cval);
+                    let id = self.builder.add_var(var_name, cval);
                     self.vars.insert(var_name.to_string(), id);
                 } else {
-                    let id = self.hir.add_var(var_name, 0);
+                    let id = self.builder.add_var(var_name, 0);
                     self.vars.insert(var_name.to_string(), id);
                 }
             } else {
-                let id = self.hir.add_var(var_name, 0);
+                let id = self.builder.add_var(var_name, 0);
                 self.vars.insert(var_name.to_string(), id);
             }
         }
@@ -243,25 +245,31 @@ impl<'a> TsCompiler<'a> {
             .as_ref()
             .map(|id| id.name.as_str())
             .unwrap_or("anon");
-        let mut func = if is_main || name == "main" {
-            HirFunction::new_main_loop(name)
-        } else {
-            HirFunction::new(name, false)
+        let is_main_loop = is_main || name == "main" || name == "onPluginStart" || name == "beforeTriggerExec";
+        let return_count = if fdecl.return_type.is_some() { 1 } else { 0 };
+        let inline_opt = match name {
+            "onPluginStart" | "beforeTriggerExec" | "main" => Some(false),
+            _ => None,
         };
 
         let mut param_vars = Vec::new();
         for param in &fdecl.params.items {
             if let BindingPattern::BindingIdentifier(p_id) = &param.pattern {
                 let p_name = p_id.name.as_str();
-                let vid = self.hir.add_var(format!("{name}_{p_name}"), 0);
+                let vid = self.builder.add_var(format!("{name}_{p_name}"), 0);
                 self.vars.insert(p_name.to_string(), vid);
                 param_vars.push(vid);
             }
         }
-        func.params = param_vars;
 
-        let idx = self.hir.functions.len();
-        self.hir.add_function(func);
+        let idx = self.function_decls.len();
+        self.function_decls.push((
+            name.to_string(),
+            is_main_loop,
+            param_vars,
+            return_count,
+            inline_opt,
+        ));
         self.functions.insert(name.to_string(), idx);
         Ok(())
     }
@@ -297,21 +305,24 @@ impl<'a> TsCompiler<'a> {
         };
         self.current_fn_idx = Some(fn_idx);
 
+        let (ref fn_name, is_main_loop, ref params, return_count, inline_opt) =
+            self.function_decls[fn_idx].clone();
+        self.builder
+            .begin_function(fn_name, is_main_loop, params.clone(), return_count, inline_opt);
+
         let mut stmts = Vec::new();
         if let Some(body) = &fdecl.body {
             for bstmt in &body.statements {
                 self.lower_stmt(bstmt, &mut stmts)?;
             }
         }
-
-        // Add stmts to entry block
-        let func = &mut self.hir.functions[fn_idx];
-        let entry_bb = func.add_block(HirBasicBlock::new("entry"));
         for s in stmts {
-            func.block_mut(entry_bb).push_stmt(s);
+            self.builder.push_stmt(s);
         }
-        func.block_mut(entry_bb).set_terminator(HirTerminator::Return);
 
+        self.builder
+            .end_function()
+            .map_err(|e| EudkitTsError::Compile(e.to_string()))?;
         self.current_fn_idx = None;
         Ok(())
     }
@@ -431,11 +442,11 @@ impl<'a> TsCompiler<'a> {
                         }
 
                         let expr = self.lower_expr(init)?;
-                        let vid = self.hir.add_var(var_name, 0);
+                        let vid = self.builder.add_var(var_name, 0);
                         self.vars.insert(var_name.to_string(), vid);
                         out.push(HirStmt::VarAssignExpr { var: vid, expr });
                     } else {
-                        let vid = self.hir.add_var(var_name, 0);
+                        let vid = self.builder.add_var(var_name, 0);
                         self.vars.insert(var_name.to_string(), vid);
                     }
                 }

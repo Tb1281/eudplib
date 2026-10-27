@@ -1,5 +1,5 @@
 use eudkit_core::hir::{
-    Comparison, HirBuilder, HirStmt, ReactiveRule, StockCondition,
+    Comparison, HirBuilder, HirStmt, StockCondition,
 };
 
 #[test]
