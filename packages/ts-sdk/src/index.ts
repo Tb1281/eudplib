@@ -523,7 +523,12 @@ export function once(
  * @param callback - Function body containing actions to execute while conditions hold.
  */
 export function when(condition: Condition | Condition[], callback: () => void): void {
-  callback();
+  const isSatisfied = Array.isArray(condition)
+    ? condition.length > 0 && condition.every((c) => Boolean(c))
+    : Boolean(condition);
+  if (isSatisfied) {
+    callback();
+  }
 }
 
 /**

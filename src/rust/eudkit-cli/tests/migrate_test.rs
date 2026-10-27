@@ -1,5 +1,5 @@
 use eudkit_cli::migrate::ini::parse_edd_or_eds;
-use eudkit_cli::migrate::transpiler::transpile_eps_to_ts;
+use eudkit_cli::migrate::migrator::convert_eps_to_ts;
 use eudkit_core::chk::Chk;
 use eudkit_core::{CompilationConfig, CompilationSession};
 use eudplib_stormlib::{Archive, OpenArchiveFlags};
@@ -74,7 +74,7 @@ unpatch = 1
 }
 
 #[test]
-fn test_transpile_variables_and_functions() {
+fn test_convert_variables_and_functions() {
     let eps_source = r#"
 var x = 0;
 const c = 5;
@@ -92,7 +92,7 @@ function main() {
 }
 "#;
 
-    let ts = transpile_eps_to_ts(eps_source).expect("transpilation should succeed");
+    let ts = convert_eps_to_ts(eps_source).expect("conversion should succeed");
     assert!(ts.contains("import {"), "should import from @eudkit/sdk");
     assert!(ts.contains("@eudkit/sdk"));
     assert!(ts.contains("const x = var_(0);"));
@@ -104,7 +104,7 @@ function main() {
 }
 
 #[test]
-fn test_transpile_control_flow_switch_and_once() {
+fn test_convert_control_flow_switch_and_once() {
     let eps_source = r#"
 function test_flow(val) {
     if (val >= 10) {
@@ -135,7 +135,7 @@ function test_flow(val) {
 }
 "#;
 
-    let ts = transpile_eps_to_ts(eps_source).expect("transpilation should succeed");
+    let ts = convert_eps_to_ts(eps_source).expect("conversion should succeed");
     assert!(ts.contains("if (val >= 10)"));
     assert!(ts.contains("while (val < 20)"));
     assert!(ts.contains("for (let i = 0; i < 5; i++)"));
@@ -147,7 +147,7 @@ function test_flow(val) {
 }
 
 #[test]
-fn test_transpile_structs_cunit_and_arrays() {
+fn test_convert_structs_cunit_and_arrays() {
     let eps_source = r#"
 var selectedUnit = 0;
 
@@ -163,7 +163,7 @@ function manage_unit(ptr, epd) {
 }
 "#;
 
-    let ts = transpile_eps_to_ts(eps_source).expect("transpilation should succeed");
+    let ts = convert_eps_to_ts(eps_source).expect("conversion should succeed");
     assert!(ts.contains("CUnit.cast(epd, ptr)"));
     assert!(ts.contains("u.player == Player8") || ts.contains("u.owner == Player8"));
     assert!(ts.contains("u.hitPoints = 10000;"));
@@ -174,7 +174,7 @@ function manage_unit(ptr, epd) {
 }
 
 #[test]
-fn test_transpiled_code_compiles_to_hir_cleanly() {
+fn test_converted_code_compiles_to_hir_cleanly() {
     let eps_source = r#"
 var x = 0;
 const c = 5;
@@ -189,7 +189,7 @@ function main() {
 }
 "#;
 
-    let ts = transpile_eps_to_ts(eps_source).expect("transpilation should succeed");
+    let ts = convert_eps_to_ts(eps_source).expect("conversion should succeed");
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
@@ -339,8 +339,8 @@ fn test_migrating_repository_eps_fixtures() {
     for fixture_path in &fixtures {
         assert!(fixture_path.exists(), "fixture {:?} should exist", fixture_path);
         let content = fs::read_to_string(fixture_path).unwrap();
-        let ts = transpile_eps_to_ts(&content).expect("fixture should transpile cleanly");
-        assert!(ts.contains("@eudkit/sdk"), "transpiled TS should import @eudkit/sdk");
+        let ts = convert_eps_to_ts(&content).expect("fixture should convert cleanly");
+        assert!(ts.contains("@eudkit/sdk"), "converted TS should import @eudkit/sdk");
     }
 }
 

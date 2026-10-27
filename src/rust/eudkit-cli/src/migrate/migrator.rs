@@ -183,7 +183,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
     tokens
 }
 
-pub fn transpile_eps_to_ts(source: &str) -> Result<String, String> {
+pub fn convert_eps_to_ts(source: &str) -> Result<String, String> {
     let tokens = tokenize(source);
     let mut out = String::with_capacity(source.len() + 512);
 
