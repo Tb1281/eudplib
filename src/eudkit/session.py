@@ -12,6 +12,7 @@ from .types import (
     ActionSpec,
     Condition,
     MapString,
+    StringBuffer,
     Var,
     _active_builder_session,
     coerce_conditions,
@@ -107,6 +108,14 @@ class Session:
     def map_string(self, text: str) -> MapString:
         """Registers or retrieves a MapString inside this Compilation Session."""
         return MapString(text, session=self)
+
+    def string_buffer(self, content: str | int = 1024) -> StringBuffer:
+        """Allocates or registers a typed StringBuffer inside this Compilation Session."""
+        return StringBuffer(content, session=self)
+
+    def eud_string(self, content: str | int = 1024) -> StringBuffer:
+        """Alias for string_buffer."""
+        return StringBuffer(content, session=self)
 
     def f_eprintln(self, *args: Any, always_display: bool = True) -> None:
         """Formats and displays text using CPString streaming actions."""
