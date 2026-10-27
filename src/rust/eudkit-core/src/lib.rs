@@ -8,9 +8,10 @@ pub mod injector;
 pub mod inlining;
 pub mod lir;
 pub mod map_context;
+pub mod obscurate;
 pub mod session;
 
-pub use allocator::{allocate_lir_module, stack_objects, AllocatedPayload};
+pub use allocator::{allocate_lir_module, allocate_lir_module_with_seed, stack_objects, AllocatedPayload};
 pub use chk::Chk;
 pub use config::ProjectConfig;
 pub use cp_string::{

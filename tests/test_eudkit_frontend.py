@@ -898,6 +898,88 @@ class TestEudkitPythonFrontend(unittest.TestCase):
                 f"v2 compile time ({v2_compile_sec:.3f}s) must be faster or comparable to v1 ({v1_compile_sec:.3f}s)",
             )
 
+    def test_obscurate_pass_configuration_and_reproducibility(self):
+        import eudkit
+        from eudkit import DisplayText
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_plain_1 = Path(tmpdir) / "plain_1.scx"
+            out_plain_2 = Path(tmpdir) / "plain_2.scx"
+            out_obs_1 = Path(tmpdir) / "obs_1.scx"
+            out_obs_2 = Path(tmpdir) / "obs_2.scx"
+            out_obs_diff = Path(tmpdir) / "obs_diff.scx"
+
+            # 1. Plain builds: deterministic across runs
+            s_plain_1 = eudkit.Session(TESTMAP_PATH, obscurate=False)
+            v1 = s_plain_1.var(42)
+            @s_plain_1.fn
+            def main_plain_1():
+                v1 += 1
+                DisplayText("Plain Mission Text")
+            s_plain_1.compile(out_plain_1)
+
+            s_plain_2 = eudkit.Session(TESTMAP_PATH, obscurate=False)
+            v2 = s_plain_2.var(42)
+            @s_plain_2.fn
+            def main_plain_2():
+                v2 += 1
+                DisplayText("Plain Mission Text")
+            s_plain_2.compile(out_plain_2)
+
+            self.assertEqual(out_plain_1.read_bytes(), out_plain_2.read_bytes(), "plain builds must be deterministic")
+
+            # 2. Obscured builds with set_obscurate(True, seed=...)
+            s_obs_1 = eudkit.Session(TESTMAP_PATH)
+            s_obs_1.set_obscurate(True, seed=999888)
+            v_obs1 = s_obs_1.var(42)
+            @s_obs_1.fn
+            def main_obs_1():
+                v_obs1 += 1
+                DisplayText("Plain Mission Text")
+            s_obs_1.compile(out_obs_1)
+
+            s_obs_2 = eudkit.Session(TESTMAP_PATH)
+            s_obs_2.set_obscurate(True)
+            s_obs_2.set_obscurate_seed(999888)
+            v_obs2 = s_obs_2.var(42)
+            @s_obs_2.fn
+            def main_obs_2():
+                v_obs2 += 1
+                DisplayText("Plain Mission Text")
+            s_obs_2.compile(out_obs_2)
+
+            self.assertEqual(
+                out_obs_1.read_bytes(),
+                out_obs_2.read_bytes(),
+                "seeded obscuration builds must be byte-for-byte reproducible",
+            )
+            self.assertNotEqual(
+                out_obs_1.read_bytes(),
+                out_plain_1.read_bytes(),
+                "obscured build must differ from plain build",
+            )
+
+            # 3. Different seed diverges
+            s_obs_diff = eudkit.Session(TESTMAP_PATH, obscurate=True, obscurate_seed=111222)
+            v_diff = s_obs_diff.var(42)
+            @s_obs_diff.fn
+            def main_obs_diff():
+                v_diff += 1
+                DisplayText("Plain Mission Text")
+            s_obs_diff.compile(out_obs_diff)
+
+            self.assertNotEqual(
+                out_obs_1.read_bytes(),
+                out_obs_diff.read_bytes(),
+                "different seeds must produce different obscured builds",
+            )
+
+            # 4. Integrity check via StormLib MPQ
+            import eudplib.bindings._rust as _rust
+            mpq = _rust.mpqapi.MPQ.open(str(out_obs_1))
+            chk_data = mpq.extract_file("staredit\\scenario.chk")
+            self.assertGreater(len(chk_data), 1200)
+
 
 if __name__ == "__main__":
     unittest.main()

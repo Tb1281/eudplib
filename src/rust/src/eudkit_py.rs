@@ -740,6 +740,18 @@ impl PyCompilationSession {
         })
     }
 
+    #[pyo3(signature = (obscurate, seed=None))]
+    fn set_obscurate(&mut self, obscurate: bool, seed: Option<u64>) {
+        self.session.set_obscurate(obscurate);
+        if let Some(s) = seed {
+            self.session.set_obscurate_seed(s);
+        }
+    }
+
+    fn set_obscurate_seed(&mut self, seed: u64) {
+        self.session.set_obscurate_seed(seed);
+    }
+
     fn location_id(&self, name: &str) -> PyResult<u32> {
         self.session
             .map_context()

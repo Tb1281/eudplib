@@ -444,7 +444,15 @@ pub fn evaluate_value_expr(expr: ValueExpr, object_offsets: &[u32]) -> Result<(i
 }
 
 pub fn allocate_lir_module(lir: &LirModule) -> Result<AllocatedPayload> {
-    let mut occup_maps = Vec::with_capacity(lir.objects().len());
+    allocate_lir_module_with_seed(lir, None)
+}
+
+pub fn allocate_lir_module_with_seed(
+    lir: &LirModule,
+    seed: Option<u64>,
+) -> Result<AllocatedPayload> {
+    let obj_count = lir.objects().len();
+    let mut occup_maps = Vec::with_capacity(obj_count);
     for obj in lir.objects() {
         match obj {
             LirObject::Trigger(t) => {
@@ -459,7 +467,24 @@ pub fn allocate_lir_module(lir: &LirModule) -> Result<AllocatedPayload> {
         }
     }
 
-    let (object_offsets, payload_size) = stack_objects(&occup_maps);
+    let (object_offsets, payload_size) = if let Some(s) = seed {
+        let mut rng = crate::obscurate::ObscureRng::new(s);
+        let mut order: Vec<usize> = (0..obj_count).collect();
+        rng.shuffle(&mut order);
+
+        let permuted_occup_maps: Vec<Vec<i32>> =
+            order.iter().map(|&idx| occup_maps[idx].clone()).collect();
+        let (permuted_offsets, p_size) = stack_objects(&permuted_occup_maps);
+
+        let mut orig_offsets = vec![0u32; obj_count];
+        for (pos, &orig_idx) in order.iter().enumerate() {
+            orig_offsets[orig_idx] = permuted_offsets[pos];
+        }
+        (orig_offsets, p_size)
+    } else {
+        stack_objects(&occup_maps)
+    };
+
     let mut writer = PayloadWriter::new(payload_size);
 
     for (idx, obj) in lir.objects().iter().enumerate() {

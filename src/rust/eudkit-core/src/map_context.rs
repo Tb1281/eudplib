@@ -288,6 +288,27 @@ impl StringTable {
         self.dataindextb.is_empty()
     }
 
+    pub fn datatb(&self) -> &[Vec<u8>] {
+        &self.datatb
+    }
+
+    pub fn datatb_mut(&mut self) -> &mut [Vec<u8>] {
+        &mut self.datatb
+    }
+
+    pub fn data_index_offset(&self, data_idx: usize) -> Option<u32> {
+        let count = self.dataindextb.len();
+        let table_size = 4 * (count + 1);
+        let mut out_index = roundup_by_4(table_size);
+        for (i, s) in self.datatb.iter().enumerate() {
+            if i == data_idx {
+                return Some(out_index as u32);
+            }
+            out_index += roundup_by_4(s.len() + 1);
+        }
+        None
+    }
+
     /// Returns the byte offset of string `id1` within the serialized STRx section.
     pub fn string_offset(&self, id1: u32) -> Option<u32> {
         if id1 == 0 || (id1 as usize) > self.dataindextb.len() {
