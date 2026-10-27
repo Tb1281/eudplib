@@ -12,8 +12,8 @@ Intent:
      - Grant 100 Ore to Player 1
 
 Files Generated:
-1. v1 Map: test_maps/v1/verify_v1.scx (42,940 bytes)
-2. v2 Map: test_maps/v2/verify_v2.scx (23,819 bytes - 44.5% smaller payload!)
+1. v1 Map: test_maps/v1/verify_v1.scx (44,628 bytes)
+2. v2 Map: test_maps/v2/verify_v2.scx (23,837 bytes - 46.6% smaller map size!)
 
 Behavioral Invariant:
 - Both maps run in StarCraft: Remastered as Player 1.

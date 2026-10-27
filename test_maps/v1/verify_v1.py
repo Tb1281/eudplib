@@ -19,39 +19,43 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-import eudplib as ep
+from eudplib import *
 
 BASEMAP_PATH = REPO_ROOT / "tests" / "outputmap" / "basemap" / "basemap_strx.scx"
 OUTPUT_PATH = Path(__file__).resolve().parent / "verify_v1.scx"
 
 
 def main():
-    ep.CompressPayload(True)
-    ep.LoadMap(str(BASEMAP_PATH))
+    LoadMap(str(BASEMAP_PATH))
+    CompressPayload(True)
 
-    @ep.EUDFunc
+    @EUDFunc
     def v1_mainloop():
-        counter = ep.EUDVariable(0)
+        counter = EUDVariable(0)
 
-        # Initial startup actions
-        ep.DisplayText("=== [EUDPLIB V1 TEST MAP] ===")
-        ep.SetResources(ep.P1, ep.Add, 5000, ep.Ore)
-        ep.SetResources(ep.P1, ep.Add, 2500, ep.Gas)
+        # Initial startup actions (executes once on frame 0)
+        DoActions(
+            DisplayText("=== [EUDPLIB V1 TEST MAP] ==="),
+            SetResources(P1, Add, 5000, Ore),
+            SetResources(P1, Add, 2500, Gas),
+        )
 
         # Main game loop
-        if ep.EUDWhile()(True):
+        if EUDInfLoop()():
             counter += 1
 
-            if ep.EUDIf()(counter >= 240):
-                counter << 0
-                ep.DisplayText("[v1] Counter reached 240 ticks!")
-                ep.SetResources(ep.P1, ep.Add, 100, ep.Ore)
-            ep.EUDEndIf()
+            if EUDIf()(counter >= 240):
+                DoActions(
+                    counter.SetNumber(0),
+                    DisplayText("[v1] Counter reached 240 ticks!"),
+                    SetResources(P1, Add, 100, Ore),
+                )
+            EUDEndIf()
 
-            ep.EUDDoEvents()
-        ep.EUDEndWhile()
+            EUDDoEvents()
+        EUDEndInfLoop()
 
-    ep.SaveMap(str(OUTPUT_PATH), v1_mainloop)
+    SaveMap(str(OUTPUT_PATH), v1_mainloop)
     print(f"Successfully compiled v1 map: {OUTPUT_PATH} ({OUTPUT_PATH.stat().st_size:,} bytes)")
 
 
