@@ -1,5 +1,12 @@
 # Migrating from legacy eudplib (v1) & epScript to eudkit (v2)
 
+> [!WARNING]
+> **Deprecation Notice (v1 Retirement)**
+> Legacy `eudplib` (v1) and `epScript` are deprecated and retired.
+> Importing `eudplib` now emits a `FutureWarning` directing developers to migrate to `eudkit`.
+> All active development, performance optimizations, and tooling support occur exclusively in `eudkit` (v2).
+> Please use this guide and the automated `eudkit migrate` CLI to migrate existing projects.
+
 This guide documents how to migrate StarCraft: Remastered map projects from legacy `eudplib` (v1) and `epScript` to modern `eudkit` (v2), featuring automated project conversion via `eudkit migrate` and side-by-side pattern comparisons for both TypeScript (`@eudkit/sdk`) and Python v2.
 
 ---
