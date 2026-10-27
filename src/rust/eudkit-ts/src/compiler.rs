@@ -602,6 +602,8 @@ impl<'a> TsCompiler<'a> {
             Expression::CallExpression(call) => {
                 if let Some(action) = self.try_lower_action(call)? {
                     out.push(HirStmt::Action(action));
+                } else if let Some(reactive_stmts) = self.try_lower_reactive_primitive(call)? {
+                    out.extend(reactive_stmts);
                 } else if let Expression::StaticMemberExpression(mem) = &call.callee {
                     if let Expression::Identifier(obj_ident) = &mem.object {
                         let obj_name = obj_ident.name.as_str();
@@ -866,8 +868,276 @@ impl<'a> TsCompiler<'a> {
         Ok(())
     }
 
+    fn try_lower_reactive_primitive(
+        &mut self,
+        call: &CallExpression,
+    ) -> Result<Option<Vec<HirStmt>>> {
+        let fn_name = match &call.callee {
+            Expression::Identifier(ident) => ident.name.as_str(),
+            Expression::StaticMemberExpression(mem) => {
+                if let Expression::Identifier(obj) = &mem.object {
+                    if obj.name.as_str() == "eud" || obj.name.as_str() == "eudkit" {
+                        mem.property.name.as_str()
+                    } else {
+                        return Ok(None);
+                    }
+                } else {
+                    return Ok(None);
+                }
+            }
+            _ => return Ok(None),
+        };
+
+        match fn_name {
+            "once" => {
+                let guard = self.hir.add_var("once_guard", 1);
+                let guard_cond = StockCondition::VarCmp {
+                    var: guard,
+                    comparison: Comparison::Exactly,
+                    value: 1,
+                    mask: None,
+                };
+                let (cond_opt, cb_arg) = if call.arguments.len() == 1 {
+                    (None, call.arguments.first())
+                } else if call.arguments.len() >= 2 {
+                    let first = call.arguments.first().and_then(|a| a.as_expression());
+                    let is_null_or_undef = match first {
+                        Some(Expression::NullLiteral(_)) => true,
+                        Some(Expression::Identifier(id)) if id.name.as_str() == "undefined" => true,
+                        _ => false,
+                    };
+                    if is_null_or_undef {
+                        (None, call.arguments.get(1))
+                    } else {
+                        (first, call.arguments.get(1))
+                    }
+                } else {
+                    return Ok(None);
+                };
+
+                let mut conds = vec![guard_cond];
+                if let Some(cond_expr) = cond_opt {
+                    conds.extend(self.lower_condition(cond_expr)?);
+                }
+                let mut body = vec![HirStmt::VarAssignConst {
+                    var: guard,
+                    value: 0,
+                }];
+                if let Some(cb) = cb_arg.and_then(|a| a.as_expression()) {
+                    self.lower_callback(cb, &mut body)?;
+                }
+                Ok(Some(vec![HirStmt::If {
+                    conditions: conds,
+                    then_body: body,
+                    else_body: Vec::new(),
+                }]))
+            }
+            "when" => {
+                let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
+                    return Ok(None);
+                };
+                let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) else {
+                    return Ok(None);
+                };
+                let conds = self.lower_condition(arg0)?;
+                let mut body = Vec::new();
+                self.lower_callback(arg1, &mut body)?;
+                Ok(Some(vec![HirStmt::If {
+                    conditions: conds,
+                    then_body: body,
+                    else_body: Vec::new(),
+                }]))
+            }
+            "until" => {
+                let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
+                    return Ok(None);
+                };
+                let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) else {
+                    return Ok(None);
+                };
+                let conds = self.lower_condition(arg0)?;
+                let guard = self.hir.add_var("until_guard", 0);
+                let mut cb_body = Vec::new();
+                self.lower_callback(arg1, &mut cb_body)?;
+
+                let guard_cond = StockCondition::VarCmp {
+                    var: guard,
+                    comparison: Comparison::Exactly,
+                    value: 0,
+                    mask: None,
+                };
+                let inner_if = HirStmt::If {
+                    conditions: conds,
+                    then_body: vec![HirStmt::VarAssignConst {
+                        var: guard,
+                        value: 1,
+                    }],
+                    else_body: cb_body,
+                };
+                Ok(Some(vec![HirStmt::If {
+                    conditions: vec![guard_cond],
+                    then_body: vec![inner_if],
+                    else_body: Vec::new(),
+                }]))
+            }
+            "after" => {
+                let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
+                    return Ok(None);
+                };
+                let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) else {
+                    return Ok(None);
+                };
+                let loops_val = self.eval_const_expr(arg0)?;
+                let timer = self.hir.add_var("after_timer", loops_val);
+                let done = self.hir.add_var("after_done", 0);
+                let mut cb_body = Vec::new();
+                self.lower_callback(arg1, &mut cb_body)?;
+
+                let done_cond = StockCondition::VarCmp {
+                    var: done,
+                    comparison: Comparison::Exactly,
+                    value: 0,
+                    mask: None,
+                };
+                let timer_gt_0 = StockCondition::VarCmp {
+                    var: timer,
+                    comparison: Comparison::AtLeast,
+                    value: 1,
+                    mask: None,
+                };
+                let timer_eq_0 = StockCondition::VarCmp {
+                    var: timer,
+                    comparison: Comparison::Exactly,
+                    value: 0,
+                    mask: None,
+                };
+
+                let decr_stmt = HirStmt::If {
+                    conditions: vec![timer_gt_0],
+                    then_body: vec![HirStmt::VarSubConst {
+                        var: timer,
+                        value: 1,
+                    }],
+                    else_body: Vec::new(),
+                };
+                let mut fire_body = vec![HirStmt::VarAssignConst {
+                    var: done,
+                    value: 1,
+                }];
+                fire_body.extend(cb_body);
+                let fire_stmt = HirStmt::If {
+                    conditions: vec![timer_eq_0],
+                    then_body: fire_body,
+                    else_body: Vec::new(),
+                };
+
+                Ok(Some(vec![HirStmt::If {
+                    conditions: vec![done_cond],
+                    then_body: vec![decr_stmt, fire_stmt],
+                    else_body: Vec::new(),
+                }]))
+            }
+            "every" => {
+                let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
+                    return Ok(None);
+                };
+                let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) else {
+                    return Ok(None);
+                };
+                let loops_val = self.eval_const_expr(arg0)?;
+                let timer = self.hir.add_var("every_timer", loops_val);
+                let mut cb_body = Vec::new();
+                self.lower_callback(arg1, &mut cb_body)?;
+
+                let timer_gt_0 = StockCondition::VarCmp {
+                    var: timer,
+                    comparison: Comparison::AtLeast,
+                    value: 1,
+                    mask: None,
+                };
+                let timer_eq_0 = StockCondition::VarCmp {
+                    var: timer,
+                    comparison: Comparison::Exactly,
+                    value: 0,
+                    mask: None,
+                };
+
+                let decr_stmt = HirStmt::If {
+                    conditions: vec![timer_gt_0],
+                    then_body: vec![HirStmt::VarSubConst {
+                        var: timer,
+                        value: 1,
+                    }],
+                    else_body: Vec::new(),
+                };
+                let mut fire_body = vec![HirStmt::VarAssignConst {
+                    var: timer,
+                    value: loops_val,
+                }];
+                fire_body.extend(cb_body);
+                let fire_stmt = HirStmt::If {
+                    conditions: vec![timer_eq_0],
+                    then_body: fire_body,
+                    else_body: Vec::new(),
+                };
+
+                Ok(Some(vec![decr_stmt, fire_stmt]))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn lower_callback(&mut self, expr: &Expression, out: &mut Vec<HirStmt>) -> Result<()> {
+        match expr {
+            Expression::ArrowFunctionExpression(arrow) => match &arrow.body {
+                ArrowFunctionBody::FunctionBody(b) => {
+                    for stmt in &b.statements {
+                        self.lower_stmt(stmt, out)?;
+                    }
+                }
+                other => {
+                    if let Some(e) = other.as_expression() {
+                        self.lower_expr_stmt(e, out)?;
+                    }
+                }
+            },
+            Expression::FunctionExpression(f) => {
+                if let Some(body) = &f.body {
+                    for stmt in &body.statements {
+                        self.lower_stmt(stmt, out)?;
+                    }
+                }
+            }
+            Expression::Identifier(id) => {
+                if let Some(&fn_idx) = self.functions.get(id.name.as_str()) {
+                    out.push(HirStmt::Call {
+                        callee: eudkit_core::hir::FuncId(fn_idx as u32),
+                        args: Vec::new(),
+                        rets: Vec::new(),
+                    });
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn lower_condition(&mut self, expr: &Expression) -> Result<Vec<StockCondition>> {
         match expr {
+            Expression::LogicalExpression(log) if log.operator == LogicalOperator::And => {
+                let mut conds = self.lower_condition(&log.left)?;
+                conds.extend(self.lower_condition(&log.right)?);
+                Ok(conds)
+            }
+            Expression::ArrayExpression(arr) => {
+                let mut conds = Vec::new();
+                for elem in &arr.elements {
+                    if let Some(e) = elem.as_expression() {
+                        conds.extend(self.lower_condition(e)?);
+                    }
+                }
+                Ok(conds)
+            }
             Expression::BinaryExpression(bin) => {
                 let lhs = self.lower_expr(&bin.left)?;
                 let rhs = self.lower_expr(&bin.right)?;

@@ -164,6 +164,7 @@ dependencies = [
  "oxc_ast",
  "oxc_parser",
  "oxc_span",
+ "tempfile",
  "thiserror",
 ]
 

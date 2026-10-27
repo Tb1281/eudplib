@@ -215,3 +215,81 @@ export function main() {
     });
     assert!(has_if_user_cp, "must compile If(IsUserCP()) with FormatPrint and PrintAt actions");
 }
+
+#[test]
+fn compiles_typescript_reactive_primitives_once_when_until_after_every() {
+    let map_path = repo_root().join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_ctx = session.map_context();
+
+    let ts_source = r#"
+import { var_, once, when, until, after, every, DisplayText, SetResources, Player1, Add, Ore } from "@eudkit/sdk";
+
+let kills = var_(0, "kills");
+let timer = var_(10, "timer");
+let score = var_(50, "score");
+
+export function main() {
+    once(() => {
+        DisplayText("Game Initialized once");
+        SetResources(Player1, Add, 50, Ore);
+    });
+
+    once(score >= 100, () => {
+        DisplayText("Score milestone reached!");
+    });
+
+    when(kills >= 10, () => {
+        DisplayText("10 kills achieved");
+    });
+
+    until(timer == 0, () => {
+        DisplayText("Timer still running");
+    });
+
+    after(24, () => {
+        DisplayText("24 trigger loops elapsed");
+    });
+
+    every(12, () => {
+        DisplayText("Periodic 12 loops tick");
+    });
+}
+"#;
+
+    let hir = compile_ts_to_hir(ts_source, "ts_reactive_test", map_ctx)
+        .expect("should compile TS reactive primitives to HIR");
+
+    // Check user vars + reactive guard/timer vars
+    let var_names: Vec<&str> = hir.variables().iter().map(|v| v.name.as_str()).collect();
+    assert!(var_names.contains(&"kills"));
+    assert!(var_names.contains(&"timer"));
+    assert!(var_names.contains(&"score"));
+    assert!(var_names.contains(&"once_guard"));
+    assert!(var_names.contains(&"until_guard"));
+    assert!(var_names.contains(&"after_timer"));
+    assert!(var_names.contains(&"after_done"));
+    assert!(var_names.contains(&"every_timer"));
+
+    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
+    let stmts = &main_fn.blocks[0].stmts;
+
+    // Verify presence of reactive statements
+    assert!(
+        stmts.len() >= 6,
+        "must emit at least 6 top-level statements for the 6 reactive primitives, got {}",
+        stmts.len()
+    );
+
+    // Test compiling into full session
+    let mut comp_session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    comp_session.set_hir_module(hir);
+    let tmp = tempfile::tempdir().unwrap();
+    let out_map = tmp.path().join("ts_reactive_out.scx");
+    let report = comp_session.compile_map(&out_map).expect("should compile to .scx");
+    assert!(out_map.exists());
+    assert!(report.trigger_count > 0);
+    assert!(report.payload_size > 0);
+}
