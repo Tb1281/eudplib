@@ -1,0 +1,5 @@
+# Static Compile-Time STRx Relocation, Deterministic Bootstrap, and Opt-In Obfuscation
+
+`eudkit` resolves all EUD payload relocations (`EPD` and byte addresses) statically at compile time against StarCraft: Remastered's fixed `STRx` base address (`0x191943C8`), uses a single-stage `TRIG` entry bootstrap, and defaults to 100% deterministic builds without runtime obfuscation overhead—while offering obfuscation (`obscurate`, seeded for reproducibility) as an explicit opt-in Backend pass.
+
+Legacy `eudplib` inherited multi-stage runtime relocators (`vector_reloc.py`, `payload_reloc.py`) and unconditionally ran non-deterministic runtime XOR decryption loops (`strcommon.py`), `MRGN` random byte subtraction, and random unit-offset shuffling on every build. Making static relocation and direct `CPString` residue-stride writes the default guarantees minimal trigger counts, smaller payloads, and reproducible byte-for-byte builds, while isolating map-protection transformations (`obscurate`) into an opt-in Backend LIR/Payload pass for mapmakers who want anti-decompilation protection.

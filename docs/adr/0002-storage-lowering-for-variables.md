@@ -1,0 +1,5 @@
+# Automatic Storage Lowering for HIR Variables
+
+`eudkit` exposes a single integer variable abstraction in `HIR` (`VarId`) and relies on a Rust Backend storage-selection pass to lower each variable into either a 4-byte memory cell or a 72-byte `VProc` self-modifying trigger slot, rather than exposing separate `EUDVariable`, `EUDLightVariable`, and `EUDXVariable` classes to users.
+
+In StarCraft EUD programming, a variable only requires a `VProc` trigger slot (a `SetDeaths` action whose value field holds the variable) when its runtime value must be dynamically copied into another memory location without bit-reading. Variables that are only assigned constants, incremented/decremented by constants, or tested in conditions only need a 4-byte memory cell. Making the Backend's liveness and usage analysis choose the storage class eliminates user cognitive load, removes temporary `VProc` allocations after constant propagation, and strictly reduces payload size and trigger count compared to manual selection.
