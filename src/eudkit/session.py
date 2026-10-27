@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, overload
 
-from eudplib.bindings._rust import eudkit as _rust_eudkit
+from eudkit import _rust as _rust_eudkit
 
 from .ast_lowering import EudFuncPtr, EudFunction
 from .types import (

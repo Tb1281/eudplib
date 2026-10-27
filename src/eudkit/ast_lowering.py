@@ -6,7 +6,7 @@ import textwrap
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from eudplib.bindings._rust import eudkit as _rust_eudkit
+from eudkit import _rust as _rust_eudkit
 
 from .types import (
     ActionSpec,
