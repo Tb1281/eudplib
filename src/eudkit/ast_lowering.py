@@ -11,9 +11,11 @@ from eudplib.bindings._rust import eudkit as _rust_eudkit
 from .types import (
     ActionSpec,
     Condition,
+    Expr,
     MaskedVar,
     Var,
     _active_builder_session,
+    _to_i32,
     coerce_conditions,
 )
 
@@ -300,18 +302,18 @@ class AstToHirLowerer:
             raise ValueError("Only single variable assignments are supported in @eud.fn")
         target_name = stmt.targets[0].id
         val = self.eval_expr(stmt.value)
-        if isinstance(val, Var):
-            bound = self._bind_var_to_session(val)
-            self.local_vars[target_name] = bound
-            return
         if isinstance(val, int):
             var = self._resolve_target_var(target_name, init_if_new=val)
-            self.session._raw.push_var_assign(var.id, int(val))
+            self.session._raw.push_var_assign(var.id, _to_i32(val))
+            return
+        if isinstance(val, (Var, MaskedVar, Expr)):
+            var = self._resolve_target_var(target_name, init_if_new=0)
+            var.set(val, session=self.session)
             return
         raise TypeError(f"Unsupported assignment value for {target_name!r}: {val!r}")
 
     def _lower_aug_assign(self, stmt: ast.AugAssign) -> None:
-        val = int(self.eval_expr(stmt.value))
+        val = self.eval_expr(stmt.value)
         if isinstance(stmt.target, ast.Name):
             var = self._resolve_target_var(stmt.target.id)
             if isinstance(stmt.op, ast.Add):
@@ -320,9 +322,33 @@ class AstToHirLowerer:
             if isinstance(stmt.op, ast.Sub):
                 var.sub(val, session=self.session)
                 return
+            if isinstance(stmt.op, ast.Mult):
+                var.set(var * val, session=self.session)
+                return
+            if isinstance(stmt.op, ast.FloorDiv):
+                var.set(var // val, session=self.session)
+                return
+            if isinstance(stmt.op, ast.Mod):
+                var.set(var % val, session=self.session)
+                return
+            if isinstance(stmt.op, ast.BitAnd):
+                var.set(var & val, session=self.session)
+                return
+            if isinstance(stmt.op, ast.BitOr):
+                var.set(var | val, session=self.session)
+                return
+            if isinstance(stmt.op, ast.BitXor):
+                var.set(var ^ val, session=self.session)
+                return
+            if isinstance(stmt.op, ast.LShift):
+                var.set(var << val, session=self.session)
+                return
+            if isinstance(stmt.op, ast.RShift):
+                var.set(var >> val, session=self.session)
+                return
         else:
             target_obj = self.eval_expr(stmt.target)
-            if isinstance(target_obj, MaskedVar):
+            if isinstance(target_obj, MaskedVar) and isinstance(val, int):
                 if isinstance(stmt.op, ast.Add):
                     target_obj.add(val, session=self.session)
                     return

@@ -1,6 +1,7 @@
 use eudkit_core::hir::{
-    Comparison, HirBasicBlock, HirByteBuf, HirFunction, HirModule, HirStmt, HirTerminator,
-    HirValue, Modifier, PlayerId, ResourceType, StockAction, StockCondition, SwitchState, VarId,
+    Comparison, HirBasicBlock, HirBinOp, HirByteBuf, HirExpr, HirFunction, HirModule, HirStmt,
+    HirTerminator, HirUnaryOp, HirValue, Modifier, PlayerId, ResourceType, StockAction,
+    StockCondition, SwitchState, VarId,
 };
 use eudkit_core::{CompilationConfig, CompilationSession, EudkitError};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
@@ -89,6 +90,75 @@ fn decode_player(code: i32) -> PlayerId {
     }
 }
 
+fn decode_bin_op(code: u8) -> PyResult<HirBinOp> {
+    match code {
+        0 => Ok(HirBinOp::Add),
+        1 => Ok(HirBinOp::Sub),
+        2 => Ok(HirBinOp::Mul),
+        3 => Ok(HirBinOp::Div),
+        4 => Ok(HirBinOp::Rem),
+        5 => Ok(HirBinOp::BitAnd),
+        6 => Ok(HirBinOp::BitOr),
+        7 => Ok(HirBinOp::BitXor),
+        8 => Ok(HirBinOp::Shl),
+        9 => Ok(HirBinOp::Shr),
+        10 => Ok(HirBinOp::SubSat),
+        other => Err(PyValueError::new_err(format!(
+            "invalid binary op code: {other}"
+        ))),
+    }
+}
+
+#[derive(Clone, Debug)]
+#[pyclass(
+    from_py_object,
+    name = "RawExpr",
+    module = "eudplib.bindings._rust.eudkit"
+)]
+pub struct PyExpr(pub HirExpr);
+
+#[pymethods]
+impl PyExpr {
+    #[staticmethod]
+    fn const_val(val: i32) -> Self {
+        Self(HirExpr::Const(val))
+    }
+
+    #[staticmethod]
+    fn var(var_id: u32) -> Self {
+        Self(HirExpr::Var(VarId(var_id)))
+    }
+
+    #[staticmethod]
+    fn unary_neg(operand: &PyExpr) -> Self {
+        Self(HirExpr::UnaryOp {
+            op: HirUnaryOp::Neg,
+            operand: Box::new(operand.0.clone()),
+        })
+    }
+
+    #[staticmethod]
+    fn unary_not(operand: &PyExpr) -> Self {
+        Self(HirExpr::UnaryOp {
+            op: HirUnaryOp::BitNot,
+            operand: Box::new(operand.0.clone()),
+        })
+    }
+
+    #[staticmethod]
+    fn bin_op(op: u8, lhs: &PyExpr, rhs: &PyExpr) -> PyResult<Self> {
+        Ok(Self(HirExpr::BinOp {
+            op: decode_bin_op(op)?,
+            lhs: Box::new(lhs.0.clone()),
+            rhs: Box::new(rhs.0.clone()),
+        }))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{}", self.0)
+    }
+}
+
 #[derive(Clone, Debug)]
 #[pyclass(
     from_py_object,
@@ -156,6 +226,49 @@ impl PyCondition {
             var: VarId(var_id),
             comparison: decode_comparison(comparison)?,
             value,
+            mask,
+        }))
+    }
+
+    #[staticmethod]
+    fn expr_cmp(lhs: &PyExpr, comparison: u8, rhs: &PyExpr) -> PyResult<Self> {
+        Ok(Self(StockCondition::ExprCmp {
+            lhs: lhs.0.clone(),
+            comparison: decode_comparison(comparison)?,
+            rhs: rhs.0.clone(),
+        }))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (player, comparison, amount, unit, mask=None))]
+    fn deaths_dynamic(
+        player: &PyExpr,
+        comparison: u8,
+        amount: &PyExpr,
+        unit: u16,
+        mask: Option<u32>,
+    ) -> PyResult<Self> {
+        Ok(Self(StockCondition::DeathsDynamic {
+            player: player.0.clone(),
+            comparison: decode_comparison(comparison)?,
+            amount: amount.0.clone(),
+            unit,
+            mask,
+        }))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (address, comparison, value, mask=None))]
+    fn memory_dynamic(
+        address: u32,
+        comparison: u8,
+        value: &PyExpr,
+        mask: Option<u32>,
+    ) -> PyResult<Self> {
+        Ok(Self(StockCondition::MemoryDynamic {
+            address,
+            comparison: decode_comparison(comparison)?,
+            value: value.0.clone(),
             mask,
         }))
     }
@@ -278,6 +391,40 @@ impl PyAction {
             var: VarId(var_id),
             modifier: decode_modifier(modifier)?,
             value,
+            mask,
+        }))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (player, modifier, value, unit, mask=None))]
+    fn set_deaths_dynamic(
+        player: &PyExpr,
+        modifier: u8,
+        value: &PyExpr,
+        unit: u16,
+        mask: Option<u32>,
+    ) -> PyResult<Self> {
+        Ok(Self(StockAction::SetDeathsDynamic {
+            player: player.0.clone(),
+            modifier: decode_modifier(modifier)?,
+            value: value.0.clone(),
+            unit,
+            mask,
+        }))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (address, modifier, value, mask=None))]
+    fn set_memory_dynamic(
+        address: u32,
+        modifier: u8,
+        value: &PyExpr,
+        mask: Option<u32>,
+    ) -> PyResult<Self> {
+        Ok(Self(StockAction::SetMemoryDynamic {
+            address,
+            modifier: decode_modifier(modifier)?,
+            value: value.0.clone(),
             mask,
         }))
     }
@@ -714,6 +861,13 @@ impl PyCompilationSession {
         });
     }
 
+    fn push_var_assign_expr(&mut self, var_id: u32, expr: &PyExpr) {
+        self.active_stmts_mut().push(HirStmt::VarAssignExpr {
+            var: VarId(var_id),
+            expr: expr.0.clone(),
+        });
+    }
+
     fn push_var_add(&mut self, var_id: u32, value: i32) {
         self.active_stmts_mut().push(HirStmt::VarAddConst {
             var: VarId(var_id),
@@ -794,5 +948,5 @@ impl PyCompilationSession {
 #[pyo3(name = "eudkit")]
 pub(crate) mod eudkit_mod {
     #[pymodule_export]
-    use super::{PyAction, PyCompilationReport, PyCompilationSession, PyCondition};
+    use super::{PyAction, PyCompilationReport, PyCompilationSession, PyCondition, PyExpr};
 }

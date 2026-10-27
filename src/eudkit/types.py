@@ -75,6 +75,262 @@ def EPD(address: int) -> int:
     return (int(address) - DEATHS_BASE_ADDR) // 4
 
 
+def _to_i32(val: int) -> int:
+    u = int(val) & 0xFFFFFFFF
+    return u - 0x100000000 if u >= 0x80000000 else u
+
+
+# Binary op codes matching `decode_bin_op` in `eudkit_py.rs`
+_BINOP_ADD = 0
+_BINOP_SUB = 1
+_BINOP_MUL = 2
+_BINOP_DIV = 3
+_BINOP_REM = 4
+_BINOP_BITAND = 5
+_BINOP_BITOR = 6
+_BINOP_BITXOR = 7
+_BINOP_SHL = 8
+_BINOP_SHR = 9
+_BINOP_SUBSAT = 10
+
+
+def _is_expr_like(val: object) -> bool:
+    return isinstance(val, (int, Expr, Var, MaskedVar))
+
+
+def _coerce_raw_expr(
+    val: ExprLike, session: Session
+) -> _rust_eudkit.RawExpr:
+    if isinstance(val, int):
+        return _rust_eudkit.RawExpr.const_val(_to_i32(val))
+    if isinstance(val, Expr):
+        return val.resolve(session)
+    if isinstance(val, Var):
+        target_id = (
+            val.id
+            if session is val._session
+            else session._resolve_var_id(val.name, val.init_val)
+        )
+        return _rust_eudkit.RawExpr.var(target_id)
+    if isinstance(val, MaskedVar):
+        var_expr = _coerce_raw_expr(val.var, session)
+        mask_expr = _rust_eudkit.RawExpr.const_val(_to_i32(val.mask))
+        return _rust_eudkit.RawExpr.bin_op(_BINOP_BITAND, var_expr, mask_expr)
+    raise TypeError(f"Expected int, Var, MaskedVar, or Expr, got {type(val).__name__}")
+
+
+def _make_binop_expr(op: int, lhs: ExprLike, rhs: ExprLike) -> Expr:
+    return Expr(
+        lambda s: _rust_eudkit.RawExpr.bin_op(
+            op, _coerce_raw_expr(lhs, s), _coerce_raw_expr(rhs, s)
+        )
+    )
+
+
+def _make_expr_cmp(lhs: ExprLike, comparison: int, rhs: ExprLike) -> Condition:
+    return Condition(
+        [
+            lambda s: _rust_eudkit.RawCondition.expr_cmp(
+                _coerce_raw_expr(lhs, s),
+                comparison,
+                _coerce_raw_expr(rhs, s),
+            )
+        ]
+    )
+
+
+def _make_expr_ne(lhs: ExprLike, rhs: ExprLike) -> Condition:
+    if isinstance(rhs, int):
+        u = int(rhs) & 0xFFFFFFFF
+        if u == 0:
+            return _make_expr_cmp(lhs, AtLeast, 1)
+        if u == 0xFFFFFFFF:
+            return _make_expr_cmp(lhs, AtMost, 0xFFFFFFFE)
+    diff = _make_binop_expr(_BINOP_SUB, lhs, rhs)
+    return _make_expr_cmp(diff, AtLeast, 1)
+
+
+def _make_expr_lt(lhs: ExprLike, rhs: ExprLike) -> Condition:
+    if isinstance(rhs, int):
+        val = int(rhs)
+        if val <= 0:
+            return Condition.from_raw(_rust_eudkit.RawCondition.never())
+        return _make_expr_cmp(lhs, AtMost, val - 1)
+    if isinstance(lhs, int):
+        val = int(lhs) & 0xFFFFFFFF
+        if val >= 0xFFFFFFFF:
+            return Condition.from_raw(_rust_eudkit.RawCondition.never())
+        return _make_expr_cmp(rhs, AtLeast, val + 1)
+    sat_diff = _make_binop_expr(_BINOP_SUBSAT, rhs, lhs)
+    return _make_expr_cmp(sat_diff, AtLeast, 1)
+
+
+def _make_expr_gt(lhs: ExprLike, rhs: ExprLike) -> Condition:
+    if isinstance(rhs, int):
+        val = int(rhs) & 0xFFFFFFFF
+        if val >= 0xFFFFFFFF:
+            return Condition.from_raw(_rust_eudkit.RawCondition.never())
+        return _make_expr_cmp(lhs, AtLeast, val + 1)
+    if isinstance(lhs, int):
+        val = int(lhs)
+        if val <= 0:
+            return Condition.from_raw(_rust_eudkit.RawCondition.never())
+        return _make_expr_cmp(rhs, AtMost, val - 1)
+    sat_diff = _make_binop_expr(_BINOP_SUBSAT, lhs, rhs)
+    return _make_expr_cmp(sat_diff, AtLeast, 1)
+
+
+class _ExprOpsMixin:
+    """Shared arithmetic, bitwise, and comparison operator overloads for `Expr`, `Var`, and `MaskedVar`."""
+
+    def __add__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_ADD, self, other)  # type: ignore[arg-type]
+
+    def __radd__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_ADD, other, self)  # type: ignore[arg-type]
+
+    def __sub__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_SUB, self, other)  # type: ignore[arg-type]
+
+    def __rsub__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_SUB, other, self)  # type: ignore[arg-type]
+
+    def __mul__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_MUL, self, other)  # type: ignore[arg-type]
+
+    def __rmul__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_MUL, other, self)  # type: ignore[arg-type]
+
+    def __floordiv__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_DIV, self, other)  # type: ignore[arg-type]
+
+    def __rfloordiv__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_DIV, other, self)  # type: ignore[arg-type]
+
+    def __mod__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_REM, self, other)  # type: ignore[arg-type]
+
+    def __rmod__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_REM, other, self)  # type: ignore[arg-type]
+
+    def __and__(self, other: ExprLike) -> Expr | MaskedVar:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_BITAND, self, other)  # type: ignore[arg-type]
+
+    def __rand__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_BITAND, other, self)  # type: ignore[arg-type]
+
+    def __or__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_BITOR, self, other)  # type: ignore[arg-type]
+
+    def __ror__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_BITOR, other, self)  # type: ignore[arg-type]
+
+    def __xor__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_BITXOR, self, other)  # type: ignore[arg-type]
+
+    def __rxor__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_BITXOR, other, self)  # type: ignore[arg-type]
+
+    def __lshift__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_SHL, self, other)  # type: ignore[arg-type]
+
+    def __rlshift__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_SHL, other, self)  # type: ignore[arg-type]
+
+    def __rshift__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_SHR, self, other)  # type: ignore[arg-type]
+
+    def __rrshift__(self, other: ExprLike) -> Expr:
+        if not _is_expr_like(other):
+            return NotImplemented
+        return _make_binop_expr(_BINOP_SHR, other, self)  # type: ignore[arg-type]
+
+    def __neg__(self) -> Expr:
+        return Expr(
+            lambda s: _rust_eudkit.RawExpr.unary_neg(_coerce_raw_expr(self, s))  # type: ignore[arg-type]
+        )
+
+    def __pos__(self) -> Expr:
+        return Expr(lambda s: _coerce_raw_expr(self, s))  # type: ignore[arg-type]
+
+    def __invert__(self) -> Expr:
+        return Expr(
+            lambda s: _rust_eudkit.RawExpr.unary_not(_coerce_raw_expr(self, s))  # type: ignore[arg-type]
+        )
+
+
+class Expr(_ExprOpsMixin):
+    """Represents a compound arithmetic or bitwise expression tree (`HirExpr`)."""
+
+    def __init__(
+        self, builder: Callable[[Session], _rust_eudkit.RawExpr]
+    ) -> None:
+        self._builder = builder
+
+    def resolve(self, session: Session) -> _rust_eudkit.RawExpr:
+        return self._builder(session)
+
+    def __eq__(self, other: object) -> Condition:  # type: ignore[override]
+        if not _is_expr_like(other):
+            raise TypeError("Expression comparison requires an int, Var, MaskedVar, or Expr")
+        return _make_expr_cmp(self, Exactly, other)  # type: ignore[arg-type]
+
+    def __ne__(self, other: object) -> Condition:  # type: ignore[override]
+        if not _is_expr_like(other):
+            raise TypeError("Expression comparison requires an int, Var, MaskedVar, or Expr")
+        return _make_expr_ne(self, other)  # type: ignore[arg-type]
+
+    def __ge__(self, other: ExprLike) -> Condition:
+        return _make_expr_cmp(self, AtLeast, other)
+
+    def __le__(self, other: ExprLike) -> Condition:
+        return _make_expr_cmp(self, AtMost, other)
+
+    def __gt__(self, other: ExprLike) -> Condition:
+        return _make_expr_gt(self, other)
+
+    def __lt__(self, other: ExprLike) -> Condition:
+        return _make_expr_lt(self, other)
+
+
 class Condition:
     """Represents one or more conjunctive StarCraft conditions (`AND`)."""
 
@@ -111,7 +367,7 @@ def coerce_conditions(
     return out
 
 
-class MaskedVar:
+class MaskedVar(_ExprOpsMixin):
     """Represents a bitwise masked view `(var & mask)` of a virtual variable."""
 
     def __init__(self, var: Var, mask: int) -> None:
@@ -139,35 +395,47 @@ class MaskedVar:
         return Condition([_build])
 
     def __eq__(self, other: object) -> Condition:  # type: ignore[override]
-        if not isinstance(other, int):
-            raise TypeError("Variable comparison requires an integer constant")
-        return self._cmp(Exactly, other)
+        if isinstance(other, int):
+            return self._cmp(Exactly, other)
+        if _is_expr_like(other):
+            return _make_expr_cmp(self, Exactly, other)  # type: ignore[arg-type]
+        raise TypeError("Variable comparison requires an int, Var, MaskedVar, or Expr")
 
     def __ne__(self, other: object) -> Condition:  # type: ignore[override]
-        if not isinstance(other, int):
-            raise TypeError("Variable comparison requires an integer constant")
-        if (other & 0xFFFFFFFF) == 0:
-            return self._cmp(AtLeast, 1)
-        if (other & 0xFFFFFFFF) == 0xFFFFFFFF:
-            return self._cmp(AtMost, 0xFFFFFFFE)
-        raise ValueError(
-            "Direct `!=` condition is only supported for 0 or 0xFFFFFFFF in a single condition"
-        )
+        if isinstance(other, int):
+            if (other & 0xFFFFFFFF) == 0:
+                return self._cmp(AtLeast, 1)
+            if (other & 0xFFFFFFFF) == 0xFFFFFFFF:
+                return self._cmp(AtMost, 0xFFFFFFFE)
+            return _make_expr_ne(self, other)
+        if _is_expr_like(other):
+            return _make_expr_ne(self, other)  # type: ignore[arg-type]
+        raise TypeError("Variable comparison requires an int, Var, MaskedVar, or Expr")
 
-    def __ge__(self, other: int) -> Condition:
-        return self._cmp(AtLeast, other)
+    def __ge__(self, other: ExprLike) -> Condition:
+        if isinstance(other, int):
+            return self._cmp(AtLeast, other)
+        return _make_expr_cmp(self, AtLeast, other)
 
-    def __le__(self, other: int) -> Condition:
-        return self._cmp(AtMost, other)
+    def __le__(self, other: ExprLike) -> Condition:
+        if isinstance(other, int):
+            return self._cmp(AtMost, other)
+        return _make_expr_cmp(self, AtMost, other)
 
-    def __gt__(self, other: int) -> Condition:
-        return self._cmp(AtLeast, int(other) + 1)
+    def __gt__(self, other: ExprLike) -> Condition:
+        if isinstance(other, int):
+            if (int(other) & 0xFFFFFFFF) >= 0xFFFFFFFF:
+                return Condition.from_raw(_rust_eudkit.RawCondition.never())
+            return self._cmp(AtLeast, int(other) + 1)
+        return _make_expr_gt(self, other)
 
-    def __lt__(self, other: int) -> Condition:
-        val = int(other)
-        if val <= 0:
-            return Condition.from_raw(_rust_eudkit.RawCondition.never())
-        return self._cmp(AtMost, val - 1)
+    def __lt__(self, other: ExprLike) -> Condition:
+        if isinstance(other, int):
+            val = int(other)
+            if val <= 0:
+                return Condition.from_raw(_rust_eudkit.RawCondition.never())
+            return self._cmp(AtMost, val - 1)
+        return _make_expr_lt(self, other)
 
     def set(self, value: int, session: Session | None = None) -> None:
         self.var.set_mask(value, self.mask, SetTo, session=session)
@@ -179,7 +447,7 @@ class MaskedVar:
         self.var.set_mask(value, self.mask, Subtract, session=session)
 
 
-class Var:
+class Var(_ExprOpsMixin):
     """Handle to a virtual variable in an eudkit `Session` (`VarId` in HIR)."""
 
     def __init__(
@@ -217,74 +485,120 @@ class Var:
 
         return Condition([_build])
 
-    def __and__(self, mask: int) -> MaskedVar:
-        return MaskedVar(self, mask)
+    def __and__(self, mask: ExprLike) -> MaskedVar | Expr:
+        if isinstance(mask, int):
+            return MaskedVar(self, mask)
+        if _is_expr_like(mask):
+            return _make_binop_expr(_BINOP_BITAND, self, mask)
+        return NotImplemented
 
     def __eq__(self, other: object) -> Condition:  # type: ignore[override]
-        if not isinstance(other, int):
-            raise TypeError("Variable comparison requires an integer constant")
-        return self._cmp(Exactly, other)
+        if isinstance(other, int):
+            return self._cmp(Exactly, other)
+        if _is_expr_like(other):
+            return _make_expr_cmp(self, Exactly, other)  # type: ignore[arg-type]
+        raise TypeError("Variable comparison requires an int, Var, MaskedVar, or Expr")
 
     def __ne__(self, other: object) -> Condition:  # type: ignore[override]
-        if not isinstance(other, int):
-            raise TypeError("Variable comparison requires an integer constant")
-        if (other & 0xFFFFFFFF) == 0:
-            return self._cmp(AtLeast, 1)
-        if (other & 0xFFFFFFFF) == 0xFFFFFFFF:
-            return self._cmp(AtMost, 0xFFFFFFFE)
-        raise ValueError(
-            "Direct `!=` condition is only supported for 0 or 0xFFFFFFFF in a single condition"
-        )
+        if isinstance(other, int):
+            if (other & 0xFFFFFFFF) == 0:
+                return self._cmp(AtLeast, 1)
+            if (other & 0xFFFFFFFF) == 0xFFFFFFFF:
+                return self._cmp(AtMost, 0xFFFFFFFE)
+            return _make_expr_ne(self, other)
+        if _is_expr_like(other):
+            return _make_expr_ne(self, other)  # type: ignore[arg-type]
+        raise TypeError("Variable comparison requires an int, Var, MaskedVar, or Expr")
 
-    def __ge__(self, other: int) -> Condition:
-        return self._cmp(AtLeast, other)
+    def __ge__(self, other: ExprLike) -> Condition:
+        if isinstance(other, int):
+            return self._cmp(AtLeast, other)
+        return _make_expr_cmp(self, AtLeast, other)
 
-    def __le__(self, other: int) -> Condition:
-        return self._cmp(AtMost, other)
+    def __le__(self, other: ExprLike) -> Condition:
+        if isinstance(other, int):
+            return self._cmp(AtMost, other)
+        return _make_expr_cmp(self, AtMost, other)
 
-    def __gt__(self, other: int) -> Condition:
-        return self._cmp(AtLeast, int(other) + 1)
+    def __gt__(self, other: ExprLike) -> Condition:
+        if isinstance(other, int):
+            if (int(other) & 0xFFFFFFFF) >= 0xFFFFFFFF:
+                return Condition.from_raw(_rust_eudkit.RawCondition.never())
+            return self._cmp(AtLeast, int(other) + 1)
+        return _make_expr_gt(self, other)
 
-    def __lt__(self, other: int) -> Condition:
-        val = int(other)
-        if val <= 0:
-            return Condition.from_raw(_rust_eudkit.RawCondition.never())
-        return self._cmp(AtMost, val - 1)
+    def __lt__(self, other: ExprLike) -> Condition:
+        if isinstance(other, int):
+            val = int(other)
+            if val <= 0:
+                return Condition.from_raw(_rust_eudkit.RawCondition.never())
+            return self._cmp(AtMost, val - 1)
+        return _make_expr_lt(self, other)
 
-    def set(self, value: int, session: Session | None = None) -> Var:
+    def set(self, value: ExprLike, session: Session | None = None) -> Var:
         sess, vid = self._target_session_and_id(session)
-        sess._raw.push_var_assign(vid, int(value))
+        if isinstance(value, int):
+            sess._raw.push_var_assign(vid, _to_i32(value))
+        elif _is_expr_like(value):
+            sess._raw.push_var_assign_expr(vid, _coerce_raw_expr(value, sess))
+        else:
+            raise TypeError(f"Unsupported value for Var.set: {value!r}")
         return self
 
-    def assign(self, value: int, session: Session | None = None) -> Var:
+    def assign(self, value: ExprLike, session: Session | None = None) -> Var:
         return self.set(value, session=session)
 
-    def __lshift__(self, value: int) -> Var:
-        return self.set(value)
-
-    def add(self, value: int, session: Session | None = None) -> Var:
+    def add(self, value: ExprLike, session: Session | None = None) -> Var:
         sess, vid = self._target_session_and_id(session)
-        val = int(value)
-        if val >= 0:
-            sess._raw.push_var_add(vid, val)
-        else:
-            sess._raw.push_var_sub(vid, -val)
-        return self
+        if isinstance(value, int):
+            val = int(value)
+            if val >= 0:
+                sess._raw.push_var_add(vid, _to_i32(val))
+            else:
+                sess._raw.push_var_sub(vid, _to_i32(-val))
+            return self
+        return self.set(self + value, session=sess)
 
-    def sub(self, value: int, session: Session | None = None) -> Var:
+    def sub(self, value: ExprLike, session: Session | None = None) -> Var:
         sess, vid = self._target_session_and_id(session)
-        val = int(value)
-        if val >= 0:
-            sess._raw.push_var_sub(vid, val)
-        else:
-            sess._raw.push_var_add(vid, -val)
-        return self
+        if isinstance(value, int):
+            val = int(value)
+            if val >= 0:
+                sess._raw.push_var_sub(vid, _to_i32(val))
+            else:
+                sess._raw.push_var_add(vid, _to_i32(-val))
+            return self
+        return self.set(self - value, session=sess)
 
-    def __iadd__(self, value: int) -> Var:
+    def __iadd__(self, value: ExprLike) -> Var:
         return self.add(value)
 
-    def __isub__(self, value: int) -> Var:
+    def __isub__(self, value: ExprLike) -> Var:
         return self.sub(value)
+
+    def __imul__(self, value: ExprLike) -> Var:
+        return self.set(self * value)
+
+    def __ifloordiv__(self, value: ExprLike) -> Var:
+        return self.set(self // value)
+
+    def __imod__(self, value: ExprLike) -> Var:
+        return self.set(self % value)
+
+    def __iand__(self, value: ExprLike) -> Var:
+        return self.set(self & value)
+
+    def __ior__(self, value: ExprLike) -> Var:
+        return self.set(self | value)
+
+    def __ixor__(self, value: ExprLike) -> Var:
+        return self.set(self ^ value)
+
+    def __ilshift__(self, value: ExprLike) -> Var:
+        return self.set(self << value)
+
+    def __irshift__(self, value: ExprLike) -> Var:
+        return self.set(self >> value)
 
     def set_mask(
         self,
@@ -295,9 +609,12 @@ class Var:
     ) -> Var:
         sess, vid = self._target_session_and_id(session)
         sess._raw.push_var_set_mask(
-            vid, int(modifier), int(value), int(mask) & 0xFFFFFFFF
+            vid, int(modifier), _to_i32(value), int(mask) & 0xFFFFFFFF
         )
         return self
+
+
+ExprLike = int | Expr | Var | MaskedVar
 
 
 class ActionSpec:
@@ -345,33 +662,57 @@ def Never() -> Condition:
 
 
 def Deaths(
-    player: int, comparison: int, amount: int, unit: int | str = 0
+    player: ExprLike, comparison: int, amount: ExprLike, unit: int | str = 0
 ) -> Condition:
+    if isinstance(player, int) and isinstance(amount, int):
+        return Condition(
+            [
+                lambda s: _rust_eudkit.RawCondition.deaths(
+                    int(player),
+                    int(comparison),
+                    int(amount) & 0xFFFFFFFF,
+                    _resolve_unit(s, unit),
+                )
+            ]
+        )
     return Condition(
         [
-            lambda s: _rust_eudkit.RawCondition.deaths(
-                int(player),
+            lambda s: _rust_eudkit.RawCondition.deaths_dynamic(
+                _coerce_raw_expr(player, s),
                 int(comparison),
-                int(amount) & 0xFFFFFFFF,
+                _coerce_raw_expr(amount, s),
                 _resolve_unit(s, unit),
+                None,
             )
         ]
     )
 
 
 def DeathsX(
-    player: int,
+    player: ExprLike,
     comparison: int,
-    amount: int,
+    amount: ExprLike,
     unit: int | str = 0,
     mask: int = 0xFFFFFFFF,
 ) -> Condition:
+    if isinstance(player, int) and isinstance(amount, int):
+        return Condition(
+            [
+                lambda s: _rust_eudkit.RawCondition.deaths_x(
+                    int(player),
+                    int(comparison),
+                    int(amount) & 0xFFFFFFFF,
+                    _resolve_unit(s, unit),
+                    int(mask) & 0xFFFFFFFF,
+                )
+            ]
+        )
     return Condition(
         [
-            lambda s: _rust_eudkit.RawCondition.deaths_x(
-                int(player),
+            lambda s: _rust_eudkit.RawCondition.deaths_dynamic(
+                _coerce_raw_expr(player, s),
                 int(comparison),
-                int(amount) & 0xFFFFFFFF,
+                _coerce_raw_expr(amount, s),
                 _resolve_unit(s, unit),
                 int(mask) & 0xFFFFFFFF,
             )
@@ -379,24 +720,48 @@ def DeathsX(
     )
 
 
-def Memory(address: int, comparison: int, value: int) -> Condition:
-    return Condition.from_raw(
-        _rust_eudkit.RawCondition.memory(
-            int(address) & 0xFFFFFFFF,
-            int(comparison),
-            int(value) & 0xFFFFFFFF,
+def Memory(address: int, comparison: int, value: ExprLike) -> Condition:
+    if isinstance(value, int):
+        return Condition.from_raw(
+            _rust_eudkit.RawCondition.memory(
+                int(address) & 0xFFFFFFFF,
+                int(comparison),
+                int(value) & 0xFFFFFFFF,
+            )
         )
+    return Condition(
+        [
+            lambda s: _rust_eudkit.RawCondition.memory_dynamic(
+                int(address) & 0xFFFFFFFF,
+                int(comparison),
+                _coerce_raw_expr(value, s),
+                None,
+            )
+        ]
     )
 
 
-def MemoryX(address: int, comparison: int, value: int, mask: int) -> Condition:
-    return Condition.from_raw(
-        _rust_eudkit.RawCondition.memory_x(
-            int(address) & 0xFFFFFFFF,
-            int(comparison),
-            int(value) & 0xFFFFFFFF,
-            int(mask) & 0xFFFFFFFF,
+def MemoryX(
+    address: int, comparison: int, value: ExprLike, mask: int
+) -> Condition:
+    if isinstance(value, int):
+        return Condition.from_raw(
+            _rust_eudkit.RawCondition.memory_x(
+                int(address) & 0xFFFFFFFF,
+                int(comparison),
+                int(value) & 0xFFFFFFFF,
+                int(mask) & 0xFFFFFFFF,
+            )
         )
+    return Condition(
+        [
+            lambda s: _rust_eudkit.RawCondition.memory_dynamic(
+                int(address) & 0xFFFFFFFF,
+                int(comparison),
+                _coerce_raw_expr(value, s),
+                int(mask) & 0xFFFFFFFF,
+            )
+        ]
     )
 
 
@@ -462,49 +827,87 @@ def Switch(switch: int | str, state: int = Set) -> Condition:
 
 
 def SetDeaths(
-    player: int, modifier: int, value: int, unit: int | str = 0
+    player: ExprLike, modifier: int, value: ExprLike, unit: int | str = 0
 ) -> ActionSpec:
+    if isinstance(player, int) and isinstance(value, int):
+        return ActionSpec(
+            lambda s: _rust_eudkit.RawAction.set_deaths(
+                int(player), int(modifier), _to_i32(value), _resolve_unit(s, unit)
+            )
+        )
     return ActionSpec(
-        lambda s: _rust_eudkit.RawAction.set_deaths(
-            int(player), int(modifier), int(value), _resolve_unit(s, unit)
+        lambda s: _rust_eudkit.RawAction.set_deaths_dynamic(
+            _coerce_raw_expr(player, s),
+            int(modifier),
+            _coerce_raw_expr(value, s),
+            _resolve_unit(s, unit),
+            None,
         )
     )
 
 
 def SetDeathsX(
-    player: int,
+    player: ExprLike,
     modifier: int,
-    value: int,
+    value: ExprLike,
     unit: int | str = 0,
     mask: int = 0xFFFFFFFF,
 ) -> ActionSpec:
+    if isinstance(player, int) and isinstance(value, int):
+        return ActionSpec(
+            lambda s: _rust_eudkit.RawAction.set_deaths_x(
+                int(player),
+                int(modifier),
+                _to_i32(value),
+                _resolve_unit(s, unit),
+                int(mask) & 0xFFFFFFFF,
+            )
+        )
     return ActionSpec(
-        lambda s: _rust_eudkit.RawAction.set_deaths_x(
-            int(player),
+        lambda s: _rust_eudkit.RawAction.set_deaths_dynamic(
+            _coerce_raw_expr(player, s),
             int(modifier),
-            int(value),
+            _coerce_raw_expr(value, s),
             _resolve_unit(s, unit),
             int(mask) & 0xFFFFFFFF,
         )
     )
 
 
-def SetMemory(address: int, modifier: int, value: int) -> ActionSpec:
+def SetMemory(address: int, modifier: int, value: ExprLike) -> ActionSpec:
+    if isinstance(value, int):
+        return ActionSpec(
+            lambda _s: _rust_eudkit.RawAction.set_memory(
+                int(address) & 0xFFFFFFFF, int(modifier), _to_i32(value)
+            )
+        )
     return ActionSpec(
-        lambda _s: _rust_eudkit.RawAction.set_memory(
-            int(address) & 0xFFFFFFFF, int(modifier), int(value)
+        lambda s: _rust_eudkit.RawAction.set_memory_dynamic(
+            int(address) & 0xFFFFFFFF,
+            int(modifier),
+            _coerce_raw_expr(value, s),
+            None,
         )
     )
 
 
 def SetMemoryX(
-    address: int, modifier: int, value: int, mask: int
+    address: int, modifier: int, value: ExprLike, mask: int
 ) -> ActionSpec:
+    if isinstance(value, int):
+        return ActionSpec(
+            lambda _s: _rust_eudkit.RawAction.set_memory_x(
+                int(address) & 0xFFFFFFFF,
+                int(modifier),
+                _to_i32(value),
+                int(mask) & 0xFFFFFFFF,
+            )
+        )
     return ActionSpec(
-        lambda _s: _rust_eudkit.RawAction.set_memory_x(
+        lambda s: _rust_eudkit.RawAction.set_memory_dynamic(
             int(address) & 0xFFFFFFFF,
             int(modifier),
-            int(value),
+            _coerce_raw_expr(value, s),
             int(mask) & 0xFFFFFFFF,
         )
     )
