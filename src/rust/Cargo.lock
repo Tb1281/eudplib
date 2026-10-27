@@ -74,6 +74,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "eudkit-cli"
+version = "0.1.0"
+dependencies = [
+ "eudkit-core",
+ "eudplib-stormlib",
+ "tempfile",
+]
+
+[[package]]
+name = "eudkit-core"
+version = "0.1.0"
+dependencies = [
+ "eudplib-stormlib",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "eudplib-epscript"
 version = "0.1.0"
 dependencies = [
