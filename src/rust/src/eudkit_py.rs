@@ -113,7 +113,7 @@ fn decode_bin_op(code: u8) -> PyResult<HirBinOp> {
 #[pyclass(
     from_py_object,
     name = "RawExpr",
-    module = "eudplib.bindings._rust.eudkit"
+    module = "eudkit._rust"
 )]
 pub struct PyExpr(pub HirExpr);
 
@@ -163,7 +163,7 @@ impl PyExpr {
 #[pyclass(
     from_py_object,
     name = "RawMapString",
-    module = "eudplib.bindings._rust.eudkit"
+    module = "eudkit._rust"
 )]
 pub struct PyMapString {
     #[pyo3(get)]
@@ -190,7 +190,7 @@ impl PyMapString {
 #[pyclass(
     from_py_object,
     name = "RawCondition",
-    module = "eudplib.bindings._rust.eudkit"
+    module = "eudkit._rust"
 )]
 pub struct PyCondition(pub StockCondition);
 
@@ -359,7 +359,7 @@ impl PyCondition {
 #[pyclass(
     from_py_object,
     name = "RawAction",
-    module = "eudplib.bindings._rust.eudkit"
+    module = "eudkit._rust"
 )]
 pub struct PyAction(pub StockAction);
 
@@ -575,7 +575,7 @@ impl PyAction {
 #[pyclass(
     from_py_object,
     name = "CompilationReport",
-    module = "eudplib.bindings._rust.eudkit"
+    module = "eudkit._rust"
 )]
 pub struct PyCompilationReport {
     #[pyo3(get)]
@@ -599,7 +599,7 @@ pub struct PyCompilationReport {
 #[pyclass(
     unsendable,
     name = "RawSession",
-    module = "eudplib.bindings._rust.eudkit"
+    module = "eudkit._rust"
 )]
 pub struct PyCompilationSession {
     session: CompilationSession,

@@ -11,11 +11,15 @@ use pyo3::prelude::*;
 #[pymodule]
 mod _rust {
     #[pymodule_export]
+    use crate::eudkit_py::{
+        PyAction, PyCompilationReport, PyCompilationSession, PyCondition, PyExpr, PyMapString,
+    };
+    #[pymodule_export]
+    use crate::eudkit_py::eudkit_mod;
+    #[pymodule_export]
     use crate::allocator::allocator_mod;
     #[pymodule_export]
     use crate::epscript::epscript_mod;
-    #[pymodule_export]
-    use crate::eudkit_py::eudkit_mod;
     #[pymodule_export]
     use crate::eudobj::eudobj_mod;
     #[pymodule_export]

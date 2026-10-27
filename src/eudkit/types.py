@@ -4,7 +4,7 @@ import contextvars
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
-from eudplib.bindings._rust import eudkit as _rust_eudkit
+from eudkit import _rust as _rust_eudkit
 
 if TYPE_CHECKING:
     from .session import Session
