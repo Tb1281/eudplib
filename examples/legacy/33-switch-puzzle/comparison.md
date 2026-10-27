@@ -76,3 +76,7 @@ if (match_count >= 4) and (solved_latch == 0):
 
 ### Zero-VProc Edge Detection
 - State flags (`solved_latch`, `match_count`, `hint_cd`, `solves`) are allocated into compact ByteBuf dwords, eliminating VProcs and minimizing trigger overhead.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

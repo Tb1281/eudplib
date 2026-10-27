@@ -63,3 +63,7 @@ if dwread_epd(CHAT_MSG_EPD) != 0:
 
 ### Storage Lowering
 - Variables `chat_count`, `last_sender`, and `p1_lamp` are optimized through ByteBuf lowering, leaving only 1 scratch VProc for dynamic conditional comparisons.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

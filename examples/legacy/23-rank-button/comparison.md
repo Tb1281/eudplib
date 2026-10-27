@@ -55,3 +55,7 @@ with once():
 ### Offset Skipping Precision
 - Modifying command card buttons requires skipping a 2-byte prefix (`<Key><01>`). Legacy `f_settblf` passed offset 2 into runtime formatters.
 - Modern `eudkit` directly incorporates the byte offset into target address calculation `(str_offset + entry[1]) // 4`, allowing clean in-place replacement without breaking button hotkeys.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

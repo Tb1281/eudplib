@@ -76,3 +76,7 @@ else:
 ### Table Memory Footprint
 - Legacy v1 uses `EUDArray`, which incurs a 72-byte trigger allocation per slot. A 32-entry lookup table consumes 2,304 bytes of trigger memory.
 - Modern `eudkit` lowers static data tables to a contiguous 4-byte memory slice (128 bytes total), freeing critical map trigger capacity for gameplay logic.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

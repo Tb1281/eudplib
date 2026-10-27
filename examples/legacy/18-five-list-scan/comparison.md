@@ -77,3 +77,7 @@ while slot_idx < 1700:
 
 ### Generation-Based Slot Stamping
 - Instead of clearing all 1,700 mark slots each loop (which would require 1,700 write operations per frame), both implementations increment `mark_gen` by 1 per frame. Any slot whose value doesn't match the current generation is recognized as unvisited in O(1) time.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

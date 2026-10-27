@@ -64,3 +64,7 @@ if Memory(counts_addr(COMPLETED_BASE, 0, 5), AtLeast, 3):
 ### Symbolic Name Resolution
 - Legacy maps hardcode magic unit IDs (`MARINE = 0`, `SIEGE_TANK = 5`) because legacy condition constructors lacked basemap-aware string table resolvers.
 - Modern `eudkit` accepts descriptive strings (`"Terran Marine"`, `"Terran Siege Tank (Tank Mode)"`) and resolves them deterministically at compile time through `MapContext`.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

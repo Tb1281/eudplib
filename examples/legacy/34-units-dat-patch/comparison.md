@@ -85,3 +85,7 @@ with once():
 ### Elimination of Function Trampoline Bloat
 - Legacy code wrapped 2-line memory operations into `EUDFunc` instances to save trigger copies, but the call-site trampolines, argument passing, and return handling created substantial overhead.
 - Modern eudkit lowers inlined memory operations directly into optimal `SetDeathsX` and ReadTable queries, achieving lower total triggers without function call indirection.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

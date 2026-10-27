@@ -71,3 +71,7 @@ if cur_kills > prev_kills:
 
 ### Amortized ReadTable Engine
 - Materialization of the player deaths counter utilizes the backend's unified 80-trigger ReadTable, sharing bit-extraction mechanics across memory access operations.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

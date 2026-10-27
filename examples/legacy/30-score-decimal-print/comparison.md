@@ -81,3 +81,7 @@ with every(PRINT_PERIOD):
 ### Consolidated StringBuffer and Reactive Timing
 - Replaces legacy `DBString` with single modern `StringBuffer`.
 - Cyclic interval execution is modeled with declarative `with every(PRINT_PERIOD):`, automatically handled by compiler timer registers.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

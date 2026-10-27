@@ -496,11 +496,18 @@ fn actions_cannot_mutate_condition(actions: &[StockAction], cond: &StockConditio
         | StockAction::FormatPrint { .. }
         | StockAction::PrintAt { .. }
         | StockAction::MinimapPing { .. }
+        | StockAction::PlayWAV { .. }
         | StockAction::Comment { .. }
         | StockAction::PreserveTrigger
         | StockAction::Victory
         | StockAction::Defeat => true,
-        StockAction::CreateUnit { .. } | StockAction::KillUnitAt { .. } => !matches!(
+        StockAction::CreateUnit { .. }
+        | StockAction::KillUnitAt { .. }
+        | StockAction::KillUnit { .. }
+        | StockAction::RemoveUnitAt { .. }
+        | StockAction::MoveUnit { .. }
+        | StockAction::GiveUnits { .. }
+        | StockAction::Order { .. } => !matches!(
             cond,
             StockCondition::Command { .. } | StockCondition::Bring { .. }
         ),

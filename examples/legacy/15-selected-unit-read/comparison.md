@@ -63,3 +63,7 @@ if sel_epd != EPD(0):
 ### Ergonomics & Locality
 - Legacy `CUnit.from_ptr` creates an intermediate wrapper object that conceals how memory is dereferenced.
 - Modern `eudkit` exposes explicit, typed sub-dword operations (`wread_epd`, `bread_epd`), ensuring transparent cost models and clean compilation boundaries.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

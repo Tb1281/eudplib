@@ -69,3 +69,7 @@ if Bring(Player1, AtLeast, 1, "Terran Ghost", LOC_CAST_ZONE):
 
 ### Zero-VProc Lowering
 - All bookkeeping metrics (`casts`, `wasted`, `kills_credited`, `ready`, `cooling`) are lowered into 4-byte ByteBuf memory cells, resulting in **0 VProcs** and beating legacy trigger consumption.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

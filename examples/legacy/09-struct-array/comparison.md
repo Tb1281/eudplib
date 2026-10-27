@@ -64,3 +64,7 @@ while idx < 8:
 
 ### Storage and Memory Addressing
 - Both stacks perform identical offset calculations (`base_epd + idx * STRIDE + field_offset`). However, modern `eudkit` eliminates redundant VProc allocations by scratch-reusing dynamic calculation variables (`slot_epd`, `hp`, `energy`), maintaining high compiler leverage.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

@@ -126,6 +126,16 @@ from .types import (
     SetScore,
     SetSwitch,
     MoveLocation,
+    RemoveUnitAt,
+    KillUnit,
+    MoveUnit,
+    GiveUnits,
+    Order,
+    PlayWAV,
+    Move,
+    Patrol,
+    Attack,
+    All,
 )
 
 
@@ -317,4 +327,14 @@ __all__ = [
     "SetScore",
     "SetSwitch",
     "MoveLocation",
+    "RemoveUnitAt",
+    "KillUnit",
+    "MoveUnit",
+    "GiveUnits",
+    "Order",
+    "PlayWAV",
+    "Move",
+    "Patrol",
+    "Attack",
+    "All",
 ]

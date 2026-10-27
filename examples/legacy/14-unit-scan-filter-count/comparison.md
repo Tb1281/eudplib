@@ -79,3 +79,7 @@ while i < 1700:
 ### Control Transfer Seams
 - Legacy code relied on early-skipping macros (`EUDContinue()`), rewriting StarCraft trigger next-pointers on every negative condition.
 - Modern v2 expresses the filtering hierarchy as structured nested conditionals. Inactive slots bypass subsequent field reads naturally without trigger-pointer modification.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

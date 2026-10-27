@@ -85,3 +85,7 @@ with once():
 
 ### Lifecycle Locality
 - Initial setup logic is cleanly bound to the map lifecycle using `with once():`, compiling down to a single self-clearing latch condition with zero manual state variable maintenance.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

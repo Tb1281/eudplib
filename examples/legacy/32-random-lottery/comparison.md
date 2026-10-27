@@ -83,3 +83,7 @@ with every(LOTTERY_PERIOD):
 
 ### Non-Zero Variable Initialization
 - Modern eudkit supports compile-time initialization values for variables (`session.var(100)`). This allows `best_roll` to initialize above the maximum roll (99), removing legacy `seen_any` branch triggers entirely.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

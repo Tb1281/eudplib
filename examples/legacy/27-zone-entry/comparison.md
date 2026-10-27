@@ -84,3 +84,7 @@ if inside == 1:
 
 ### Zero-VProc Locality
 - All state metrics (`inside`, `entries`, `exits`, `paid_entries`, `bonus_ore_total`, `loops_inside`) are lowered into 4-byte ByteBuf memory cells, resulting in zero VProcs and minimal static trigger footprint.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

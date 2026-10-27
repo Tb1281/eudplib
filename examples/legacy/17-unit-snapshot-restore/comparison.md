@@ -70,3 +70,7 @@ if restore_flag == 1:
 ### Memory Safety & Interface Ergonomics
 - Legacy uses untyped `Db(336)` and mutates global engine CP pointers during `f_repmovsd_epd`.
 - Modern `eudkit` encapsulates the storage within an `Array` instance, performing bidirectional copy loops that are purely local and free of global state corruption.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

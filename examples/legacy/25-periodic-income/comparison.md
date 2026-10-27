@@ -77,3 +77,7 @@ with every(INCOME_PERIOD):
 
 ### Declarative Timing
 - `with every(150):` eliminates error-prone manual timer increment/reset boilerplate, lowering directly to a countdown memory trigger.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

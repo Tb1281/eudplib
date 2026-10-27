@@ -32,3 +32,15 @@ In modern eudkit (`v2.py`), the boss fight is structured as a cohesive composite
 All budget gates pass:
 - `v2_triggers (87) <= v1_triggers (~140)`
 - `v2_payload_bytes (24,124) <= v1_payload_bytes (42,000)`
+
+---
+
+## 4. Architectural Mechanics
+
+### Module Depth & Interface Design
+- **Legacy v1 (Shallow Seam)**: The legacy implementation leaks low-level StarCraft engine memory structures across shallow call interfaces, requiring manual EPD arithmetic, raw memory pointers, and auxiliary scratch variables.
+- **Modern eudkit v2 (Deep Module)**: Modern eudkit exposes a deep interface where complex trigger packing, VProc assignment, and IR lowering are encapsulated behind clean, type-safe seams.
+
+### Locality & Compiler Leverage
+- **State Locality**: Encapsulating variables within isolated compilation sessions preserves state locality and prevents cross-module global namespace pollution.
+- **Compiler Leverage**: Modern eudkit leverages typed AST lowering, reactive rules (`once`, `every`, `when`), and stock trigger primitives to maximize execution efficiency while minimizing static payload size.

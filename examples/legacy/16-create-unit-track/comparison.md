@@ -62,3 +62,7 @@ with every(24):
 ### Direct Handle Addressing
 - Legacy wraps pointers into `CUnit.from_ptr` objects that carry hidden readtable dependencies.
 - Modern `eudkit` reads the EPD directly via `epdread_epd` and performs direct field writes (`dwwrite_epd`), cutting prototype trigger bloat by nearly 70%.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

@@ -54,6 +54,9 @@ AtLeast = 0
 AtMost = 1
 Exactly = 10
 
+# Quantities / Counts
+All = 0
+
 # Modifiers
 SetTo = 7
 Add = 8
@@ -71,6 +74,11 @@ Clear = 5
 Toggle = 6
 Random = 7
 
+# Order types
+Move = 0
+Patrol = 1
+Attack = 2
+
 # Score types
 Total = 0
 Units = 1
@@ -84,8 +92,10 @@ Custom = 7
 DEATHS_BASE_ADDR = 0x0058A364
 
 
-def EPD(address: int) -> int:
-    return (int(address) - DEATHS_BASE_ADDR) // 4
+def EPD(address: ExprLike) -> int | Expr:
+    if isinstance(address, (int, float)):
+        return (int(address) - DEATHS_BASE_ADDR) // 4
+    return (address - DEATHS_BASE_ADDR) // 4
 
 
 def _to_i32(val: int) -> int:
@@ -1241,6 +1251,100 @@ def MoveLocation(
     )
 
 
+def RemoveUnitAt(
+    count: int, unit: int | str, location: int | str, player: int
+) -> ActionSpec:
+    return ActionSpec(
+        lambda s: _rust_eudkit.RawAction.remove_unit_at(
+            int(count),
+            _resolve_unit(s, unit),
+            _resolve_location(s, location),
+            int(player),
+        )
+    )
+
+
+def KillUnit(unit: int | str, player: int) -> ActionSpec:
+    return ActionSpec(
+        lambda s: _rust_eudkit.RawAction.kill_unit(
+            _resolve_unit(s, unit),
+            int(player),
+        )
+    )
+
+
+def MoveUnit(
+    count: int,
+    unit: int | str,
+    player: int,
+    start_location: int | str,
+    dest_location: int | str,
+) -> ActionSpec:
+    return ActionSpec(
+        lambda s: _rust_eudkit.RawAction.move_unit(
+            int(count),
+            _resolve_unit(s, unit),
+            int(player),
+            _resolve_location(s, start_location),
+            _resolve_location(s, dest_location),
+        )
+    )
+
+
+def GiveUnits(
+    count: int,
+    unit: int | str,
+    player: int,
+    location: int | str,
+    new_player: int,
+) -> ActionSpec:
+    return ActionSpec(
+        lambda s: _rust_eudkit.RawAction.give_units(
+            int(count),
+            _resolve_unit(s, unit),
+            int(player),
+            _resolve_location(s, location),
+            int(new_player),
+        )
+    )
+
+
+def _resolve_order(order: int | str) -> int:
+    if isinstance(order, int):
+        return order
+    match str(order).strip().lower():
+        case "move":
+            return 0
+        case "patrol":
+            return 1
+        case "attack":
+            return 2
+        case _:
+            return int(order)
+
+
+def Order(
+    unit: int | str,
+    player: int,
+    start_location: int | str,
+    order_type: int | str,
+    dest_location: int | str,
+) -> ActionSpec:
+    return ActionSpec(
+        lambda s: _rust_eudkit.RawAction.order(
+            _resolve_unit(s, unit),
+            int(player),
+            _resolve_location(s, start_location),
+            _resolve_order(order_type),
+            _resolve_location(s, dest_location),
+        )
+    )
+
+
+def PlayWAV(path: str) -> ActionSpec:
+    return ActionSpec(lambda _s: _rust_eudkit.RawAction.play_wav(str(path)))
+
+
 def Comment(text: str) -> ActionSpec:
     return ActionSpec(lambda _s: _rust_eudkit.RawAction.comment(str(text)))
 
@@ -1332,10 +1436,10 @@ def wread_epd(
     raw_epd = _coerce_raw_expr(epd, sess)
     if subp == 0:
         mask, shift = 0x0000FFFF, 0
-    elif subp == 1:
+    elif subp in (1, 2):
         mask, shift = 0xFFFF0000, -16
     else:
-        raise ValueError(f"invalid word subp: {subp} (must be 0 or 1)")
+        raise ValueError(f"invalid word subp: {subp} (must be 0, 1, or 2)")
     sess._raw.push_mem_read(dst.id, raw_epd, mask, shift, 0)
     return dst
 
@@ -1431,7 +1535,7 @@ def bwrite_epd(
 
 
 def dwread(
-    address: int,
+    address: ExprLike,
     *,
     ret: Var | Sequence[Var] | None = None,
     session: Session | None = None,
@@ -1458,7 +1562,7 @@ def bread(
 
 
 def dwwrite(
-    address: int,
+    address: ExprLike,
     value: ExprLike,
     *,
     session: Session | None = None,

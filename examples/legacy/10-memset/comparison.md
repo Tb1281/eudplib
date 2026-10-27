@@ -57,3 +57,7 @@ if clear_flag != 0:
 
 ### Depth & Ergonomics
 - The implementation in modern v2 is direct, structured, and free of macro boilerplate, providing an intuitive interface for systems needing low-level buffer initialization.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

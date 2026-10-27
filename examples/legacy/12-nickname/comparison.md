@@ -72,3 +72,7 @@ else:
 ### Locality & Zero-State Purity
 - Legacy reader objects carry mutable internal state (`_offset`, `_subp`), creating risks of cursor desynchronization across nested loops or function calls.
 - Modern `eudkit` primitives are purely functional, reading directly from the given memory coordinate without persisting cursor side-effects.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

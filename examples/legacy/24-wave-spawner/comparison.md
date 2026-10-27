@@ -75,3 +75,7 @@ if victory == 0:
 
 ### Storage Lowering
 - Counter variables (`spawned_in_wave`, `total_spawned`, `waves_completed`, `bonus_counter`) are lowered to compact 4-byte ByteBuf cells with zero runtime VProc overhead.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

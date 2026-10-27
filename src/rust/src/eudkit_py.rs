@@ -620,6 +620,80 @@ impl PyAction {
     }
 
     #[staticmethod]
+    fn remove_unit_at(count: u8, unit: u16, location: u32, player: i32) -> Self {
+        Self(StockAction::RemoveUnitAt {
+            count,
+            unit,
+            location,
+            player: decode_player(player),
+        })
+    }
+
+    #[staticmethod]
+    fn kill_unit(unit: u16, player: i32) -> Self {
+        Self(StockAction::KillUnit {
+            unit,
+            player: decode_player(player),
+        })
+    }
+
+    #[staticmethod]
+    fn move_unit(
+        count: u8,
+        unit: u16,
+        player: i32,
+        start_location: u32,
+        dest_location: u32,
+    ) -> Self {
+        Self(StockAction::MoveUnit {
+            count,
+            unit,
+            player: decode_player(player),
+            start_location,
+            dest_location,
+        })
+    }
+
+    #[staticmethod]
+    fn give_units(
+        count: u8,
+        unit: u16,
+        player: i32,
+        location: u32,
+        new_player: i32,
+    ) -> Self {
+        Self(StockAction::GiveUnits {
+            count,
+            unit,
+            player: decode_player(player),
+            location,
+            new_player: decode_player(new_player),
+        })
+    }
+
+    #[staticmethod]
+    fn order(
+        unit: u16,
+        player: i32,
+        start_location: u32,
+        order_type: u8,
+        dest_location: u32,
+    ) -> Self {
+        Self(StockAction::Order {
+            unit,
+            player: decode_player(player),
+            start_location,
+            order_type,
+            dest_location,
+        })
+    }
+
+    #[staticmethod]
+    fn play_wav(path: String) -> Self {
+        Self(StockAction::PlayWAV { path })
+    }
+
+    #[staticmethod]
     fn comment(text: String) -> Self {
         Self(StockAction::Comment { text })
     }

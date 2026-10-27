@@ -65,3 +65,7 @@ else:
 ### Control Flow Seam
 - Legacy v1 requires verbose `if EUDIf() ... if EUDElse()() ... EUDEndIf()` macro constructs that make branch logic difficult to read and error-prone.
 - Modern v2 lowers standard Python `if / else` syntax directly, optimizing consecutive if/else blocks into linear trigger conditions without manual trigger chaining.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

@@ -1626,6 +1626,99 @@ impl<'a> TsCompiler<'a> {
                     dest_location: dest_loc,
                 }))
             }
+            "RemoveUnitAt" => {
+                let count =
+                    self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
+                let unit =
+                    self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
+                let loc =
+                    self.resolve_location_id(call.arguments[2].as_expression().unwrap())?;
+                let player =
+                    self.eval_const_expr(call.arguments[3].as_expression().unwrap())? as u8;
+                Ok(Some(StockAction::RemoveUnitAt {
+                    count,
+                    unit,
+                    location: loc,
+                    player: PlayerId::from_player_slot(player),
+                }))
+            }
+            "KillUnit" => {
+                let unit =
+                    self.resolve_unit_id(call.arguments[0].as_expression().unwrap())?;
+                let player =
+                    self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u8;
+                Ok(Some(StockAction::KillUnit {
+                    unit,
+                    player: PlayerId::from_player_slot(player),
+                }))
+            }
+            "MoveUnit" => {
+                let count =
+                    self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
+                let unit =
+                    self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
+                let player =
+                    self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u8;
+                let start_loc =
+                    self.resolve_location_id(call.arguments[3].as_expression().unwrap())?;
+                let dest_loc =
+                    self.resolve_location_id(call.arguments[4].as_expression().unwrap())?;
+                Ok(Some(StockAction::MoveUnit {
+                    count,
+                    unit,
+                    player: PlayerId::from_player_slot(player),
+                    start_location: start_loc,
+                    dest_location: dest_loc,
+                }))
+            }
+            "GiveUnits" => {
+                let count =
+                    self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
+                let unit =
+                    self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
+                let player =
+                    self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u8;
+                let loc =
+                    self.resolve_location_id(call.arguments[3].as_expression().unwrap())?;
+                let new_player =
+                    self.eval_const_expr(call.arguments[4].as_expression().unwrap())? as u8;
+                Ok(Some(StockAction::GiveUnits {
+                    count,
+                    unit,
+                    player: PlayerId::from_player_slot(player),
+                    location: loc,
+                    new_player: PlayerId::from_player_slot(new_player),
+                }))
+            }
+            "Order" => {
+                let unit =
+                    self.resolve_unit_id(call.arguments[0].as_expression().unwrap())?;
+                let player =
+                    self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u8;
+                let start_loc =
+                    self.resolve_location_id(call.arguments[2].as_expression().unwrap())?;
+                let order_type =
+                    self.eval_const_expr(call.arguments[3].as_expression().unwrap())? as u8;
+                let dest_loc =
+                    self.resolve_location_id(call.arguments[4].as_expression().unwrap())?;
+                Ok(Some(StockAction::Order {
+                    unit,
+                    player: PlayerId::from_player_slot(player),
+                    start_location: start_loc,
+                    order_type,
+                    dest_location: dest_loc,
+                }))
+            }
+            "PlayWAV" => {
+                let path = if let Some(Expression::StringLiteral(slit)) =
+                    call.arguments.get(0).and_then(|a| a.as_expression())
+                {
+                    slit.value.as_str().unwrap_or("").to_string()
+                } else {
+                    String::new()
+                };
+                Ok(Some(StockAction::PlayWAV { path }))
+            }
             "Comment" => {
                 let text = if let Some(Expression::StringLiteral(slit)) =
                     call.arguments[0].as_expression()

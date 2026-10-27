@@ -32,3 +32,15 @@ In modern eudkit (`v2.py`), the campaign tracker captures the exact game develop
 All budget gates pass:
 - `v2_triggers (166) <= v1_triggers (~215)`
 - `v2_payload_bytes (47,440) <= v1_payload_bytes (59,000)`
+
+---
+
+## 4. Architectural Mechanics
+
+### Module Depth & Interface Design
+- **Legacy v1 (Shallow Seam)**: The legacy implementation leaks low-level StarCraft engine memory structures across shallow call interfaces, requiring manual EPD arithmetic, raw memory pointers, and auxiliary scratch variables.
+- **Modern eudkit v2 (Deep Module)**: Modern eudkit exposes a deep interface where complex trigger packing, VProc assignment, and IR lowering are encapsulated behind clean, type-safe seams.
+
+### Locality & Compiler Leverage
+- **State Locality**: Encapsulating variables within isolated compilation sessions preserves state locality and prevents cross-module global namespace pollution.
+- **Compiler Leverage**: Modern eudkit leverages typed AST lowering, reactive rules (`once`, `every`, `when`), and stock trigger primitives to maximize execution efficiency while minimizing static payload size.

@@ -76,3 +76,7 @@ if (phase == 2) and (boss_hp <= 1000):
 ### Zero-Startup-Cost Variable Lowering
 - Legacy variables default to 0, forcing maps to run runtime initialization triggers on loop 1.
 - In eudkit v2, initial values are written directly into map memory at compile time, eliminating initialization triggers entirely.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

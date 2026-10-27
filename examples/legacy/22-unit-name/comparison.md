@@ -65,3 +65,7 @@ with once():
 ### Write Leverage via Dword Packing
 - Legacy `f_settblf` executes byte-by-byte formatting trampolines at runtime.
 - Modern `eudkit` groups 4 ASCII characters into single 32-bit dwords, writing up to 4 characters per trigger action and dramatically accelerating game initialization speed.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

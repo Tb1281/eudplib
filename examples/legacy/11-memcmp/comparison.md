@@ -71,3 +71,7 @@ else:
 ### Locality & Elimination of Redundant Passes
 - Legacy invoked `f_memcmp` three separate times: once for the whole buffer, once for the first half, and once for the second half.
 - Modern v2 performs a single scan of the 4 dwords, accumulating `diff_first` and `diff_second`. Both the overall verdict (`resync_flag`) and localized diagnosis (`diff_half`) are resolved in one cohesive pass, maximizing locality.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

@@ -71,3 +71,7 @@ checksum = total + (total >> 16)
 ### Control Flow Seam & Operator Ergonomics
 - Legacy requires macro loop wrappers `EUDWhile()(cond)` and explicit assignment syntax `<<`.
 - Modern v2 compiles native `while` loops, augmented assignments (`total += arr[idx]`), and binary operations (`total >> 16`) through clean AST visitor lowering.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.

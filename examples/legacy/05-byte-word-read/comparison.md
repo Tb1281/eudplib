@@ -61,3 +61,7 @@ if cursor_byte == 0xFF:
 ### Expression Locality & Assignment Ergonomics
 - Legacy variable mutation required `<<` operator semantics, and conditional increments required `EUDIf() ... EUDEndIf()` wrappers.
 - Modern `eudkit` lowers native assignment (`status = ...`) and standard Python augmented assignment (`status += 1`) directly through AST parsing, optimizing memory writes to single-cycle trigger actions.
+
+### Architectural Mechanics Summary
+- **Module Depth & Interface Design**: Legacy eudplib exposed a shallow interface leaking memory layouts across awkward seams, whereas modern eudkit provides deep modules that encapsulate trigger synthesis behind clean abstractions.
+- **Locality & Compiler Leverage**: Local session variables ensure strict state locality, while eudkit compiler passes leverage AST analysis and reactive rules to minimize payload size.
