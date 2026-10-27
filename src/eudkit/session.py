@@ -113,10 +113,6 @@ class Session:
         """Allocates or registers a typed StringBuffer inside this Compilation Session."""
         return StringBuffer(content, session=self)
 
-    def eud_string(self, content: str | int = 1024) -> StringBuffer:
-        """Alias for string_buffer."""
-        return StringBuffer(content, session=self)
-
     def f_eprintln(self, *args: Any, always_display: bool = True) -> None:
         """Formats and displays text using CPString streaming actions."""
         self.do(f_eprintln(*args, always_display=always_display))

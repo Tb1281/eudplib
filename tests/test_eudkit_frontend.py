@@ -1036,10 +1036,14 @@ class TestEudkitPythonFrontend(unittest.TestCase):
         if out_path.exists():
             out_path.unlink()
 
-    def test_string_buffer_and_eud_string_adapters(self):
-        """Verify modern StringBuffer, EUDString, and DBString adapters."""
+    def test_string_buffer_single_api(self):
+        """Verify modern StringBuffer single public API."""
         import eudkit
-        from eudkit import DBString, EUDString, StringBuffer
+        from eudkit import StringBuffer
+
+        # Verify legacy DBString and EUDString are not in public eudkit exports
+        self.assertFalse(hasattr(eudkit, "DBString"))
+        self.assertFalse(hasattr(eudkit, "EUDString"))
 
         session = eudkit.Session(TESTMAP_PATH)
         score = session.var(100, name="score")
@@ -1047,8 +1051,7 @@ class TestEudkitPythonFrontend(unittest.TestCase):
 
         # 1. Capacity constructor and session helper
         sb = session.string_buffer(512)
-        es = EUDString("Initial EUDString template: %s")
-        db = DBString(256)
+        sb2 = StringBuffer("Initial template: %s")
 
         # 2. Address and EPD inspection
         self.assertGreater(sb.id, 0)
@@ -1065,8 +1068,7 @@ class TestEudkitPythonFrontend(unittest.TestCase):
             sb.append(" Suffix: %d", minerals)
             sb.display()
             sb.print_at(0, "Line 0: %d", score)
-            es.display()
-            db.format("DBString %d", score)
+            sb2.display()
 
         out_path = Path(tempfile.gettempdir()) / "test_string_buffer.scx"
         rep = session.compile(out_path)
