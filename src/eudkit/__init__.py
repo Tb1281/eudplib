@@ -56,6 +56,7 @@ from .types import (
     Never,
     NeutralPlayers,
     NonAlliedVictoryPlayers,
+    once,
     Ore,
     OreAndGas,
     Player,
@@ -235,6 +236,7 @@ __all__ = [
     "fn",
     "func_ptr",
     "loop_range",
+    "once",
     "wread_epd",
     "wwrite_epd",
 ]

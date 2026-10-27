@@ -199,6 +199,14 @@ class Session:
             self._raw.end_while()
             _active_builder_session.reset(tok)
 
+    @contextlib.contextmanager
+    def once(self) -> Iterator[None]:
+        """Scoped one-time block executed exactly once on startup."""
+        guard = self.var(1)
+        with self.if_(guard == 1):
+            guard.set(0, session=self)
+            yield
+
     def break_(self) -> None:
         self._raw.push_break()
 

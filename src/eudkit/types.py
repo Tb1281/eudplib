@@ -1533,3 +1533,24 @@ class Player:
     @gas.setter
     def gas(self, val: ExprLike) -> None:
         dwwrite_epd(EPD(0x57F120) + self.id, val, session=self._session)
+
+
+class _OnceContextManager:
+    """Context manager for with once: / with session.once(): blocks."""
+
+    def __enter__(self) -> None:
+        sess = _active_builder_session.get()
+        if sess is None:
+            raise RuntimeError(
+                "with once: can only be used inside an active eudkit function or session block"
+            )
+        self._cm = sess.once()
+        self._cm.__enter__()
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if hasattr(self, "_cm"):
+            self._cm.__exit__(exc_type, exc_val, exc_tb)
+
+
+once = _OnceContextManager()
+

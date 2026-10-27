@@ -11,6 +11,7 @@ from eudplib.bindings._rust import eudkit as _rust_eudkit
 from .types import (
     ActionSpec,
     Condition,
+    Exactly,
     Expr,
     MaskedVar,
     Var,
@@ -376,6 +377,9 @@ class AstToHirLowerer:
         if isinstance(stmt, ast.For):
             self._lower_for(stmt)
             return
+        if isinstance(stmt, ast.With):
+            self._lower_with(stmt)
+            return
         if isinstance(stmt, ast.Expr):
             self._lower_expr_stmt(stmt.value)
             return
@@ -668,3 +672,30 @@ class AstToHirLowerer:
             return
 
         raise TypeError(f"Unsupported for-loop iterable in @eud.fn: {iter_obj!r}")
+
+    def _lower_with(self, node: ast.With) -> None:
+        for item in node.items:
+            # Check if calling .once() or once object
+            is_once = False
+            if isinstance(item.context_expr, ast.Call) and isinstance(item.context_expr.func, ast.Attribute) and item.context_expr.func.attr == "once":
+                is_once = True
+            elif isinstance(item.context_expr, ast.Name) and item.context_expr.id == "once":
+                is_once = True
+            else:
+                try:
+                    ctx_val = self.eval_expr(item.context_expr)
+                    if ctx_val is self.session.once or getattr(ctx_val, "__name__", "") == "once" or "once" in str(type(ctx_val)):
+                        is_once = True
+                except Exception:
+                    pass
+
+            if is_once:
+                guard = self.session.var(1)
+                self.session._raw.begin_if(coerce_conditions(guard._cmp(Exactly, 1), self.session))
+                self.session._raw.push_var_assign(guard.id, 0)
+                self.lower_stmt_list(node.body)
+                self.session._raw.end_if()
+                return
+
+        raise TypeError(f"Unsupported with-statement in @eud.fn: {ast.dump(node)}")
+

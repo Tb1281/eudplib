@@ -455,3 +455,15 @@ export class MapString {
   public readonly id: number = 0;
   constructor(public readonly text: string) {}
 }
+
+/**
+ * Execute a block of logic exactly once on startup.
+ */
+export function once(callback: () => void): void {
+  const flag = var_(0);
+  if (flag.exactly(0)) {
+    flag.setTo(1);
+    callback();
+  }
+}
+
