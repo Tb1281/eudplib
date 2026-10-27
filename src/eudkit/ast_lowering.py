@@ -15,6 +15,7 @@ from .types import (
     MaskedVar,
     Var,
     _active_builder_session,
+    _coerce_raw_expr,
     _to_i32,
     coerce_conditions,
 )
@@ -42,6 +43,38 @@ def loop_range(start: int, stop: int | None = None, step: int = 1) -> LoopRange:
     return LoopRange(start, stop, step)
 
 
+class EudFuncPtr:
+    """Represents an indirect function pointer (`HirFuncPtr`) in eudkit."""
+
+    def __init__(
+        self,
+        session: Session,
+        ptr_id: int,
+        name: str,
+        param_count: int,
+        return_count: int,
+    ) -> None:
+        self.session = session
+        self.id = ptr_id
+        self.name = name
+        self.param_count = param_count
+        self.return_count = return_count
+
+    def set(self, target: EudFunction | int) -> None:
+        if isinstance(target, EudFunction):
+            if target.fn_id is None:
+                target.lower_into(self.session)
+            tgt_id = target.fn_id
+        else:
+            tgt_id = int(target)
+        if tgt_id is None:
+            raise ValueError(f"Target function {target} has not been lowered yet")
+        self.session._raw.push_func_ptr_assign(self.id, tgt_id)
+
+    def __call__(self, *args: Any) -> Any:
+        return self
+
+
 class EudFunction:
     """Represents a Python function decorated with `@eud.fn` or `@session.fn`."""
 
@@ -50,18 +83,43 @@ class EudFunction:
         func: Callable[..., Any],
         *,
         session: Session | None = None,
-        main_loop: bool = True,
+        main_loop: bool | None = None,
+        inline: bool | None = None,
     ) -> None:
         self.func = func
         self.name = func.__name__
         self.default_session = session
-        self.is_main_loop = main_loop
+        self.inline = inline
         self._fn_node, self._closure_env = _extract_ast_and_env(func)
+        param_count = len(self._fn_node.args.args)
+        if main_loop is None:
+            self.is_main_loop = (param_count == 0 and inline is None)
+        else:
+            self.is_main_loop = main_loop
+        self.fn_id: int | None = None
+        self.params: list[Var] = []
+        self.return_count: int = 0
 
-    def lower_into(self, session: Session, *, main_loop: bool | None = None) -> int:
+    def lower_into(
+        self,
+        session: Session,
+        *,
+        main_loop: bool | None = None,
+        inline: bool | None = None,
+    ) -> int:
+        if self.fn_id is not None and self.default_session is session:
+            return self.fn_id
         is_main = self.is_main_loop if main_loop is None else main_loop
+        inline_hint = self.inline if inline is None else inline
         lowerer = AstToHirLowerer(session, dict(self._closure_env))
-        return lowerer.lower_function(self._fn_node, is_main_loop=is_main)
+        fn_id = lowerer.lower_function(
+            self._fn_node,
+            is_main_loop=is_main,
+            inline=inline_hint,
+        )
+        self.fn_id = fn_id
+        self.default_session = session
+        return fn_id
 
     def inline_into(self, lowerer: AstToHirLowerer) -> None:
         child_env = dict(self._closure_env)
@@ -75,8 +133,10 @@ class EudFunction:
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         active = _active_builder_session.get() or self.default_session
+        if active is not None and not self.is_main_loop and self.fn_id is not None:
+            return self
         if active is not None:
-            return self.lower_into(active, main_loop=self.is_main_loop)
+            return self.lower_into(active, main_loop=self.is_main_loop, inline=self.inline)
         return self.func(*args, **kwargs)
 
 
@@ -243,22 +303,50 @@ class AstToHirLowerer:
         raise TypeError(f"Expected a Condition in branch/loop test, got {val!r}")
 
     def lower_function(
-        self, fn_node: ast.FunctionDef, *, is_main_loop: bool = True
+        self,
+        fn_node: ast.FunctionDef,
+        *,
+        is_main_loop: bool = True,
+        inline: bool | None = None,
     ) -> int:
-        self.session._raw.begin_function(fn_node.name, is_main_loop)
+        param_vars = []
+        for arg in fn_node.args.args:
+            var_name = f"{fn_node.name}_{arg.arg}"
+            p_var = self.session.var(0, name=var_name)
+            self.local_vars[arg.arg] = p_var
+            param_vars.append(p_var)
+
+        return_count = 0
+        for node in ast.walk(fn_node):
+            if isinstance(node, ast.Return) and node.value is not None:
+                if isinstance(node.value, (ast.Tuple, ast.List)):
+                    return_count = max(return_count, len(node.value.elts))
+                else:
+                    return_count = max(return_count, 1)
+
+        param_ids = [v.id for v in param_vars]
+        self.session._raw.begin_function(
+            fn_node.name,
+            is_main_loop,
+            param_ids,
+            return_count,
+            inline,
+        )
         try:
             self.lower_stmt_list(fn_node.body)
-        except Exception:
-            # Clean up any open frames if an error occurs
-            raise
-        return self.session._raw.end_function()
+        finally:
+            fn_id = self.session._raw.end_function()
+        return fn_id
 
     def lower_stmt_list(self, stmts: list[ast.stmt]) -> None:
         for stmt in stmts:
             self.lower_stmt(stmt)
 
     def lower_stmt(self, stmt: ast.stmt) -> None:
-        if isinstance(stmt, (ast.Pass, ast.Return)):
+        if isinstance(stmt, ast.Pass):
+            return
+        if isinstance(stmt, ast.Return):
+            self._lower_return(stmt)
             return
         if isinstance(stmt, ast.Break):
             self.session._raw.push_break()
@@ -286,6 +374,19 @@ class AstToHirLowerer:
             return
         raise TypeError(f"Unsupported statement in @eud.fn: {ast.dump(stmt)}")
 
+    def _lower_return(self, stmt: ast.Return) -> None:
+        if stmt.value is None:
+            return
+        if isinstance(stmt.value, (ast.Tuple, ast.List)):
+            exprs = [
+                _coerce_raw_expr(self.eval_expr(elt), self.session)
+                for elt in stmt.value.elts
+            ]
+            self.session._raw.push_return_values(exprs)
+        else:
+            expr = _coerce_raw_expr(self.eval_expr(stmt.value), self.session)
+            self.session._raw.push_return_values([expr])
+
     def _resolve_target_var(self, name: str, init_if_new: int = 0) -> Var:
         if name in self.local_vars:
             return self.local_vars[name]
@@ -298,9 +399,41 @@ class AstToHirLowerer:
         return new_var
 
     def _lower_assign(self, stmt: ast.Assign) -> None:
-        if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
+        if len(stmt.targets) != 1:
+            raise ValueError("Only single target assignments are supported in @eud.fn")
+        target = stmt.targets[0]
+
+        if isinstance(stmt.value, ast.Call):
+            fn = self.eval_expr(stmt.value.func)
+            if isinstance(fn, (EudFunction, EudFuncPtr)):
+                if isinstance(fn, EudFunction) and fn.fn_id is None:
+                    fn.lower_into(self.session)
+                raw_args = [
+                    _coerce_raw_expr(self.eval_expr(a), self.session)
+                    for a in stmt.value.args
+                ]
+                ret_vars: list[Var] = []
+                if isinstance(target, ast.Name):
+                    ret_vars.append(self._resolve_target_var(target.id))
+                elif isinstance(target, (ast.Tuple, ast.List)):
+                    for elt in target.elts:
+                        if isinstance(elt, ast.Name):
+                            ret_vars.append(self._resolve_target_var(elt.id))
+                        else:
+                            raise ValueError(f"Unsupported unpack target in @eud.fn: {ast.dump(elt)}")
+                else:
+                    raise ValueError(f"Unsupported assignment target in @eud.fn: {ast.dump(target)}")
+
+                ret_ids = [v.id for v in ret_vars]
+                if isinstance(fn, EudFunction):
+                    self.session._raw.push_call(fn.fn_id, raw_args, ret_ids)
+                else:
+                    self.session._raw.push_call_indirect(fn.id, raw_args, ret_ids)
+                return
+
+        if not isinstance(target, ast.Name):
             raise ValueError("Only single variable assignments are supported in @eud.fn")
-        target_name = stmt.targets[0].id
+        target_name = target.id
         val = self.eval_expr(stmt.value)
         if isinstance(val, int):
             var = self._resolve_target_var(target_name, init_if_new=val)
@@ -363,8 +496,17 @@ class AstToHirLowerer:
             return
         if isinstance(expr, ast.Call):
             fn = self.eval_expr(expr.func)
-            if isinstance(fn, EudFunction):
-                fn.inline_into(self)
+            if isinstance(fn, (EudFunction, EudFuncPtr)):
+                if isinstance(fn, EudFunction) and fn.fn_id is None:
+                    fn.lower_into(self.session)
+                raw_args = [
+                    _coerce_raw_expr(self.eval_expr(a), self.session)
+                    for a in expr.args
+                ]
+                if isinstance(fn, EudFunction):
+                    self.session._raw.push_call(fn.fn_id, raw_args, [])
+                else:
+                    self.session._raw.push_call_indirect(fn.id, raw_args, [])
                 return
         tok = _active_builder_session.set(self.session)
         try:
