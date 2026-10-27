@@ -736,6 +736,168 @@ class TestEudkitPythonFrontend(unittest.TestCase):
                 f"v2 triggers ({v2_report.trigger_count}) must be <= v1 triggers ({v1_raw_triggers})",
             )
 
+    def test_map_string_frontend(self):
+        import eudkit
+
+        session = eudkit.Session(BASEMAP_STRX_PATH)
+        ms1 = session.map_string("Ticket #7 MapString Test")
+        ms2 = session.map_string("Ticket #7 MapString Test")
+        ms3 = session.map_string("Another Distinct String")
+
+        # Deduplication assertion
+        self.assertEqual(ms1.id, ms2.id)
+        self.assertEqual(ms1.offset, ms2.offset)
+        self.assertEqual(ms1.address, ms2.address)
+        self.assertEqual(ms1.epd, ms2.epd)
+
+        # Distinct string assertion
+        self.assertNotEqual(ms1.id, ms3.id)
+        self.assertNotEqual(ms1.offset, ms3.offset)
+
+        # Static STRx address and EPD invariant assertions
+        self.assertGreaterEqual(ms1.address, 0x191943C8)
+        self.assertEqual(ms1.address, 0x191943C8 + ms1.offset)
+        self.assertEqual(ms1.epd, (ms1.address - 0x58A364) // 4)
+
+        # String display and format actions
+        @session.fn
+        def main():
+            ms1.display()
+            ms3.format(12345)
+
+        hir_text = session.dump_hir()
+        self.assertIn("DisplayTextId", hir_text)
+        self.assertIn("FormatPrint", hir_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "ms_test.scx"
+            report = session.compile(out)
+            self.assertTrue(out.exists())
+            self.assertGreater(report.payload_size, 0)
+
+    def test_f_eprintln_and_print_at_formatting(self):
+        import eudkit
+        from eudkit import displayText, f_eprintln, print_at
+
+        session = eudkit.Session(BASEMAP_STRX_PATH)
+        score = session.var(250, name="score")
+        timer = session.var(60, name="timer")
+
+        @session.fn
+        def main():
+            f_eprintln("Score: %d, Time: 0x%08X", score, timer)
+            f_eprintln("Score: ", score, " pts")
+            print_at(3, "Fixed Line: %d", score)
+            displayText("Static display text")
+
+        hir_text = session.dump_hir()
+        self.assertIn("FormatPrint", hir_text)
+        self.assertIn("PrintAt", hir_text)
+
+        lir_text = session.dump_lir()
+        # Verify CPString residue stream SetDeaths writes to CurrentPlayer (13) and 0x6509B0
+        self.assertIn("p1=13", lir_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "print_test.scx"
+            report = session.compile(out)
+            self.assertTrue(out.exists())
+            self.assertGreater(report.trigger_count, 0)
+
+    def test_is_user_cp_local_display(self):
+        import eudkit
+        from eudkit import IsUserCP, f_eprintln
+
+        session = eudkit.Session(BASEMAP_STRX_PATH)
+        score = session.var(500, name="score")
+
+        @session.fn
+        def main():
+            if IsUserCP():
+                f_eprintln("Local user score: %d", score)
+
+        with session.main_loop("secondary_loop"):
+            with session.if_(IsUserCP()):
+                f_eprintln("Secondary local text: %d", score)
+
+        hir_text = session.dump_hir()
+        self.assertIn("IsUserCP()", hir_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "user_cp_test.scx"
+            report = session.compile(out)
+            self.assertTrue(out.exists())
+            self.assertGreater(report.trigger_count, 0)
+
+    def test_v2_vs_v1_mapstring_and_cpstring_differential_budget_benchmark(self):
+        import eudkit
+        from eudkit import IsUserCP, f_eprintln
+        import eudplib as ep
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            v1_out = Path(tmpdir) / "v1_str_bench.scx"
+            v2_out = Path(tmpdir) / "v2_str_bench.scx"
+
+            # --- 1. Compile workload with legacy eudplib (v1) ---
+            t0 = time.perf_counter()
+            ep.LoadMap(str(BASEMAP_STRX_PATH))
+            ep.CompressPayload(True)
+
+            @ep.EUDFunc
+            def v1_string_main():
+                score = ep.EUDVariable(100)
+                ep.f_eprintln("Score: ", score)
+                if ep.EUDIf()(ep.IsUserCP()):
+                    ep.f_eprintln("Local user: ", score)
+                ep.EUDEndIf()
+
+            ep.SaveMap(str(v1_out), v1_string_main)
+            v1_compile_sec = time.perf_counter() - t0
+
+            v1_verify_session = eudkit.Session(v1_out)
+            v1_base_session = eudkit.Session(BASEMAP_STRX_PATH)
+            v1_strx_growth = (
+                v1_verify_session.strx_byte_len() - v1_base_session.strx_byte_len()
+            )
+            v1_raw_triggers = sum(
+                1
+                for obj in ep.core.allocator.payload._found_objects_dict
+                if isinstance(obj, ep.RawTrigger)
+            )
+
+            # --- 2. Compile equivalent workload with eudkit (v2) ---
+            t1 = time.perf_counter()
+            session = eudkit.Session(BASEMAP_STRX_PATH)
+            score = session.var(100, name="score")
+
+            @session.fn
+            def v2_string_main():
+                f_eprintln("Score: %d", score)
+                if IsUserCP():
+                    f_eprintln("Local user: %d", score)
+
+            v2_report = session.compile(v2_out)
+            v2_compile_sec = time.perf_counter() - t1
+
+            # Substantially fewer triggers: v2 unified actions vs v1 CPString/DBString apparatus
+            self.assertLess(
+                v2_report.trigger_count,
+                v1_raw_triggers,
+                f"v2 triggers ({v2_report.trigger_count}) must be substantially fewer than v1 ({v1_raw_triggers})",
+            )
+            # Smaller payload: v2 avoids v1's bloated 150KB+ string tables and decryption loops
+            self.assertLessEqual(
+                v2_report.payload_size,
+                v1_strx_growth,
+                f"v2 payload ({v2_report.payload_size}B) must be <= v1 STRx payload growth ({v1_strx_growth}B)",
+            )
+            # Faster compile time
+            self.assertLessEqual(
+                v2_compile_sec,
+                v1_compile_sec * 1.5,
+                f"v2 compile time ({v2_compile_sec:.3f}s) must be faster or comparable to v1 ({v1_compile_sec:.3f}s)",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -664,6 +664,11 @@ def Never() -> Condition:
     return Condition.from_raw(_rust_eudkit.RawCondition.never())
 
 
+def IsUserCP() -> Condition:
+    """Condition that checks whether the local machine player matches CurrentPlayer."""
+    return Condition.from_raw(_rust_eudkit.RawCondition.is_user_cp())
+
+
 def Deaths(
     player: ExprLike, comparison: int, amount: ExprLike, unit: int | str = 0
 ) -> Condition:
@@ -926,10 +931,156 @@ def SetResources(
     )
 
 
-def DisplayText(text: str, always_display: bool = True) -> ActionSpec:
+class MapString:
+    """Unified STRx-backed string representation with deduplication and static address/EPD resolution."""
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        session: Session | None = None,
+    ) -> None:
+        self.text = str(text)
+        self._session = session or _active_builder_session.get()
+        self._raw_info: _rust_eudkit.RawMapString | None = None
+        if self._session is not None:
+            self._ensure_registered(self._session)
+
+    def _ensure_registered(self, session: Session) -> _rust_eudkit.RawMapString:
+        if self._raw_info is None or self._session is not session:
+            self._session = session
+            self._raw_info = session._raw.register_map_string(self.text)
+        return self._raw_info
+
+    @property
+    def id(self) -> int:
+        sess = self._session or _active_builder_session.get()
+        if sess is None:
+            raise RuntimeError("MapString requires a Session to resolve string ID")
+        return self._ensure_registered(sess).id
+
+    @property
+    def offset(self) -> int:
+        sess = self._session or _active_builder_session.get()
+        if sess is None:
+            raise RuntimeError("MapString requires a Session to resolve STRx offset")
+        return self._ensure_registered(sess).offset
+
+    @property
+    def address(self) -> int:
+        sess = self._session or _active_builder_session.get()
+        if sess is None:
+            raise RuntimeError("MapString requires a Session to resolve virtual address")
+        return self._ensure_registered(sess).address
+
+    @property
+    def epd(self) -> int:
+        sess = self._session or _active_builder_session.get()
+        if sess is None:
+            raise RuntimeError("MapString requires a Session to resolve EPD")
+        return self._ensure_registered(sess).epd
+
+    def display(self, always: bool = True) -> ActionSpec:
+        return ActionSpec(
+            lambda s: _rust_eudkit.RawAction.display_text_id(
+                self._ensure_registered(s).id, bool(always)
+            )
+        )
+
+    def format(self, *args: Any) -> ActionSpec:
+        """Formats dynamic expressions into this MapString buffer."""
+        def _build(s: Session) -> _rust_eudkit.RawAction:
+            str_id = self._ensure_registered(s).id
+            template, raw_args = _build_format_template_and_args(args, s)
+            return _rust_eudkit.RawAction.format_map_string(str_id, template or self.text, raw_args)
+        return ActionSpec(_build)
+
+    def __repr__(self) -> str:
+        if self._raw_info is not None:
+            return (
+                f"MapString({self.text!r}, id={self.id}, "
+                f"addr=0x{self.address:08X}, epd={self.epd})"
+            )
+        return f"MapString({self.text!r})"
+
+
+def _build_format_template_and_args(
+    args: Sequence[Any],
+    session: Session,
+) -> tuple[str, list[_rust_eudkit.RawExpr]]:
+    if not args:
+        return "", []
+    if (
+        len(args) > 1
+        and isinstance(args[0], str)
+        and (
+            "%d" in args[0]
+            or "%x" in args[0]
+            or "%X" in args[0]
+            or "%i" in args[0]
+            or "%u" in args[0]
+            or "%p" in args[0]
+        )
+    ):
+        template = args[0]
+        raw_args = [_coerce_raw_expr(a, session) for a in args[1:]]
+        return template, raw_args
+
+    template_parts: list[str] = []
+    raw_args: list[_rust_eudkit.RawExpr] = []
+    for arg in args:
+        if isinstance(arg, str):
+            template_parts.append(arg)
+        elif isinstance(arg, MapString):
+            template_parts.append(arg.text)
+        elif _is_expr_like(arg):
+            template_parts.append("%d")
+            raw_args.append(_coerce_raw_expr(arg, session))
+        else:
+            template_parts.append(str(arg))
+    return "".join(template_parts), raw_args
+
+
+def f_eprintln(*args: Any, always_display: bool = True) -> ActionSpec:
     return ActionSpec(
-        lambda _s: _rust_eudkit.RawAction.display_text(
-            str(text), bool(always_display)
+        lambda s: _rust_eudkit.RawAction.format_display_text(
+            *_build_format_template_and_args(args, s),
+            always_display=bool(always_display),
+        )
+    )
+
+
+def displayText(*args: Any, always_display: bool = True) -> ActionSpec:
+    if (
+        len(args) == 1
+        and isinstance(args[0], str)
+        and not (
+            "%d" in args[0]
+            or "%x" in args[0]
+            or "%X" in args[0]
+            or "%i" in args[0]
+            or "%u" in args[0]
+            or "%p" in args[0]
+        )
+    ):
+        return ActionSpec(
+            lambda _s: _rust_eudkit.RawAction.display_text(
+                str(args[0]), bool(always_display)
+            )
+        )
+    if len(args) == 1 and isinstance(args[0], MapString):
+        return args[0].display(always=always_display)
+    return f_eprintln(*args, always_display=always_display)
+
+
+DisplayText = displayText
+
+
+def print_at(line: int, *args: Any) -> ActionSpec:
+    return ActionSpec(
+        lambda s: _rust_eudkit.RawAction.print_at(
+            int(line),
+            *_build_format_template_and_args(args, s),
         )
     )
 

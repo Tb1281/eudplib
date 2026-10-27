@@ -1,8 +1,8 @@
 use crate::error::{EudkitTsError, Result};
 use eudkit_core::hir::{
-    epd, Comparison, HirBasicBlock, HirBinOp, HirExpr, HirFunction, HirModule, HirStmt,
-    HirTerminator, HirUnaryOp, HirValue, Modifier, PlayerId, ResourceType, StockAction,
-    StockCondition, VarId,
+    epd, parse_format_template, Comparison, HirBasicBlock, HirBinOp, HirExpr, HirFunction,
+    HirModule, HirStmt, HirTerminator, HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget,
+    ResourceType, StockAction, StockCondition, VarId,
 };
 use eudkit_core::map_context::MapContext;
 use oxc_allocator::Allocator;
@@ -997,6 +997,7 @@ impl<'a> TsCompiler<'a> {
         match fn_name {
             "Always" => Ok(Some(StockCondition::Always)),
             "Never" => Ok(Some(StockCondition::Never)),
+            "IsUserCP" | "IsUserCp" => Ok(Some(StockCondition::IsUserCp)),
             "Deaths" | "DeathsX" => {
                 let player_arg = call
                     .arguments
@@ -1349,6 +1350,54 @@ impl<'a> TsCompiler<'a> {
                 Ok(Some(StockAction::DisplayText {
                     text,
                     always_display: always,
+                }))
+            }
+            "f_eprintln" | "displayText" => {
+                let text = if let Some(Expression::StringLiteral(slit)) =
+                    call.arguments.first().and_then(|a| a.as_expression())
+                {
+                    slit.value.as_str().unwrap_or("").to_string()
+                } else {
+                    "".to_string()
+                };
+                let mut args = Vec::new();
+                for arg in call.arguments.iter().skip(1) {
+                    if let Some(expr) = arg.as_expression() {
+                        args.push(self.lower_expr(expr)?);
+                    }
+                }
+                let parts = parse_format_template(&text, &args)
+                    .map_err(|e| EudkitTsError::Compile(e))?;
+                Ok(Some(StockAction::FormatPrint {
+                    target: PrintTarget::DisplayText,
+                    parts,
+                    always_display: true,
+                }))
+            }
+            "print_at" | "PrintAt" => {
+                let line = if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                    self.eval_const_expr(arg0)? as u8
+                } else {
+                    0
+                };
+                let text = if let Some(Expression::StringLiteral(slit)) =
+                    call.arguments.get(1).and_then(|a| a.as_expression())
+                {
+                    slit.value.as_str().unwrap_or("").to_string()
+                } else {
+                    "".to_string()
+                };
+                let mut args = Vec::new();
+                for arg in call.arguments.iter().skip(2) {
+                    if let Some(expr) = arg.as_expression() {
+                        args.push(self.lower_expr(expr)?);
+                    }
+                }
+                let parts = parse_format_template(&text, &args)
+                    .map_err(|e| EudkitTsError::Compile(e))?;
+                Ok(Some(StockAction::PrintAt {
+                    line,
+                    parts,
                 }))
             }
             "CreateUnit" => {

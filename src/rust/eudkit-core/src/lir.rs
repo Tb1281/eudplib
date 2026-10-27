@@ -1,3 +1,4 @@
+pub use crate::cp_string::*;
 use crate::error::{EudkitError, Result};
 use crate::hir::{
     epd, BlockId, ByteBufId, Comparison, HirBinOp, HirExpr, HirModule, HirStmt, HirTerminator,
@@ -1967,6 +1968,8 @@ fn actions_cannot_mutate_condition(actions: &[StockAction], cond: &StockConditio
     actions.iter().all(|act| match act {
         StockAction::DisplayText { .. }
         | StockAction::DisplayTextId { .. }
+        | StockAction::FormatPrint { .. }
+        | StockAction::PrintAt { .. }
         | StockAction::Comment { .. }
         | StockAction::PreserveTrigger
         | StockAction::Victory
@@ -3093,6 +3096,31 @@ fn collect_vproc_vars(blocks: &[ExpandedBlock]) -> HashSet<VarId> {
     set
 }
 
+fn count_leaf_action_actions(act: &StockAction) -> usize {
+    match act {
+        StockAction::PrintAt { parts, .. } => {
+            crate::cp_string::emit_format_parts_actions(
+                ValueExpr::Const(0),
+                parts,
+                None,
+                false,
+                &std::collections::HashMap::new(),
+            ).len()
+        }
+        StockAction::FormatPrint { target, parts, always_display } => {
+            let has_disp = matches!(target, crate::hir::PrintTarget::DisplayText);
+            crate::cp_string::emit_format_parts_actions(
+                ValueExpr::Const(0),
+                parts,
+                if has_disp { Some(1) } else { None },
+                *always_display,
+                &std::collections::HashMap::new(),
+            ).len()
+        }
+        _ => 1,
+    }
+}
+
 fn count_block_triggers(blk: &ExpandedBlock) -> u32 {
     let mut count = 0u32;
     let mut pending_actions = 0usize;
@@ -3117,8 +3145,11 @@ fn count_block_triggers(blk: &ExpandedBlock) -> u32 {
 
     for op in &blk.ops {
         match op {
-            ExpandedOp::LeafAction(_) => {
-                add_pending(1, &mut pending_actions, &mut count);
+            ExpandedOp::LeafAction(act) => {
+                let n = count_leaf_action_actions(act);
+                for _ in 0..n {
+                    add_pending(1, &mut pending_actions, &mut count);
+                }
             }
             ExpandedOp::Trigger { .. } => {
                 flush_pending(&mut pending_actions, &mut count);
@@ -3674,6 +3705,17 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
                 flags: 0,
                 eudx: 0,
             },
+            StockCondition::IsUserCp => LirCondition {
+                locid: ValueExpr::Const(0),
+                player: ValueExpr::Const(epd(CURRENT_PLAYER_ADDR)),
+                amount: ValueExpr::Const(0),
+                unitid: 0,
+                comparison: 10, // Exactly
+                condtype: 15, // Deaths
+                restype: 0,
+                flags: 0,
+                eudx: 0,
+            },
             StockCondition::DeathsDynamic { .. }
             | StockCondition::MemoryDynamic { .. }
             | StockCondition::ExprCmp { .. } => {
@@ -3682,7 +3724,7 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
         }
     };
 
-    let mut lower_act = |a: &StockAction| -> LirAction {
+    let lower_single_act = |a: &StockAction, map_ctx: &mut MapContext| -> LirAction {
         match a {
             StockAction::SetDeaths {
                 player,
@@ -3913,6 +3955,46 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
             | StockAction::SetFieldDynamic { .. } => {
                 unreachable!("lower_action_into_ops must lower all dynamic actions")
             }
+            StockAction::FormatPrint { .. } | StockAction::PrintAt { .. } => {
+                unreachable!("lower_act must handle FormatPrint and PrintAt")
+            }
+        }
+    };
+
+    let var_inits: HashMap<VarId, i32> = hir.vars.iter().map(|v| (v.id, v.init_val)).collect();
+    let lower_act = |a: &StockAction, map_ctx: &mut MapContext| -> Vec<LirAction> {
+        match a {
+            StockAction::PrintAt { line, parts } => {
+                let dest_epd = ValueExpr::Const(epd(0x640B60 + 218 * (*line as u32)));
+                emit_format_parts_actions(dest_epd, parts, None, false, &var_inits)
+            }
+            StockAction::FormatPrint { target, parts, always_display } => {
+                let (dest_epd, display_str_id) = match target {
+                    crate::hir::PrintTarget::ScreenLine(line) => {
+                        (ValueExpr::Const(epd(0x640B60 + 218 * (*line as u32))), None)
+                    }
+                    crate::hir::PrintTarget::MapString(str_id) => {
+                        let off = map_ctx.string_table().string_offset(*str_id).unwrap_or(0);
+                        (ValueExpr::Const(epd(crate::hir::STRX_BASE_ADDR + off)), None)
+                    }
+                    crate::hir::PrintTarget::DisplayText => {
+                        let buf_text = "\r\n                                                                                                                        \0";
+                        let str_id = map_ctx.get_or_insert_string(buf_text.as_bytes());
+                        let off = map_ctx.string_table().string_offset(str_id).unwrap_or(0);
+                        (ValueExpr::Const(epd(crate::hir::STRX_BASE_ADDR + off)), Some(str_id))
+                    }
+                    crate::hir::PrintTarget::Memory(epd_expr) => {
+                        let target_val = match epd_expr.fold_constants() {
+                            crate::hir::HirExpr::Const(c) => ValueExpr::Const(c),
+                            crate::hir::HirExpr::Var(v) => var_storage[&v].value_epd(),
+                            _ => ValueExpr::Const(0),
+                        };
+                        (target_val, None)
+                    }
+                };
+                emit_format_parts_actions(dest_epd, parts, display_str_id, *always_display, &var_inits)
+            }
+            other => vec![lower_single_act(other, map_ctx)],
         }
     };
 
@@ -4050,21 +4132,24 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
         for op in &block.ops {
             match op {
                 ExpandedOp::LeafAction(act) => {
-                    ensure_capacity(
-                        1,
-                        &mut pending_actions,
-                        &mut block_triggers,
-                        &mut cur_obj_id,
-                        &block.label,
-                    );
-                    pending_actions.push(lower_act(act));
-                    if pending_actions.len() == 64 {
-                        flush_pending_normal(
+                    let acts = lower_act(act, map_ctx);
+                    for la in acts {
+                        ensure_capacity(
+                            1,
                             &mut pending_actions,
                             &mut block_triggers,
                             &mut cur_obj_id,
                             &block.label,
                         );
+                        pending_actions.push(la);
+                        if pending_actions.len() == 64 {
+                            flush_pending_normal(
+                                &mut pending_actions,
+                                &mut block_triggers,
+                                &mut cur_obj_id,
+                                &block.label,
+                            );
+                        }
                     }
                 }
                 ExpandedOp::Trigger {
@@ -4079,12 +4164,16 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
                         &mut cur_obj_id,
                         &block.label,
                     );
+                    let mut lowered_actions = Vec::new();
+                    for a in actions {
+                        lowered_actions.extend(lower_act(a, map_ctx));
+                    }
                     if conditions.len() > 16 {
                         return Err(EudkitError::Ir(
                             "trigger cannot have more than 16 conditions".to_string(),
                         ));
                     }
-                    if actions.len() > 64 {
+                    if lowered_actions.len() > 64 {
                         return Err(EudkitError::Ir(
                             "trigger cannot have more than 64 actions".to_string(),
                         ));
@@ -4097,7 +4186,7 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
                         lbl,
                         next_return_addr(next_id),
                         conditions.iter().map(&lower_cond).collect(),
-                        actions.iter().map(&mut lower_act).collect(),
+                        lowered_actions,
                         *preserved,
                         &mut block_triggers,
                         &mut cur_obj_id,
@@ -4384,12 +4473,12 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
                         },
                         Vec::new(),
                         vec![
-                            lower_act(&StockAction::SetVarConst {
+                            lower_single_act(&StockAction::SetVarConst {
                                 var: *shift,
                                 modifier: Modifier::Subtract,
                                 value: 1,
                                 mask: None,
-                            }),
+                            }, map_ctx),
                             make_set_deaths_action(
                                 loopstart_nptr_epd,
                                 Modifier::SetTo,

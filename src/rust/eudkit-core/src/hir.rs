@@ -605,6 +605,7 @@ pub enum StockCondition {
         switch: u8,
         state: SwitchState,
     },
+    IsUserCp,
 }
 
 fn invert_cmp_amount(comparison: Comparison, amount: u32) -> Option<(Comparison, u32)> {
@@ -719,7 +720,10 @@ impl StockCondition {
                 unit,
                 location,
             }),
-            Self::DeathsDynamic { .. } | Self::MemoryDynamic { .. } | Self::ExprCmp { .. } => None,
+            Self::DeathsDynamic { .. }
+            | Self::MemoryDynamic { .. }
+            | Self::ExprCmp { .. }
+            | Self::IsUserCp => None,
         }
     }
 }
@@ -841,8 +845,79 @@ impl fmt::Display for StockCondition {
                 "Bring({player}, {comparison}, {amount}, unit={unit}, loc={location})"
             ),
             Self::Switch { switch, state } => write!(f, "Switch({switch}, {state:?})"),
+            Self::IsUserCp => write!(f, "IsUserCP()"),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormatPart {
+    Text(String),
+    Decimal(HirExpr),
+    Hex(HirExpr),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrintTarget {
+    DisplayText,
+    ScreenLine(u8),
+    MapString(u32),
+    Memory(HirExpr),
+}
+
+/// Parses a C-style format template string (e.g. `"Score: %d, Hex: 0x%08X\n"`)
+/// into a list of static and dynamic `FormatPart` tokens.
+pub fn parse_format_template(template: &str, args: &[HirExpr]) -> Result<Vec<FormatPart>, String> {
+    let mut parts = Vec::new();
+    let mut arg_idx = 0;
+    let mut cur_text = String::new();
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 1 < bytes.len() {
+            let mut next_i = i + 1;
+            if bytes[next_i] == b'%' {
+                cur_text.push('%');
+                i += 2;
+                continue;
+            }
+            let mut is_hex = false;
+            let mut is_dec = false;
+            if bytes[next_i] == b'd' || bytes[next_i] == b'i' || bytes[next_i] == b'u' {
+                is_dec = true;
+                next_i += 1;
+            } else if bytes[next_i] == b'x' || bytes[next_i] == b'X' || bytes[next_i] == b'p' {
+                is_hex = true;
+                next_i += 1;
+            } else if bytes[next_i..].starts_with(b"08X") || bytes[next_i..].starts_with(b"08x") {
+                is_hex = true;
+                next_i += 3;
+            }
+
+            if is_dec || is_hex {
+                if !cur_text.is_empty() {
+                    parts.push(FormatPart::Text(std::mem::take(&mut cur_text)));
+                }
+                let arg = args.get(arg_idx).ok_or_else(|| {
+                    format!("not enough arguments for format template (missing arg {arg_idx})")
+                })?;
+                arg_idx += 1;
+                if is_dec {
+                    parts.push(FormatPart::Decimal(arg.clone()));
+                } else {
+                    parts.push(FormatPart::Hex(arg.clone()));
+                }
+                i = next_i;
+                continue;
+            }
+        }
+        cur_text.push(bytes[i] as char);
+        i += 1;
+    }
+    if !cur_text.is_empty() {
+        parts.push(FormatPart::Text(cur_text));
+    }
+    Ok(parts)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -914,6 +989,15 @@ pub enum StockAction {
     DisplayTextId {
         string_id: u32,
         always_display: bool,
+    },
+    FormatPrint {
+        target: PrintTarget,
+        parts: Vec<FormatPart>,
+        always_display: bool,
+    },
+    PrintAt {
+        line: u8,
+        parts: Vec<FormatPart>,
     },
     CreateUnit {
         count: u8,
@@ -1056,6 +1140,10 @@ impl fmt::Display for StockAction {
                 string_id,
                 always_display,
             } => write!(f, "DisplayTextId(#{string_id}, always={always_display})"),
+            Self::FormatPrint { target, parts, always_display } => {
+                write!(f, "FormatPrint({target:?}, {parts:?}, always={always_display})")
+            }
+            Self::PrintAt { line, parts } => write!(f, "PrintAt(line={line}, {parts:?})"),
             Self::CreateUnit {
                 count,
                 unit,

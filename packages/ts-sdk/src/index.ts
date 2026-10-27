@@ -148,6 +148,10 @@ export function Never(): Condition {
   return new Condition("Never", []);
 }
 
+export function IsUserCP(): Condition {
+  return new Condition("IsUserCP", []);
+}
+
 export function Deaths(
   player: ExprLike,
   comparison: number,
@@ -272,6 +276,18 @@ export function SetResources(
 
 export function DisplayText(text: string, alwaysDisplay: boolean = true): Action {
   return new Action("DisplayText", [text, alwaysDisplay]);
+}
+
+export function displayText(template: string, ...args: ExprLike[]): Action {
+  return new Action("displayText", [template, ...args]);
+}
+
+export function f_eprintln(template: string, ...args: ExprLike[]): Action {
+  return new Action("f_eprintln", [template, ...args]);
+}
+
+export function print_at(line: number, template: string, ...args: ExprLike[]): Action {
+  return new Action("print_at", [line, template, ...args]);
 }
 
 export function DisplayTextId(stringId: number, alwaysDisplay: boolean = true): Action {
@@ -453,7 +469,15 @@ export class EUDArray {
 
 export class MapString {
   public readonly id: number = 0;
+  public readonly offset: number = 0;
+  public readonly address: number = 0x191943C8;
+  public readonly epd: number = Math.floor((0x191943C8 - DEATHS_BASE_ADDR) / 4);
+
   constructor(public readonly text: string) {}
+
+  public display(alwaysDisplay: boolean = true): Action {
+    return new Action("DisplayTextId", [this.id, alwaysDisplay]);
+  }
 }
 
 /**
