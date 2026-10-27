@@ -1,9 +1,9 @@
 use eudkit_core::hir::{
-    parse_format_template, Comparison, FuncId, FuncPtrId, HirBasicBlock, HirBinOp, HirByteBuf,
-    HirExpr, HirFunction, HirModule, HirStmt, HirTerminator, HirUnaryOp, HirValue, InlineHint,
-    Modifier, PlayerId, PrintTarget, ResourceType, StockAction, StockCondition, SwitchState, VarId,
+    parse_format_template, Comparison, FuncId, FuncPtrId, HirBinOp, HirByteBuf, HirExpr,
+    HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget, ResourceType, StockAction,
+    StockCondition, SwitchState, VarId,
 };
-use eudkit_core::{CompilationConfig, CompilationSession, EudkitError};
+use eudkit_core::{CompilationConfig, CompilationSession, EudkitError, HirBuilder};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
@@ -596,62 +596,6 @@ pub struct PyCompilationReport {
     pub ort_count: usize,
 }
 
-#[derive(Clone, Debug)]
-enum OpenControlFrame {
-    Function {
-        name: String,
-        is_main_loop: bool,
-        params: Vec<VarId>,
-        return_count: usize,
-        inline_hint: InlineHint,
-        body: Vec<HirStmt>,
-    },
-    IfThen {
-        conditions: Vec<StockCondition>,
-        then_body: Vec<HirStmt>,
-    },
-    Elif {
-        conditions: Vec<StockCondition>,
-        then_body: Vec<HirStmt>,
-    },
-    Else {
-        else_body: Vec<HirStmt>,
-    },
-    While {
-        conditions: Vec<StockCondition>,
-        body: Vec<HirStmt>,
-    },
-}
-
-fn attach_to_last_if_else(stmts: &mut [HirStmt], new_else: Vec<HirStmt>) -> PyResult<()> {
-    let Some(mut cur_stmt) = stmts.last_mut() else {
-        return Err(PyValueError::new_err(
-            "elif / else must immediately follow an if block",
-        ));
-    };
-    loop {
-        match cur_stmt {
-            HirStmt::If { else_body, .. } => {
-                if else_body.is_empty() {
-                    *else_body = new_else;
-                    return Ok(());
-                } else if else_body.len() == 1 && matches!(else_body[0], HirStmt::If { .. }) {
-                    cur_stmt = &mut else_body[0];
-                } else {
-                    return Err(PyValueError::new_err(
-                        "if block already has an else branch",
-                    ));
-                }
-            }
-            _ => {
-                return Err(PyValueError::new_err(
-                    "elif / else must immediately follow an if block",
-                ));
-            }
-        }
-    }
-}
-
 #[pyclass(
     unsendable,
     name = "RawSession",
@@ -659,55 +603,19 @@ fn attach_to_last_if_else(stmts: &mut [HirStmt], new_else: Vec<HirStmt>) -> PyRe
 )]
 pub struct PyCompilationSession {
     session: CompilationSession,
-    hir: HirModule,
-    root_stmts: Vec<HirStmt>,
-    frames: Vec<OpenControlFrame>,
+    builder: HirBuilder,
     dirty: bool,
 }
 
 impl PyCompilationSession {
-    fn active_stmts_mut(&mut self) -> &mut Vec<HirStmt> {
-        self.dirty = true;
-        if let Some(top) = self.frames.last_mut() {
-            match top {
-                OpenControlFrame::Function { body, .. } => body,
-                OpenControlFrame::IfThen { then_body, .. } => then_body,
-                OpenControlFrame::Elif { then_body, .. } => then_body,
-                OpenControlFrame::Else { else_body } => else_body,
-                OpenControlFrame::While { body, .. } => body,
-            }
-        } else {
-            &mut self.root_stmts
-        }
-    }
-
     fn sync_hir(&mut self) -> PyResult<()> {
-        if !self.frames.is_empty() {
+        if self.builder.is_in_frame() {
             return Err(PyValueError::new_err(
                 "cannot compile or dump IR while a function or control-flow block is still open",
             ));
         }
         if self.dirty {
-            let mut module = self.hir.clone();
-            if !self.root_stmts.is_empty() {
-                if let Some(main_id) = module.main_loop {
-                    module.functions[main_id.0 as usize].blocks[0]
-                        .stmts
-                        .extend(self.root_stmts.iter().cloned());
-                } else {
-                    let mut main_fn = HirFunction::new_main_loop("main");
-                    let mut entry = HirBasicBlock::new("entry");
-                    entry.stmts = self.root_stmts.clone();
-                    entry.set_terminator(HirTerminator::Return);
-                    main_fn.add_block(entry);
-                    module.add_function(main_fn);
-                }
-            } else if module.functions.is_empty() {
-                let mut main_fn = HirFunction::new_main_loop("main");
-                let entry = HirBasicBlock::new("entry");
-                main_fn.add_block(entry);
-                module.add_function(main_fn);
-            }
+            let module = self.builder.build().map_err(to_py_err)?;
             self.session.set_hir_module(module);
             self.dirty = false;
         }
@@ -733,9 +641,7 @@ impl PyCompilationSession {
         let session = CompilationSession::from_map(map_path, config).map_err(to_py_err)?;
         Ok(Self {
             session,
-            hir: HirModule::new("eudkit_module"),
-            root_stmts: Vec::new(),
-            frames: Vec::new(),
+            builder: HirBuilder::new("eudkit_module"),
             dirty: true,
         })
     }
@@ -811,12 +717,12 @@ impl PyCompilationSession {
 
     fn add_var(&mut self, name: &str, init_val: i32) -> u32 {
         self.dirty = true;
-        self.hir.add_var(name, init_val).0
+        self.builder.add_var(name, init_val).0
     }
 
     fn add_byte_buf(&mut self, name: &str, data: &[u8]) -> u32 {
         self.dirty = true;
-        self.hir
+        self.builder
             .add_byte_buf(HirByteBuf::new(name, data.to_vec()))
             .0
     }
@@ -831,195 +737,103 @@ impl PyCompilationSession {
         inline: Option<bool>,
     ) {
         self.dirty = true;
-        let inline_hint = match inline {
-            Some(true) => InlineHint::Always,
-            Some(false) => InlineHint::Never,
-            None => InlineHint::Auto,
-        };
-        self.frames.push(OpenControlFrame::Function {
-            name: name.to_string(),
-            is_main_loop,
-            params: params.unwrap_or_default().into_iter().map(VarId).collect(),
-            return_count,
-            inline_hint,
-            body: Vec::new(),
-        });
+        let params = params.unwrap_or_default().into_iter().map(VarId).collect();
+        self.builder
+            .begin_function(name, is_main_loop, params, return_count, inline);
     }
 
     fn end_function(&mut self) -> PyResult<u32> {
-        match self.frames.pop() {
-            Some(OpenControlFrame::Function {
-                name,
-                is_main_loop,
-                params,
-                return_count,
-                inline_hint,
-                body,
-            }) => {
-                let mut func = HirFunction::new(name, is_main_loop)
-                    .with_params(params)
-                    .with_return_count(return_count)
-                    .with_inline_hint(inline_hint);
-                let mut entry = HirBasicBlock::new("entry");
-                entry.stmts = body;
-                entry.set_terminator(HirTerminator::Return);
-                func.add_block(entry);
-                let fn_id = self.hir.add_function(func);
-                self.dirty = true;
-                Ok(fn_id.0)
-            }
-            _ => Err(PyValueError::new_err("end_function without matching begin_function")),
-        }
+        self.dirty = true;
+        let fn_id = self.builder.end_function().map_err(to_py_err)?;
+        Ok(fn_id.0)
     }
 
     fn begin_if(&mut self, conditions: Vec<PyCondition>) {
         self.dirty = true;
-        self.frames.push(OpenControlFrame::IfThen {
-            conditions: conditions.into_iter().map(|c| c.0).collect(),
-            then_body: Vec::new(),
-        });
+        self.builder
+            .begin_if(conditions.into_iter().map(|c| c.0).collect());
     }
 
     fn end_if(&mut self) -> PyResult<()> {
-        match self.frames.pop() {
-            Some(OpenControlFrame::IfThen {
-                conditions,
-                then_body,
-            }) => {
-                self.active_stmts_mut().push(HirStmt::If {
-                    conditions,
-                    then_body,
-                    else_body: Vec::new(),
-                });
-                Ok(())
-            }
-            _ => Err(PyValueError::new_err("end_if without matching begin_if")),
-        }
+        self.dirty = true;
+        self.builder.end_if().map_err(to_py_err)
     }
 
     fn begin_elif(&mut self, conditions: Vec<PyCondition>) -> PyResult<()> {
-        let has_prev_if = matches!(self.active_stmts_mut().last(), Some(HirStmt::If { .. }));
-        if !has_prev_if {
-            return Err(PyValueError::new_err(
-                "elif_ must immediately follow an if_ or elif_ block",
-            ));
-        }
-        self.frames.push(OpenControlFrame::Elif {
-            conditions: conditions.into_iter().map(|c| c.0).collect(),
-            then_body: Vec::new(),
-        });
-        Ok(())
+        self.dirty = true;
+        self.builder
+            .begin_elif(conditions.into_iter().map(|c| c.0).collect())
+            .map_err(to_py_err)
     }
 
     fn end_elif(&mut self) -> PyResult<()> {
-        match self.frames.pop() {
-            Some(OpenControlFrame::Elif {
-                conditions,
-                then_body,
-            }) => {
-                let new_if = HirStmt::If {
-                    conditions,
-                    then_body,
-                    else_body: Vec::new(),
-                };
-                attach_to_last_if_else(self.active_stmts_mut(), vec![new_if])
-            }
-            _ => Err(PyValueError::new_err("end_elif without matching begin_elif")),
-        }
+        self.dirty = true;
+        self.builder.end_elif().map_err(to_py_err)
     }
 
     fn begin_else(&mut self) -> PyResult<()> {
-        let has_prev_if = matches!(self.active_stmts_mut().last(), Some(HirStmt::If { .. }));
-        if !has_prev_if {
-            return Err(PyValueError::new_err(
-                "else_ must immediately follow an if_ or elif_ block",
-            ));
-        }
-        self.frames.push(OpenControlFrame::Else {
-            else_body: Vec::new(),
-        });
-        Ok(())
+        self.dirty = true;
+        self.builder.begin_else().map_err(to_py_err)
     }
 
     fn end_else(&mut self) -> PyResult<()> {
-        match self.frames.pop() {
-            Some(OpenControlFrame::Else { else_body }) => {
-                attach_to_last_if_else(self.active_stmts_mut(), else_body)
-            }
-            _ => Err(PyValueError::new_err("end_else without matching begin_else")),
-        }
+        self.dirty = true;
+        self.builder.end_else().map_err(to_py_err)
     }
 
     fn begin_while(&mut self, conditions: Vec<PyCondition>) {
         self.dirty = true;
-        self.frames.push(OpenControlFrame::While {
-            conditions: conditions.into_iter().map(|c| c.0).collect(),
-            body: Vec::new(),
-        });
+        self.builder
+            .begin_while(conditions.into_iter().map(|c| c.0).collect());
     }
 
     fn end_while(&mut self) -> PyResult<()> {
-        match self.frames.pop() {
-            Some(OpenControlFrame::While { conditions, body }) => {
-                self.active_stmts_mut()
-                    .push(HirStmt::While { conditions, body });
-                Ok(())
-            }
-            _ => Err(PyValueError::new_err(
-                "end_while without matching begin_while",
-            )),
-        }
+        self.dirty = true;
+        self.builder.end_while().map_err(to_py_err)
     }
 
     fn push_break(&mut self) {
-        self.active_stmts_mut().push(HirStmt::Break);
+        self.dirty = true;
+        self.builder.push_break();
     }
 
     fn push_continue(&mut self) {
-        self.active_stmts_mut().push(HirStmt::Continue);
+        self.dirty = true;
+        self.builder.push_continue();
     }
 
     fn push_var_assign(&mut self, var_id: u32, value: i32) {
-        self.active_stmts_mut().push(HirStmt::VarAssignConst {
-            var: VarId(var_id),
-            value,
-        });
+        self.dirty = true;
+        self.builder.push_var_assign_const(VarId(var_id), value);
     }
 
     fn push_var_assign_expr(&mut self, var_id: u32, expr: &PyExpr) {
-        self.active_stmts_mut().push(HirStmt::VarAssignExpr {
-            var: VarId(var_id),
-            expr: expr.0.clone(),
-        });
+        self.dirty = true;
+        self.builder
+            .push_var_assign_expr(VarId(var_id), expr.0.clone());
     }
 
     fn push_var_add(&mut self, var_id: u32, value: i32) {
-        self.active_stmts_mut().push(HirStmt::VarAddConst {
-            var: VarId(var_id),
-            value,
-        });
+        self.dirty = true;
+        self.builder.push_var_add_const(VarId(var_id), value);
     }
 
     fn push_var_sub(&mut self, var_id: u32, value: i32) {
-        self.active_stmts_mut().push(HirStmt::VarSubConst {
-            var: VarId(var_id),
-            value,
-        });
+        self.dirty = true;
+        self.builder.push_var_sub_const(VarId(var_id), value);
     }
 
     fn push_var_set_mask(&mut self, var_id: u32, modifier: u8, value: i32, mask: u32) -> PyResult<()> {
+        self.dirty = true;
         let mod_enum = decode_modifier(modifier)?;
-        self.active_stmts_mut().push(HirStmt::VarSetMaskConst {
-            var: VarId(var_id),
-            modifier: mod_enum,
-            value,
-            mask,
-        });
+        self.builder
+            .push_var_set_mask(VarId(var_id), mod_enum, value, mask);
         Ok(())
     }
 
     fn push_action(&mut self, action: PyAction) {
-        self.active_stmts_mut().push(HirStmt::Action(action.0));
+        self.dirty = true;
+        self.builder.push_action(action.0);
     }
 
     #[pyo3(signature = (conditions, actions, label=None, preserved=true))]
@@ -1030,26 +844,28 @@ impl PyCompilationSession {
         label: Option<String>,
         preserved: bool,
     ) {
-        self.active_stmts_mut().push(HirStmt::Trigger {
+        self.dirty = true;
+        self.builder.push_trigger(
+            conditions.into_iter().map(|c| c.0).collect(),
+            actions.into_iter().map(|a| a.0).collect(),
             label,
-            conditions: conditions.into_iter().map(|c| c.0).collect(),
-            actions: actions.into_iter().map(|a| a.0).collect(),
             preserved,
-        });
+        );
     }
 
     fn push_call(&mut self, callee: u32, args: Vec<PyExpr>, rets: Vec<u32>) {
-        self.active_stmts_mut().push(HirStmt::Call {
-            callee: FuncId(callee),
-            args: args.into_iter().map(|e| e.0).collect(),
-            rets: rets.into_iter().map(VarId).collect(),
-        });
+        self.dirty = true;
+        self.builder.push_call(
+            FuncId(callee),
+            args.into_iter().map(|e| e.0).collect(),
+            rets.into_iter().map(VarId).collect(),
+        );
     }
 
     fn push_return_values(&mut self, values: Vec<PyExpr>) {
-        self.active_stmts_mut().push(HirStmt::ReturnValues(
-            values.into_iter().map(|e| e.0).collect(),
-        ));
+        self.dirty = true;
+        self.builder
+            .push_return_values(values.into_iter().map(|e| e.0).collect());
     }
 
     #[pyo3(signature = (dst, epd, mask=0xFFFF_FFFF, shift=0, initial_val=0))]
@@ -1061,13 +877,14 @@ impl PyCompilationSession {
         shift: i32,
         initial_val: i32,
     ) {
-        self.active_stmts_mut().push(HirStmt::MemRead {
-            dst: VarId(dst),
-            epd: epd.0.clone(),
+        self.dirty = true;
+        self.builder.push_mem_read(
+            VarId(dst),
+            epd.0.clone(),
             mask,
             shift,
             initial_val,
-        });
+        );
     }
 
     #[pyo3(signature = (name, param_count=0, return_count=0, initial_target=None))]
@@ -1079,24 +896,24 @@ impl PyCompilationSession {
         initial_target: Option<u32>,
     ) -> u32 {
         self.dirty = true;
-        self.hir
+        self.builder
             .add_func_ptr(name, (param_count, return_count), initial_target.map(FuncId))
             .0
     }
 
     fn push_func_ptr_assign(&mut self, ptr: u32, target: u32) {
-        self.active_stmts_mut().push(HirStmt::FuncPtrAssign {
-            ptr: FuncPtrId(ptr),
-            target: FuncId(target),
-        });
+        self.dirty = true;
+        self.builder
+            .push_func_ptr_assign(FuncPtrId(ptr), FuncId(target));
     }
 
     fn push_call_indirect(&mut self, ptr: u32, args: Vec<PyExpr>, rets: Vec<u32>) {
-        self.active_stmts_mut().push(HirStmt::CallIndirect {
-            ptr: FuncPtrId(ptr),
-            args: args.into_iter().map(|e| e.0).collect(),
-            rets: rets.into_iter().map(VarId).collect(),
-        });
+        self.dirty = true;
+        self.builder.push_call_indirect(
+            FuncPtrId(ptr),
+            args.into_iter().map(|e| e.0).collect(),
+            rets.into_iter().map(VarId).collect(),
+        );
     }
 
     fn dump_hir(&mut self) -> PyResult<String> {

@@ -1,3 +1,6 @@
+pub mod builder;
+pub use builder::{HirBuilder, OpenControlFrame};
+
 use crate::lir::FieldRef;
 use std::fmt::{self, Write};
 
