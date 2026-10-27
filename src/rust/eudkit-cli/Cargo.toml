@@ -1,0 +1,18 @@
+[package]
+name = "eudkit-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "eudkit"
+path = "src/main.rs"
+
+[dependencies]
+eudkit-core = { path = "../eudkit-core" }
+
+[dev-dependencies]
+eudplib-stormlib = { path = "../eudplib-stormlib", default-features = false }
+tempfile = "3"

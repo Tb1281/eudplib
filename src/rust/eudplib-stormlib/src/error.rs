@@ -1,6 +1,8 @@
 // source: https://raw.githubusercontent.com/wc3tools/stormlib-rs/refs/heads/master/crates/stormlib/src/error.rs
 
+#[cfg(feature = "pyo3")]
 use pyo3::exceptions;
+#[cfg(feature = "pyo3")]
 use pyo3::PyErr;
 use std::ffi::NulError;
 use thiserror::Error;
@@ -83,6 +85,7 @@ impl From<NulError> for StormError {
     }
 }
 
+#[cfg(feature = "pyo3")]
 impl From<StormError> for PyErr {
     fn from(err: StormError) -> PyErr {
         use StormError::*;

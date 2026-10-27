@@ -24,6 +24,7 @@ fn main() {
 
   let dst = cfg
     .define("BUILD_SHARED_LIBS", "OFF")
+    .define("STORM_USE_BUNDLED_LIBRARIES", "ON")
     .build();
 
   let lib = dst.join("lib");
@@ -43,15 +44,11 @@ fn main() {
   {
     println!("cargo:rustc-link-lib=static=storm");
     println!("cargo:rustc-link-lib=dylib=c++");
-    println!("cargo:rustc-link-lib=z");
-    println!("cargo:rustc-link-lib=bz2");
   } 
   
   #[cfg(target_os = "linux")]
   {
     println!("cargo:rustc-link-lib=static=storm");
     println!("cargo:rustc-link-lib=stdc++");
-    println!("cargo:rustc-link-lib=z");
-    println!("cargo:rustc-link-lib=bz2");
   }
 }
