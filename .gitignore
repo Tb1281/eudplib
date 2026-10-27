@@ -30,3 +30,5 @@ tests/output.pstats
 uv.lock
 *.mo
 examples/**/output_*.scx
+.agents/
+skills-lock.json
