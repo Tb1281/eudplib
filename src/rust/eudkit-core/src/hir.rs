@@ -1192,6 +1192,15 @@ pub enum StockAction {
         location: u32,
         player: PlayerId,
     },
+    KillUnitAt {
+        count: u8,
+        unit: u16,
+        location: u32,
+        player: PlayerId,
+    },
+    MinimapPing {
+        location: u32,
+    },
     Comment {
         text: String,
     },
@@ -1337,6 +1346,13 @@ impl fmt::Display for StockAction {
                 location,
                 player,
             } => write!(f, "CreateUnit({count}, unit={unit}, loc={location}, {player})"),
+            Self::KillUnitAt {
+                count,
+                unit,
+                location,
+                player,
+            } => write!(f, "KillUnitAt({count}, unit={unit}, loc={location}, {player})"),
+            Self::MinimapPing { location } => write!(f, "MinimapPing(loc={location})"),
             Self::Comment { text } => write!(f, "Comment({text:?})"),
             Self::PreserveTrigger => write!(f, "PreserveTrigger()"),
             Self::Victory => write!(f, "Victory()"),

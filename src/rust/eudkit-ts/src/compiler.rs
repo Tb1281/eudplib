@@ -1545,6 +1545,27 @@ impl<'a> TsCompiler<'a> {
                     player: PlayerId::from_player_slot(player),
                 }))
             }
+            "KillUnitAt" => {
+                let count =
+                    self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
+                let unit =
+                    self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
+                let loc =
+                    self.resolve_location_id(call.arguments[2].as_expression().unwrap())?;
+                let player =
+                    self.eval_const_expr(call.arguments[3].as_expression().unwrap())? as u8;
+                Ok(Some(StockAction::KillUnitAt {
+                    count,
+                    unit,
+                    location: loc,
+                    player: PlayerId::from_player_slot(player),
+                }))
+            }
+            "MinimapPing" => {
+                let loc =
+                    self.resolve_location_id(call.arguments[0].as_expression().unwrap())?;
+                Ok(Some(StockAction::MinimapPing { location: loc }))
+            }
             "Comment" => {
                 let text = if let Some(Expression::StringLiteral(slit)) =
                     call.arguments[0].as_expression()

@@ -803,6 +803,37 @@ pub fn emit_lir(
                 flags: 20,
                 eudx: 0,
             },
+            StockAction::KillUnitAt {
+                count,
+                unit,
+                location,
+                player,
+            } => LirAction {
+                locid1: ValueExpr::Const(*location as i32),
+                strid: ValueExpr::Const(0),
+                wavid: ValueExpr::Const(0),
+                time: ValueExpr::Const(0),
+                player1: ValueExpr::Const(player.encode()),
+                player2: ValueExpr::Const(0),
+                unitid: *unit,
+                acttype: 23,
+                amount: *count,
+                flags: 20,
+                eudx: 0,
+            },
+            StockAction::MinimapPing { location } => LirAction {
+                locid1: ValueExpr::Const(*location as i32),
+                strid: ValueExpr::Const(0),
+                wavid: ValueExpr::Const(0),
+                time: ValueExpr::Const(0),
+                player1: ValueExpr::Const(0),
+                player2: ValueExpr::Const(0),
+                unitid: 0,
+                acttype: 28,
+                amount: 0,
+                flags: 4,
+                eudx: 0,
+            },
             StockAction::Comment { text } => {
                 let str_id = map_ctx.get_or_insert_string(text.as_bytes());
                 LirAction {

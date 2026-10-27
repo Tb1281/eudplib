@@ -1153,6 +1153,25 @@ def CreateUnit(
     )
 
 
+def KillUnitAt(
+    count: int, unit: int | str, location: int | str, player: int
+) -> ActionSpec:
+    return ActionSpec(
+        lambda s: _rust_eudkit.RawAction.kill_unit_at(
+            int(count),
+            _resolve_unit(s, unit),
+            _resolve_location(s, location),
+            int(player),
+        )
+    )
+
+
+def MinimapPing(location: int | str) -> ActionSpec:
+    return ActionSpec(
+        lambda s: _rust_eudkit.RawAction.minimap_ping(_resolve_location(s, location))
+    )
+
+
 def Comment(text: str) -> ActionSpec:
     return ActionSpec(lambda _s: _rust_eudkit.RawAction.comment(str(text)))
 
@@ -1340,6 +1359,60 @@ def bwrite_epd(
     shifted_val = (value << shift) if isinstance(value, int) else (value << shift)
     act = SetDeathsX(epd, SetTo, shifted_val, 0, mask)
     sess.do(act)
+
+
+def dwread(
+    address: int,
+    *,
+    ret: Var | Sequence[Var] | None = None,
+    session: Session | None = None,
+) -> Var:
+    return dwread_epd(EPD(address), ret=ret, session=session)
+
+
+def wread(
+    address: int,
+    *,
+    ret: Var | Sequence[Var] | None = None,
+    session: Session | None = None,
+) -> Var:
+    return wread_epd(EPD(address), (address % 4) // 2, ret=ret, session=session)
+
+
+def bread(
+    address: int,
+    *,
+    ret: Var | Sequence[Var] | None = None,
+    session: Session | None = None,
+) -> Var:
+    return bread_epd(EPD(address), address % 4, ret=ret, session=session)
+
+
+def dwwrite(
+    address: int,
+    value: ExprLike,
+    *,
+    session: Session | None = None,
+) -> None:
+    dwwrite_epd(EPD(address), value, session=session)
+
+
+def wwrite(
+    address: int,
+    value: ExprLike,
+    *,
+    session: Session | None = None,
+) -> None:
+    wwrite_epd(EPD(address), (address % 4) // 2, value, session=session)
+
+
+def bwrite(
+    address: int,
+    value: ExprLike,
+    *,
+    session: Session | None = None,
+) -> None:
+    bwrite_epd(EPD(address), address % 4, value, session=session)
 
 
 class Array:

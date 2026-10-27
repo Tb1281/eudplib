@@ -495,11 +495,12 @@ fn actions_cannot_mutate_condition(actions: &[StockAction], cond: &StockConditio
         | StockAction::DisplayTextId { .. }
         | StockAction::FormatPrint { .. }
         | StockAction::PrintAt { .. }
+        | StockAction::MinimapPing { .. }
         | StockAction::Comment { .. }
         | StockAction::PreserveTrigger
         | StockAction::Victory
         | StockAction::Defeat => true,
-        StockAction::CreateUnit { .. } => !matches!(
+        StockAction::CreateUnit { .. } | StockAction::KillUnitAt { .. } => !matches!(
             cond,
             StockCondition::Command { .. } | StockCondition::Bring { .. }
         ),

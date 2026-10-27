@@ -378,6 +378,8 @@ class AstToHirLowerer:
         if isinstance(stmt, ast.With):
             self._lower_with(stmt)
             return
+        if isinstance(stmt, (ast.Nonlocal, ast.Global, ast.Pass)):
+            return
         if isinstance(stmt, ast.Expr):
             self._lower_expr_stmt(stmt.value)
             return

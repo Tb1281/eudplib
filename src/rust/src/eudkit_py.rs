@@ -547,6 +547,21 @@ impl PyAction {
     }
 
     #[staticmethod]
+    fn kill_unit_at(count: u8, unit: u16, location: u32, player: i32) -> Self {
+        Self(StockAction::KillUnitAt {
+            count,
+            unit,
+            location,
+            player: decode_player(player),
+        })
+    }
+
+    #[staticmethod]
+    fn minimap_ping(location: u32) -> Self {
+        Self(StockAction::MinimapPing { location })
+    }
+
+    #[staticmethod]
     fn comment(text: String) -> Self {
         Self(StockAction::Comment { text })
     }
