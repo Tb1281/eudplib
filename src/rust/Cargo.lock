@@ -102,6 +102,7 @@ dependencies = [
 name = "eudplib-rust"
 version = "0.1.0"
 dependencies = [
+ "eudkit-core",
  "eudplib-epscript",
  "eudplib-stormlib",
  "indicatif",

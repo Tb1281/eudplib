@@ -1,0 +1,798 @@
+use eudkit_core::hir::{
+    Comparison, HirBasicBlock, HirByteBuf, HirFunction, HirModule, HirStmt, HirTerminator,
+    HirValue, Modifier, PlayerId, ResourceType, StockAction, StockCondition, SwitchState, VarId,
+};
+use eudkit_core::{CompilationConfig, CompilationSession, EudkitError};
+use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
+use pyo3::prelude::*;
+
+fn to_py_err(err: EudkitError) -> PyErr {
+    match err {
+        EudkitError::UnknownSymbol { .. } | EudkitError::AmbiguousSymbol { .. } => {
+            PyKeyError::new_err(err.to_string())
+        }
+        EudkitError::Ir(_) | EudkitError::Config(_) | EudkitError::InvalidChkSection { .. } => {
+            PyValueError::new_err(err.to_string())
+        }
+        other => PyRuntimeError::new_err(other.to_string()),
+    }
+}
+
+fn decode_comparison(code: u8) -> PyResult<Comparison> {
+    match code {
+        0 => Ok(Comparison::AtLeast),
+        1 => Ok(Comparison::AtMost),
+        10 => Ok(Comparison::Exactly),
+        other => Err(PyValueError::new_err(format!(
+            "invalid comparison code: {other}"
+        ))),
+    }
+}
+
+fn decode_modifier(code: u8) -> PyResult<Modifier> {
+    match code {
+        7 => Ok(Modifier::SetTo),
+        8 => Ok(Modifier::Add),
+        9 => Ok(Modifier::Subtract),
+        other => Err(PyValueError::new_err(format!(
+            "invalid modifier code: {other}"
+        ))),
+    }
+}
+
+fn decode_resource(code: u8) -> PyResult<ResourceType> {
+    match code {
+        0 => Ok(ResourceType::Ore),
+        1 => Ok(ResourceType::Gas),
+        2 => Ok(ResourceType::OreAndGas),
+        other => Err(PyValueError::new_err(format!(
+            "invalid resource code: {other}"
+        ))),
+    }
+}
+
+fn decode_switch_state(code: u8) -> PyResult<SwitchState> {
+    match code {
+        2 => Ok(SwitchState::Set),
+        3 => Ok(SwitchState::Cleared),
+        other => Err(PyValueError::new_err(format!(
+            "invalid switch state code: {other}"
+        ))),
+    }
+}
+
+fn decode_player(code: i32) -> PlayerId {
+    match code {
+        0 => PlayerId::Player1,
+        1 => PlayerId::Player2,
+        2 => PlayerId::Player3,
+        3 => PlayerId::Player4,
+        4 => PlayerId::Player5,
+        5 => PlayerId::Player6,
+        6 => PlayerId::Player7,
+        7 => PlayerId::Player8,
+        8 => PlayerId::Player9,
+        9 => PlayerId::Player10,
+        10 => PlayerId::Player11,
+        11 => PlayerId::Player12,
+        13 => PlayerId::CurrentPlayer,
+        14 => PlayerId::Foes,
+        15 => PlayerId::Allies,
+        16 => PlayerId::NeutralPlayers,
+        17 => PlayerId::AllPlayers,
+        18 => PlayerId::Force1,
+        19 => PlayerId::Force2,
+        20 => PlayerId::Force3,
+        21 => PlayerId::Force4,
+        26 => PlayerId::NonAlliedVictoryPlayers,
+        other => PlayerId::Epd(other),
+    }
+}
+
+#[derive(Clone, Debug)]
+#[pyclass(
+    from_py_object,
+    name = "RawCondition",
+    module = "eudplib.bindings._rust.eudkit"
+)]
+pub struct PyCondition(pub StockCondition);
+
+#[pymethods]
+impl PyCondition {
+    #[staticmethod]
+    fn always() -> Self {
+        Self(StockCondition::Always)
+    }
+
+    #[staticmethod]
+    fn never() -> Self {
+        Self(StockCondition::Never)
+    }
+
+    #[staticmethod]
+    fn deaths(player: i32, comparison: u8, amount: u32, unit: u16) -> PyResult<Self> {
+        Ok(Self(StockCondition::Deaths {
+            player: decode_player(player),
+            comparison: decode_comparison(comparison)?,
+            amount,
+            unit,
+        }))
+    }
+
+    #[staticmethod]
+    fn deaths_x(player: i32, comparison: u8, amount: u32, unit: u16, mask: u32) -> PyResult<Self> {
+        Ok(Self(StockCondition::DeathsX {
+            player: decode_player(player),
+            comparison: decode_comparison(comparison)?,
+            amount,
+            unit,
+            mask,
+        }))
+    }
+
+    #[staticmethod]
+    fn memory(address: u32, comparison: u8, value: u32) -> PyResult<Self> {
+        Ok(Self(StockCondition::Memory {
+            address,
+            comparison: decode_comparison(comparison)?,
+            value,
+        }))
+    }
+
+    #[staticmethod]
+    fn memory_x(address: u32, comparison: u8, value: u32, mask: u32) -> PyResult<Self> {
+        Ok(Self(StockCondition::MemoryX {
+            address,
+            comparison: decode_comparison(comparison)?,
+            value,
+            mask,
+        }))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (var_id, comparison, value, mask=None))]
+    fn var_cmp(var_id: u32, comparison: u8, value: u32, mask: Option<u32>) -> PyResult<Self> {
+        Ok(Self(StockCondition::VarCmp {
+            var: VarId(var_id),
+            comparison: decode_comparison(comparison)?,
+            value,
+            mask,
+        }))
+    }
+
+    #[staticmethod]
+    fn accumulate(player: i32, comparison: u8, amount: u32, resource: u8) -> PyResult<Self> {
+        Ok(Self(StockCondition::Accumulate {
+            player: decode_player(player),
+            comparison: decode_comparison(comparison)?,
+            amount,
+            resource: decode_resource(resource)?,
+        }))
+    }
+
+    #[staticmethod]
+    fn command(player: i32, comparison: u8, amount: u32, unit: u16) -> PyResult<Self> {
+        Ok(Self(StockCondition::Command {
+            player: decode_player(player),
+            comparison: decode_comparison(comparison)?,
+            amount,
+            unit,
+        }))
+    }
+
+    #[staticmethod]
+    fn bring(
+        player: i32,
+        comparison: u8,
+        amount: u32,
+        unit: u16,
+        location: u32,
+    ) -> PyResult<Self> {
+        Ok(Self(StockCondition::Bring {
+            player: decode_player(player),
+            comparison: decode_comparison(comparison)?,
+            amount,
+            unit,
+            location,
+        }))
+    }
+
+    #[staticmethod]
+    fn switch(switch_id: u8, state: u8) -> PyResult<Self> {
+        Ok(Self(StockCondition::Switch {
+            switch: switch_id,
+            state: decode_switch_state(state)?,
+        }))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{}", self.0)
+    }
+}
+
+#[derive(Clone, Debug)]
+#[pyclass(
+    from_py_object,
+    name = "RawAction",
+    module = "eudplib.bindings._rust.eudkit"
+)]
+pub struct PyAction(pub StockAction);
+
+#[pymethods]
+impl PyAction {
+    #[staticmethod]
+    fn set_deaths(player: i32, modifier: u8, value: i32, unit: u16) -> PyResult<Self> {
+        Ok(Self(StockAction::SetDeaths {
+            player: decode_player(player),
+            modifier: decode_modifier(modifier)?,
+            value: HirValue::Const(value),
+            unit,
+        }))
+    }
+
+    #[staticmethod]
+    fn set_deaths_x(
+        player: i32,
+        modifier: u8,
+        value: i32,
+        unit: u16,
+        mask: u32,
+    ) -> PyResult<Self> {
+        Ok(Self(StockAction::SetDeathsX {
+            player: decode_player(player),
+            modifier: decode_modifier(modifier)?,
+            value: HirValue::Const(value),
+            unit,
+            mask,
+        }))
+    }
+
+    #[staticmethod]
+    fn set_memory(address: u32, modifier: u8, value: i32) -> PyResult<Self> {
+        Ok(Self(StockAction::SetMemory {
+            address,
+            modifier: decode_modifier(modifier)?,
+            value: HirValue::Const(value),
+        }))
+    }
+
+    #[staticmethod]
+    fn set_memory_x(address: u32, modifier: u8, value: i32, mask: u32) -> PyResult<Self> {
+        Ok(Self(StockAction::SetMemoryX {
+            address,
+            modifier: decode_modifier(modifier)?,
+            value: HirValue::Const(value),
+            mask,
+        }))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (var_id, modifier, value, mask=None))]
+    fn set_var_const(
+        var_id: u32,
+        modifier: u8,
+        value: i32,
+        mask: Option<u32>,
+    ) -> PyResult<Self> {
+        Ok(Self(StockAction::SetVarConst {
+            var: VarId(var_id),
+            modifier: decode_modifier(modifier)?,
+            value,
+            mask,
+        }))
+    }
+
+    #[staticmethod]
+    fn set_resources(player: i32, modifier: u8, amount: u32, resource: u8) -> PyResult<Self> {
+        Ok(Self(StockAction::SetResources {
+            player: decode_player(player),
+            modifier: decode_modifier(modifier)?,
+            amount,
+            resource: decode_resource(resource)?,
+        }))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (text, always_display=true))]
+    fn display_text(text: String, always_display: bool) -> Self {
+        Self(StockAction::DisplayText {
+            text,
+            always_display,
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (string_id, always_display=true))]
+    fn display_text_id(string_id: u32, always_display: bool) -> Self {
+        Self(StockAction::DisplayTextId {
+            string_id,
+            always_display,
+        })
+    }
+
+    #[staticmethod]
+    fn create_unit(count: u8, unit: u16, location: u32, player: i32) -> Self {
+        Self(StockAction::CreateUnit {
+            count,
+            unit,
+            location,
+            player: decode_player(player),
+        })
+    }
+
+    #[staticmethod]
+    fn comment(text: String) -> Self {
+        Self(StockAction::Comment { text })
+    }
+
+    #[staticmethod]
+    fn preserve_trigger() -> Self {
+        Self(StockAction::PreserveTrigger)
+    }
+
+    #[staticmethod]
+    fn victory() -> Self {
+        Self(StockAction::Victory)
+    }
+
+    #[staticmethod]
+    fn defeat() -> Self {
+        Self(StockAction::Defeat)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{}", self.0)
+    }
+}
+
+#[derive(Clone, Debug)]
+#[pyclass(
+    from_py_object,
+    name = "CompilationReport",
+    module = "eudplib.bindings._rust.eudkit"
+)]
+pub struct PyCompilationReport {
+    #[pyo3(get)]
+    pub trigger_count: usize,
+    #[pyo3(get)]
+    pub byte_buf_count: usize,
+    #[pyo3(get)]
+    pub vproc_count: usize,
+    #[pyo3(get)]
+    pub payload_offset: usize,
+    #[pyo3(get)]
+    pub payload_size: usize,
+    #[pyo3(get)]
+    pub payload_entry_addr: u32,
+    #[pyo3(get)]
+    pub prt_count: usize,
+    #[pyo3(get)]
+    pub ort_count: usize,
+}
+
+#[derive(Clone, Debug)]
+enum OpenControlFrame {
+    Function {
+        name: String,
+        is_main_loop: bool,
+        body: Vec<HirStmt>,
+    },
+    IfThen {
+        conditions: Vec<StockCondition>,
+        then_body: Vec<HirStmt>,
+    },
+    Elif {
+        conditions: Vec<StockCondition>,
+        then_body: Vec<HirStmt>,
+    },
+    Else {
+        else_body: Vec<HirStmt>,
+    },
+    While {
+        conditions: Vec<StockCondition>,
+        body: Vec<HirStmt>,
+    },
+}
+
+fn attach_to_last_if_else(stmts: &mut [HirStmt], new_else: Vec<HirStmt>) -> PyResult<()> {
+    let Some(mut cur_stmt) = stmts.last_mut() else {
+        return Err(PyValueError::new_err(
+            "elif / else must immediately follow an if block",
+        ));
+    };
+    loop {
+        match cur_stmt {
+            HirStmt::If { else_body, .. } => {
+                if else_body.is_empty() {
+                    *else_body = new_else;
+                    return Ok(());
+                } else if else_body.len() == 1 && matches!(else_body[0], HirStmt::If { .. }) {
+                    cur_stmt = &mut else_body[0];
+                } else {
+                    return Err(PyValueError::new_err(
+                        "if block already has an else branch",
+                    ));
+                }
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "elif / else must immediately follow an if block",
+                ));
+            }
+        }
+    }
+}
+
+#[pyclass(
+    unsendable,
+    name = "RawSession",
+    module = "eudplib.bindings._rust.eudkit"
+)]
+pub struct PyCompilationSession {
+    session: CompilationSession,
+    hir: HirModule,
+    root_stmts: Vec<HirStmt>,
+    frames: Vec<OpenControlFrame>,
+    dirty: bool,
+}
+
+impl PyCompilationSession {
+    fn active_stmts_mut(&mut self) -> &mut Vec<HirStmt> {
+        self.dirty = true;
+        if let Some(top) = self.frames.last_mut() {
+            match top {
+                OpenControlFrame::Function { body, .. } => body,
+                OpenControlFrame::IfThen { then_body, .. } => then_body,
+                OpenControlFrame::Elif { then_body, .. } => then_body,
+                OpenControlFrame::Else { else_body } => else_body,
+                OpenControlFrame::While { body, .. } => body,
+            }
+        } else {
+            &mut self.root_stmts
+        }
+    }
+
+    fn sync_hir(&mut self) -> PyResult<()> {
+        if !self.frames.is_empty() {
+            return Err(PyValueError::new_err(
+                "cannot compile or dump IR while a function or control-flow block is still open",
+            ));
+        }
+        if self.dirty {
+            let mut module = self.hir.clone();
+            if !self.root_stmts.is_empty() {
+                if let Some(main_id) = module.main_loop {
+                    module.functions[main_id.0 as usize].blocks[0]
+                        .stmts
+                        .extend(self.root_stmts.iter().cloned());
+                } else {
+                    let mut main_fn = HirFunction::new_main_loop("main");
+                    let mut entry = HirBasicBlock::new("entry");
+                    entry.stmts = self.root_stmts.clone();
+                    entry.set_terminator(HirTerminator::Return);
+                    main_fn.add_block(entry);
+                    module.add_function(main_fn);
+                }
+            } else if module.functions.is_empty() {
+                let mut main_fn = HirFunction::new_main_loop("main");
+                let entry = HirBasicBlock::new("entry");
+                main_fn.add_block(entry);
+                module.add_function(main_fn);
+            }
+            self.session.set_hir_module(module);
+            self.dirty = false;
+        }
+        Ok(())
+    }
+}
+
+#[pymethods]
+impl PyCompilationSession {
+    #[new]
+    #[pyo3(signature = (map_path, obscurate=false, obscurate_seed=None, preserve_classic_triggers=true))]
+    fn new(
+        map_path: &str,
+        obscurate: bool,
+        obscurate_seed: Option<u64>,
+        preserve_classic_triggers: bool,
+    ) -> PyResult<Self> {
+        let config = CompilationConfig {
+            obscurate,
+            obscurate_seed,
+            preserve_classic_triggers,
+        };
+        let session = CompilationSession::from_map(map_path, config).map_err(to_py_err)?;
+        Ok(Self {
+            session,
+            hir: HirModule::new("eudkit_module"),
+            root_stmts: Vec::new(),
+            frames: Vec::new(),
+            dirty: true,
+        })
+    }
+
+    fn location_id(&self, name: &str) -> PyResult<u32> {
+        self.session
+            .map_context()
+            .location_id(name)
+            .ok_or_else(|| PyKeyError::new_err(format!("unknown location: {name:?}")))
+    }
+
+    fn unit_id(&self, name: &str) -> PyResult<u16> {
+        self.session
+            .map_context()
+            .unit_id(name)
+            .ok_or_else(|| PyKeyError::new_err(format!("unknown unit: {name:?}")))
+    }
+
+    fn switch_id(&self, name: &str) -> PyResult<u8> {
+        self.session
+            .map_context()
+            .switch_id(name)
+            .ok_or_else(|| PyKeyError::new_err(format!("unknown switch: {name:?}")))
+    }
+
+    fn get_or_insert_string(&mut self, text: &str) -> u32 {
+        self.session
+            .map_context_mut()
+            .get_or_insert_string(text.as_bytes())
+    }
+
+    fn classic_trigger_count(&self) -> usize {
+        self.session.map_context().triggers().len()
+    }
+
+    fn strx_byte_len(&self) -> usize {
+        self.session
+            .chk()
+            .section(b"STRx")
+            .map(|s| s.len())
+            .unwrap_or(0)
+    }
+
+    fn locations_count(&self) -> usize {
+        self.session.map_context().locations().len()
+    }
+
+    fn placed_units_count(&self) -> usize {
+        self.session.map_context().placed_units().len()
+    }
+
+    fn add_var(&mut self, name: &str, init_val: i32) -> u32 {
+        self.dirty = true;
+        self.hir.add_var(name, init_val).0
+    }
+
+    fn add_byte_buf(&mut self, name: &str, data: &[u8]) -> u32 {
+        self.dirty = true;
+        self.hir
+            .add_byte_buf(HirByteBuf::new(name, data.to_vec()))
+            .0
+    }
+
+    #[pyo3(signature = (name, is_main_loop=true))]
+    fn begin_function(&mut self, name: &str, is_main_loop: bool) {
+        self.dirty = true;
+        self.frames.push(OpenControlFrame::Function {
+            name: name.to_string(),
+            is_main_loop,
+            body: Vec::new(),
+        });
+    }
+
+    fn end_function(&mut self) -> PyResult<u32> {
+        match self.frames.pop() {
+            Some(OpenControlFrame::Function {
+                name,
+                is_main_loop,
+                body,
+            }) => {
+                let mut func = HirFunction::new(name, is_main_loop);
+                let mut entry = HirBasicBlock::new("entry");
+                entry.stmts = body;
+                entry.set_terminator(HirTerminator::Return);
+                func.add_block(entry);
+                let fn_id = self.hir.add_function(func);
+                self.dirty = true;
+                Ok(fn_id.0)
+            }
+            _ => Err(PyValueError::new_err("end_function without matching begin_function")),
+        }
+    }
+
+    fn begin_if(&mut self, conditions: Vec<PyCondition>) {
+        self.dirty = true;
+        self.frames.push(OpenControlFrame::IfThen {
+            conditions: conditions.into_iter().map(|c| c.0).collect(),
+            then_body: Vec::new(),
+        });
+    }
+
+    fn end_if(&mut self) -> PyResult<()> {
+        match self.frames.pop() {
+            Some(OpenControlFrame::IfThen {
+                conditions,
+                then_body,
+            }) => {
+                self.active_stmts_mut().push(HirStmt::If {
+                    conditions,
+                    then_body,
+                    else_body: Vec::new(),
+                });
+                Ok(())
+            }
+            _ => Err(PyValueError::new_err("end_if without matching begin_if")),
+        }
+    }
+
+    fn begin_elif(&mut self, conditions: Vec<PyCondition>) -> PyResult<()> {
+        let has_prev_if = matches!(self.active_stmts_mut().last(), Some(HirStmt::If { .. }));
+        if !has_prev_if {
+            return Err(PyValueError::new_err(
+                "elif_ must immediately follow an if_ or elif_ block",
+            ));
+        }
+        self.frames.push(OpenControlFrame::Elif {
+            conditions: conditions.into_iter().map(|c| c.0).collect(),
+            then_body: Vec::new(),
+        });
+        Ok(())
+    }
+
+    fn end_elif(&mut self) -> PyResult<()> {
+        match self.frames.pop() {
+            Some(OpenControlFrame::Elif {
+                conditions,
+                then_body,
+            }) => {
+                let new_if = HirStmt::If {
+                    conditions,
+                    then_body,
+                    else_body: Vec::new(),
+                };
+                attach_to_last_if_else(self.active_stmts_mut(), vec![new_if])
+            }
+            _ => Err(PyValueError::new_err("end_elif without matching begin_elif")),
+        }
+    }
+
+    fn begin_else(&mut self) -> PyResult<()> {
+        let has_prev_if = matches!(self.active_stmts_mut().last(), Some(HirStmt::If { .. }));
+        if !has_prev_if {
+            return Err(PyValueError::new_err(
+                "else_ must immediately follow an if_ or elif_ block",
+            ));
+        }
+        self.frames.push(OpenControlFrame::Else {
+            else_body: Vec::new(),
+        });
+        Ok(())
+    }
+
+    fn end_else(&mut self) -> PyResult<()> {
+        match self.frames.pop() {
+            Some(OpenControlFrame::Else { else_body }) => {
+                attach_to_last_if_else(self.active_stmts_mut(), else_body)
+            }
+            _ => Err(PyValueError::new_err("end_else without matching begin_else")),
+        }
+    }
+
+    fn begin_while(&mut self, conditions: Vec<PyCondition>) {
+        self.dirty = true;
+        self.frames.push(OpenControlFrame::While {
+            conditions: conditions.into_iter().map(|c| c.0).collect(),
+            body: Vec::new(),
+        });
+    }
+
+    fn end_while(&mut self) -> PyResult<()> {
+        match self.frames.pop() {
+            Some(OpenControlFrame::While { conditions, body }) => {
+                self.active_stmts_mut()
+                    .push(HirStmt::While { conditions, body });
+                Ok(())
+            }
+            _ => Err(PyValueError::new_err(
+                "end_while without matching begin_while",
+            )),
+        }
+    }
+
+    fn push_break(&mut self) {
+        self.active_stmts_mut().push(HirStmt::Break);
+    }
+
+    fn push_continue(&mut self) {
+        self.active_stmts_mut().push(HirStmt::Continue);
+    }
+
+    fn push_var_assign(&mut self, var_id: u32, value: i32) {
+        self.active_stmts_mut().push(HirStmt::VarAssignConst {
+            var: VarId(var_id),
+            value,
+        });
+    }
+
+    fn push_var_add(&mut self, var_id: u32, value: i32) {
+        self.active_stmts_mut().push(HirStmt::VarAddConst {
+            var: VarId(var_id),
+            value,
+        });
+    }
+
+    fn push_var_sub(&mut self, var_id: u32, value: i32) {
+        self.active_stmts_mut().push(HirStmt::VarSubConst {
+            var: VarId(var_id),
+            value,
+        });
+    }
+
+    fn push_var_set_mask(&mut self, var_id: u32, modifier: u8, value: i32, mask: u32) -> PyResult<()> {
+        let mod_enum = decode_modifier(modifier)?;
+        self.active_stmts_mut().push(HirStmt::VarSetMaskConst {
+            var: VarId(var_id),
+            modifier: mod_enum,
+            value,
+            mask,
+        });
+        Ok(())
+    }
+
+    fn push_action(&mut self, action: PyAction) {
+        self.active_stmts_mut().push(HirStmt::Action(action.0));
+    }
+
+    #[pyo3(signature = (conditions, actions, label=None, preserved=true))]
+    fn push_trigger(
+        &mut self,
+        conditions: Vec<PyCondition>,
+        actions: Vec<PyAction>,
+        label: Option<String>,
+        preserved: bool,
+    ) {
+        self.active_stmts_mut().push(HirStmt::Trigger {
+            label,
+            conditions: conditions.into_iter().map(|c| c.0).collect(),
+            actions: actions.into_iter().map(|a| a.0).collect(),
+            preserved,
+        });
+    }
+
+    fn dump_hir(&mut self) -> PyResult<String> {
+        self.sync_hir()?;
+        Ok(self.session.dump_hir())
+    }
+
+    fn dump_lir(&mut self) -> PyResult<String> {
+        self.sync_hir()?;
+        self.session.dump_lir().map_err(to_py_err)
+    }
+
+    fn compile(&mut self, output_path: &str) -> PyResult<PyCompilationReport> {
+        self.sync_hir()?;
+        let report = self.session.compile_map(output_path).map_err(to_py_err)?;
+        let vproc_count = self
+            .session
+            .lir_module()
+            .map(|l| l.vproc_count())
+            .unwrap_or(0);
+        Ok(PyCompilationReport {
+            trigger_count: report.trigger_count,
+            byte_buf_count: report.byte_buf_count,
+            vproc_count,
+            payload_offset: report.payload_offset,
+            payload_size: report.payload_size,
+            payload_entry_addr: report.payload_entry_addr,
+            prt_count: report.prt_offsets.len(),
+            ort_count: report.ort_offsets.len(),
+        })
+    }
+}
+
+#[pymodule]
+#[pyo3(name = "eudkit")]
+pub(crate) mod eudkit_mod {
+    #[pymodule_export]
+    use super::{PyAction, PyCompilationReport, PyCompilationSession, PyCondition};
+}

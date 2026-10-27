@@ -23,6 +23,26 @@ pub struct BlockId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ByteBufId(pub u32);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct VarId(pub u32);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirVar {
+    pub id: VarId,
+    pub name: String,
+    pub init_val: i32,
+}
+
+impl HirVar {
+    pub fn new(name: impl Into<String>, init_val: i32) -> Self {
+        Self {
+            id: VarId(0),
+            name: name.into(),
+            init_val,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerId {
     Player1,
@@ -231,6 +251,8 @@ pub enum HirValue {
     Const(i32),
     ByteBufAddress(ByteBufId, u32),
     ByteBufEpd(ByteBufId, i32),
+    VarAddress(VarId),
+    VarEpd(VarId),
     FieldAddress(FieldRef),
     FieldEpd(FieldRef),
 }
@@ -241,6 +263,8 @@ impl fmt::Display for HirValue {
             Self::Const(c) => write!(f, "{c}"),
             Self::ByteBufAddress(id, off) => write!(f, "addr(@buf{}+{})", id.0, off),
             Self::ByteBufEpd(id, off) => write!(f, "epd(@buf{}+{})", id.0, off),
+            Self::VarAddress(id) => write!(f, "addr(@v{})", id.0),
+            Self::VarEpd(id) => write!(f, "epd(@v{})", id.0),
             Self::FieldAddress(fr) => write!(f, "addr({fr})"),
             Self::FieldEpd(fr) => write!(f, "epd({fr})"),
         }
@@ -275,6 +299,12 @@ pub enum StockCondition {
         value: u32,
         mask: u32,
     },
+    VarCmp {
+        var: VarId,
+        comparison: Comparison,
+        value: u32,
+        mask: Option<u32>,
+    },
     Accumulate {
         player: PlayerId,
         comparison: Comparison,
@@ -298,6 +328,122 @@ pub enum StockCondition {
         switch: u8,
         state: SwitchState,
     },
+}
+
+fn invert_cmp_amount(comparison: Comparison, amount: u32) -> Option<(Comparison, u32)> {
+    match comparison {
+        Comparison::AtLeast if amount >= 1 => Some((Comparison::AtMost, amount - 1)),
+        Comparison::AtMost if amount < u32::MAX => Some((Comparison::AtLeast, amount + 1)),
+        Comparison::Exactly if amount == 0 => Some((Comparison::AtLeast, 1)),
+        Comparison::Exactly if amount == u32::MAX => Some((Comparison::AtMost, u32::MAX - 1)),
+        _ => None,
+    }
+}
+
+impl StockCondition {
+    pub fn invert(&self) -> Option<Self> {
+        match *self {
+            Self::Always => Some(Self::Never),
+            Self::Never => Some(Self::Always),
+            Self::Switch { switch, state } => Some(Self::Switch {
+                switch,
+                state: match state {
+                    SwitchState::Set => SwitchState::Cleared,
+                    SwitchState::Cleared => SwitchState::Set,
+                },
+            }),
+            Self::Deaths {
+                player,
+                comparison,
+                amount,
+                unit,
+            } => invert_cmp_amount(comparison, amount).map(|(cmp, amt)| Self::Deaths {
+                player,
+                comparison: cmp,
+                amount: amt,
+                unit,
+            }),
+            Self::DeathsX {
+                player,
+                comparison,
+                amount,
+                unit,
+                mask,
+            } => invert_cmp_amount(comparison, amount).map(|(cmp, amt)| Self::DeathsX {
+                player,
+                comparison: cmp,
+                amount: amt,
+                unit,
+                mask,
+            }),
+            Self::Memory {
+                address,
+                comparison,
+                value,
+            } => invert_cmp_amount(comparison, value).map(|(cmp, val)| Self::Memory {
+                address,
+                comparison: cmp,
+                value: val,
+            }),
+            Self::MemoryX {
+                address,
+                comparison,
+                value,
+                mask,
+            } => invert_cmp_amount(comparison, value).map(|(cmp, val)| Self::MemoryX {
+                address,
+                comparison: cmp,
+                value: val,
+                mask,
+            }),
+            Self::VarCmp {
+                var,
+                comparison,
+                value,
+                mask,
+            } => invert_cmp_amount(comparison, value).map(|(cmp, val)| Self::VarCmp {
+                var,
+                comparison: cmp,
+                value: val,
+                mask,
+            }),
+            Self::Accumulate {
+                player,
+                comparison,
+                amount,
+                resource,
+            } => invert_cmp_amount(comparison, amount).map(|(cmp, amt)| Self::Accumulate {
+                player,
+                comparison: cmp,
+                amount: amt,
+                resource,
+            }),
+            Self::Command {
+                player,
+                comparison,
+                amount,
+                unit,
+            } => invert_cmp_amount(comparison, amount).map(|(cmp, amt)| Self::Command {
+                player,
+                comparison: cmp,
+                amount: amt,
+                unit,
+            }),
+            Self::Bring {
+                player,
+                comparison,
+                amount,
+                unit,
+                location,
+            } => invert_cmp_amount(comparison, amount).map(|(cmp, amt)| Self::Bring {
+                player,
+                comparison: cmp,
+                amount: amt,
+                unit,
+                location,
+            }),
+        }
+    }
 }
 
 impl fmt::Display for StockCondition {
@@ -334,6 +480,22 @@ impl fmt::Display for StockCondition {
             } => write!(
                 f,
                 "MemoryX({address:#010X}, {comparison}, {value}, mask={mask:#010X})"
+            ),
+            Self::VarCmp {
+                var,
+                comparison,
+                value,
+                mask: None,
+            } => write!(f, "VarCmp(@v{}, {comparison}, {value})", var.0),
+            Self::VarCmp {
+                var,
+                comparison,
+                value,
+                mask: Some(mask),
+            } => write!(
+                f,
+                "VarCmp(@v{}, {comparison}, {value}, mask={mask:#010X})",
+                var.0
             ),
             Self::Accumulate {
                 player,
@@ -387,6 +549,12 @@ pub enum StockAction {
         modifier: Modifier,
         value: HirValue,
         mask: u32,
+    },
+    SetVarConst {
+        var: VarId,
+        modifier: Modifier,
+        value: i32,
+        mask: Option<u32>,
     },
     SetField {
         target: FieldRef,
@@ -454,6 +622,22 @@ impl fmt::Display for StockAction {
                 f,
                 "SetMemoryX({address:#010X}, {modifier}, {value}, mask={mask:#010X})"
             ),
+            Self::SetVarConst {
+                var,
+                modifier,
+                value,
+                mask: None,
+            } => write!(f, "SetVarConst(@v{}, {modifier}, {value})", var.0),
+            Self::SetVarConst {
+                var,
+                modifier,
+                value,
+                mask: Some(mask),
+            } => write!(
+                f,
+                "SetVarConst(@v{}, {modifier}, {value}, mask={mask:#010X})",
+                var.0
+            ),
             Self::SetField {
                 target,
                 modifier,
@@ -502,6 +686,35 @@ pub enum HirStmt {
         preserved: bool,
     },
     Action(StockAction),
+    VarAssignConst {
+        var: VarId,
+        value: i32,
+    },
+    VarAddConst {
+        var: VarId,
+        value: i32,
+    },
+    VarSubConst {
+        var: VarId,
+        value: i32,
+    },
+    VarSetMaskConst {
+        var: VarId,
+        modifier: Modifier,
+        value: i32,
+        mask: u32,
+    },
+    If {
+        conditions: Vec<StockCondition>,
+        then_body: Vec<HirStmt>,
+        else_body: Vec<HirStmt>,
+    },
+    While {
+        conditions: Vec<StockCondition>,
+        body: Vec<HirStmt>,
+    },
+    Break,
+    Continue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -603,6 +816,7 @@ pub struct HirModule {
     pub functions: Vec<HirFunction>,
     pub main_loop: Option<FuncId>,
     pub byte_bufs: Vec<HirByteBuf>,
+    pub vars: Vec<HirVar>,
 }
 
 impl HirModule {
@@ -612,7 +826,20 @@ impl HirModule {
             functions: Vec::new(),
             main_loop: None,
             byte_bufs: Vec::new(),
+            vars: Vec::new(),
         }
+    }
+
+    pub fn add_var(&mut self, name: impl Into<String>, init_val: i32) -> VarId {
+        let id = VarId(self.vars.len() as u32);
+        let mut var = HirVar::new(name, init_val);
+        var.id = id;
+        self.vars.push(var);
+        id
+    }
+
+    pub fn var(&self, id: VarId) -> &HirVar {
+        &self.vars[id.0 as usize]
     }
 
     pub fn add_byte_buf(&mut self, mut buf: HirByteBuf) -> ByteBufId {
@@ -632,9 +859,96 @@ impl HirModule {
         id
     }
 
+    fn dump_stmt(out: &mut String, stmt: &HirStmt, indent: usize) {
+        let pad = " ".repeat(indent);
+        match stmt {
+            HirStmt::Trigger {
+                label,
+                conditions,
+                actions,
+                preserved,
+            } => {
+                let lbl = label.as_deref().unwrap_or("anon");
+                let _ = writeln!(out, "{pad}trigger @{lbl} (preserved={preserved}) {{");
+                for c in conditions {
+                    let _ = writeln!(out, "{pad}  cond: {c}");
+                }
+                for a in actions {
+                    let _ = writeln!(out, "{pad}  act:  {a}");
+                }
+                let _ = writeln!(out, "{pad}}}");
+            }
+            HirStmt::Action(act) => {
+                let _ = writeln!(out, "{pad}act: {act}");
+            }
+            HirStmt::VarAssignConst { var, value } => {
+                let _ = writeln!(out, "{pad}@v{} = {value}", var.0);
+            }
+            HirStmt::VarAddConst { var, value } => {
+                let _ = writeln!(out, "{pad}@v{} += {value}", var.0);
+            }
+            HirStmt::VarSubConst { var, value } => {
+                let _ = writeln!(out, "{pad}@v{} -= {value}", var.0);
+            }
+            HirStmt::VarSetMaskConst {
+                var,
+                modifier,
+                value,
+                mask,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "{pad}@v{} [mask={mask:#010X}] {modifier} {value}",
+                    var.0
+                );
+            }
+            HirStmt::If {
+                conditions,
+                then_body,
+                else_body,
+            } => {
+                let cond_strs: Vec<String> = conditions.iter().map(ToString::to_string).collect();
+                let _ = writeln!(out, "{pad}if [{}] {{", cond_strs.join(", "));
+                for s in then_body {
+                    Self::dump_stmt(out, s, indent + 2);
+                }
+                if else_body.is_empty() {
+                    let _ = writeln!(out, "{pad}}}");
+                } else {
+                    let _ = writeln!(out, "{pad}}} else {{");
+                    for s in else_body {
+                        Self::dump_stmt(out, s, indent + 2);
+                    }
+                    let _ = writeln!(out, "{pad}}}");
+                }
+            }
+            HirStmt::While { conditions, body } => {
+                let cond_strs: Vec<String> = conditions.iter().map(ToString::to_string).collect();
+                let _ = writeln!(out, "{pad}while [{}] {{", cond_strs.join(", "));
+                for s in body {
+                    Self::dump_stmt(out, s, indent + 2);
+                }
+                let _ = writeln!(out, "{pad}}}");
+            }
+            HirStmt::Break => {
+                let _ = writeln!(out, "{pad}break");
+            }
+            HirStmt::Continue => {
+                let _ = writeln!(out, "{pad}continue");
+            }
+        }
+    }
+
     pub fn dump_hir(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "module @{} {{", self.name);
+        for var in &self.vars {
+            let _ = writeln!(
+                out,
+                "  var @{} (id=v{}) = {}",
+                var.name, var.id.0, var.init_val
+            );
+        }
         for buf in &self.byte_bufs {
             let _ = writeln!(
                 out,
@@ -655,28 +969,7 @@ impl HirModule {
             for block in &func.blocks {
                 let _ = writeln!(out, "    bb{} (@{}):", block.id.0, block.label);
                 for stmt in &block.stmts {
-                    match stmt {
-                        HirStmt::Trigger {
-                            label,
-                            conditions,
-                            actions,
-                            preserved,
-                        } => {
-                            let lbl = label.as_deref().unwrap_or("anon");
-                            let _ =
-                                writeln!(out, "      trigger @{lbl} (preserved={preserved}) {{");
-                            for c in conditions {
-                                let _ = writeln!(out, "        cond: {c}");
-                            }
-                            for a in actions {
-                                let _ = writeln!(out, "        act:  {a}");
-                            }
-                            let _ = writeln!(out, "      }}");
-                        }
-                        HirStmt::Action(act) => {
-                            let _ = writeln!(out, "      act: {act}");
-                        }
-                    }
+                    Self::dump_stmt(&mut out, stmt, 6);
                 }
                 match &block.terminator {
                     HirTerminator::Jump(target) => {
