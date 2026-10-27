@@ -675,10 +675,16 @@ class AstToHirLowerer:
 
     def _lower_with(self, node: ast.With) -> None:
         for item in node.items:
-            # Check if calling .once() or once object
+            # Check if calling once(...) or session.once(...) or bare once
             is_once = False
-            if isinstance(item.context_expr, ast.Call) and isinstance(item.context_expr.func, ast.Attribute) and item.context_expr.func.attr == "once":
-                is_once = True
+            once_cond_ast = None
+
+            if isinstance(item.context_expr, ast.Call):
+                func = item.context_expr.func
+                if (isinstance(func, ast.Attribute) and func.attr == "once") or (isinstance(func, ast.Name) and func.id == "once"):
+                    is_once = True
+                    if item.context_expr.args and not (len(item.context_expr.args) == 1 and isinstance(item.context_expr.args[0], ast.Constant) and item.context_expr.args[0].value is None):
+                        once_cond_ast = item.context_expr.args[0]
             elif isinstance(item.context_expr, ast.Name) and item.context_expr.id == "once":
                 is_once = True
             else:
@@ -691,7 +697,17 @@ class AstToHirLowerer:
 
             if is_once:
                 guard = self.session.var(1)
-                self.session._raw.begin_if(coerce_conditions(guard._cmp(Exactly, 1), self.session))
+                conds = [guard._cmp(Exactly, 1).to_raw(self.session) if hasattr(guard._cmp(Exactly, 1), "to_raw") else coerce_conditions(guard._cmp(Exactly, 1), self.session)[0]]
+                if once_cond_ast is not None:
+                    evaluated_cond = self.eval_expr(once_cond_ast)
+                    if isinstance(evaluated_cond, (list, tuple)):
+                        for c in coerce_conditions(evaluated_cond, self.session):
+                            conds.append(c)
+                    else:
+                        for c in coerce_conditions([evaluated_cond], self.session):
+                            conds.append(c)
+
+                self.session._raw.begin_if(conds)
                 self.session._raw.push_var_assign(guard.id, 0)
                 self.lower_stmt_list(node.body)
                 self.session._raw.end_if()

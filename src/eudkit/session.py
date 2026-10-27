@@ -200,12 +200,21 @@ class Session:
             _active_builder_session.reset(tok)
 
     @contextlib.contextmanager
-    def once(self) -> Iterator[None]:
-        """Scoped one-time block executed exactly once on startup."""
+    def once(
+        self, conditions: Condition | Sequence[Condition] | None = None
+    ) -> Iterator[None]:
+        """Scoped one-time block executed exactly once (optionally guarded by conditions)."""
         guard = self.var(1)
-        with self.if_(guard == 1):
-            guard.set(0, session=self)
-            yield
+        if conditions is None:
+            with self.if_(guard == 1):
+                guard.set(0, session=self)
+                yield
+        else:
+            cond_list = list(conditions) if isinstance(conditions, (list, tuple)) else [conditions]
+            cond_list.append(guard == 1)
+            with self.if_(cond_list):
+                guard.set(0, session=self)
+                yield
 
     def break_(self) -> None:
         self._raw.push_break()

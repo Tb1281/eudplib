@@ -1536,7 +1536,15 @@ class Player:
 
 
 class _OnceContextManager:
-    """Context manager for with once: / with session.once(): blocks."""
+    """Context manager for with once / with once(cond): blocks."""
+
+    def __init__(self, conditions: Condition | Sequence[Condition] | None = None) -> None:
+        self.conditions = conditions
+
+    def __call__(
+        self, conditions: Condition | Sequence[Condition] | None = None
+    ) -> _OnceContextManager:
+        return _OnceContextManager(conditions)
 
     def __enter__(self) -> None:
         sess = _active_builder_session.get()
@@ -1544,7 +1552,7 @@ class _OnceContextManager:
             raise RuntimeError(
                 "with once: can only be used inside an active eudkit function or session block"
             )
-        self._cm = sess.once()
+        self._cm = sess.once(self.conditions)
         self._cm.__enter__()
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -1553,4 +1561,5 @@ class _OnceContextManager:
 
 
 once = _OnceContextManager()
+
 

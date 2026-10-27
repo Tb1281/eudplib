@@ -457,13 +457,28 @@ export class MapString {
 }
 
 /**
- * Execute a block of logic exactly once on startup.
+ * Execute a block of logic exactly once (optionally guarded by a condition, or immediately if null/omitted).
  */
-export function once(callback: () => void): void {
+export function once(
+  conditionOrCallback: Condition | null | undefined | (() => void),
+  maybeCallback?: () => void
+): void {
+  const callback =
+    typeof conditionOrCallback === "function" ? conditionOrCallback : maybeCallback;
+  const condition =
+    typeof conditionOrCallback === "function" ? null : conditionOrCallback;
+
   const flag = var_(0);
-  if (flag.exactly(0)) {
-    flag.setTo(1);
-    callback();
+  if (condition) {
+    if (flag.exactly(0) && condition) {
+      flag.setTo(1);
+      callback?.();
+    }
+  } else {
+    if (flag.exactly(0)) {
+      flag.setTo(1);
+      callback?.();
+    }
   }
 }
 
