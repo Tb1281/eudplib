@@ -505,6 +505,15 @@ fn actions_cannot_mutate_condition(actions: &[StockAction], cond: &StockConditio
             StockCondition::Command { .. } | StockCondition::Bring { .. }
         ),
         StockAction::SetResources { .. } => !matches!(cond, StockCondition::Accumulate { .. }),
+        StockAction::SetScore { .. } => !matches!(cond, StockCondition::Score { .. }),
+        StockAction::SetSwitch { switch: s1, .. } => match cond {
+            StockCondition::Switch { switch: s2, .. } => s1 != s2,
+            _ => true,
+        },
+        StockAction::MoveLocation { location: l1, .. } => match cond {
+            StockCondition::Bring { location: l2, .. } => l1 != l2,
+            _ => true,
+        },
         StockAction::SetVarConst { var: act_var, .. } => match cond {
             StockCondition::VarCmp { var: cond_var, .. } => act_var != cond_var,
             _ => true,

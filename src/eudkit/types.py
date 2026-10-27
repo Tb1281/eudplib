@@ -64,9 +64,22 @@ Ore = 0
 Gas = 1
 OreAndGas = 2
 
-# Switch states
+# Switch states & actions
 Set = 2
 Cleared = 3
+Clear = 5
+Toggle = 6
+Random = 7
+
+# Score types
+Total = 0
+Units = 1
+Buildings = 2
+UnitsAndBuildings = 3
+Kills = 4
+Razings = 5
+KillsAndRazings = 6
+Custom = 7
 
 DEATHS_BASE_ADDR = 0x0058A364
 
@@ -825,6 +838,28 @@ def Switch(switch: int | str, state: int = Set) -> Condition:
     )
 
 
+def ElapsedTime(comparison: int, seconds: int) -> Condition:
+    return Condition(
+        [
+            lambda s: _rust_eudkit.RawCondition.elapsed_time(
+                int(comparison), int(seconds) & 0xFFFFFFFF
+            )
+        ]
+    )
+
+
+def Score(
+    player: int, score_type: int, comparison: int, amount: int
+) -> Condition:
+    return Condition(
+        [
+            lambda s: _rust_eudkit.RawCondition.score(
+                int(player), int(score_type), int(comparison), int(amount) & 0xFFFFFFFF
+            )
+        ]
+    )
+
+
 # --- Stock Actions ---
 
 
@@ -980,6 +1015,9 @@ class MapString:
                 self._ensure_registered(s).id, bool(always)
             )
         )
+
+    display_text = display
+    Display = display
 
     def format(self, *args: Any) -> ActionSpec:
         """Formats dynamic expressions into this MapString buffer."""
@@ -1169,6 +1207,37 @@ def KillUnitAt(
 def MinimapPing(location: int | str) -> ActionSpec:
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.minimap_ping(_resolve_location(s, location))
+    )
+
+
+def SetScore(
+    player: int, modifier: int, amount: int, score_type: int = Custom
+) -> ActionSpec:
+    return ActionSpec(
+        lambda _s: _rust_eudkit.RawAction.set_score(
+            int(player), int(modifier), int(amount) & 0xFFFFFFFF, int(score_type)
+        )
+    )
+
+
+def SetSwitch(switch: int | str, state: int) -> ActionSpec:
+    return ActionSpec(
+        lambda s: _rust_eudkit.RawAction.set_switch(
+            _resolve_switch(s, switch), int(state)
+        )
+    )
+
+
+def MoveLocation(
+    location: int | str, unit: int | str, player: int, dest_location: int | str
+) -> ActionSpec:
+    return ActionSpec(
+        lambda s: _rust_eudkit.RawAction.move_location(
+            _resolve_location(s, location),
+            _resolve_unit(s, unit),
+            int(player),
+            _resolve_location(s, dest_location),
+        )
     )
 
 

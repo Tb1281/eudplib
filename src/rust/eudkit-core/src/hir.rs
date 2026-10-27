@@ -208,6 +208,25 @@ impl SwitchState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchAction {
+    Set,
+    Clear,
+    Toggle,
+    Random,
+}
+
+impl SwitchAction {
+    pub const fn encode(self) -> u8 {
+        match self {
+            Self::Set => 4,
+            Self::Clear => 5,
+            Self::Toggle => 6,
+            Self::Random => 11,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Modifier {
     SetTo,
     Add,
@@ -620,6 +639,16 @@ pub enum StockCondition {
         switch: u8,
         state: SwitchState,
     },
+    ElapsedTime {
+        comparison: Comparison,
+        seconds: u32,
+    },
+    Score {
+        player: PlayerId,
+        score_type: u8,
+        comparison: Comparison,
+        amount: u32,
+    },
     IsUserCp,
 }
 
@@ -734,6 +763,24 @@ impl StockCondition {
                 amount: amt,
                 unit,
                 location,
+            }),
+            Self::ElapsedTime {
+                comparison,
+                seconds,
+            } => invert_cmp_amount(comparison, seconds).map(|(cmp, s)| Self::ElapsedTime {
+                comparison: cmp,
+                seconds: s,
+            }),
+            Self::Score {
+                player,
+                score_type,
+                comparison,
+                amount,
+            } => invert_cmp_amount(comparison, amount).map(|(cmp, amt)| Self::Score {
+                player,
+                score_type,
+                comparison: cmp,
+                amount: amt,
             }),
             Self::DeathsDynamic { .. }
             | Self::MemoryDynamic { .. }
@@ -1032,6 +1079,8 @@ impl fmt::Display for StockCondition {
                 "Bring({player}, {comparison}, {amount}, unit={unit}, loc={location})"
             ),
             Self::Switch { switch, state } => write!(f, "Switch({switch}, {state:?})"),
+            Self::ElapsedTime { comparison, seconds } => write!(f, "ElapsedTime({comparison}, {seconds}s)"),
+            Self::Score { player, score_type, comparison, amount } => write!(f, "Score({player}, type={score_type}, {comparison}, {amount})"),
             Self::IsUserCp => write!(f, "IsUserCP()"),
         }
     }
@@ -1201,6 +1250,22 @@ pub enum StockAction {
     MinimapPing {
         location: u32,
     },
+    SetScore {
+        player: PlayerId,
+        modifier: Modifier,
+        amount: u32,
+        score_type: u8,
+    },
+    SetSwitch {
+        switch: u8,
+        action: SwitchAction,
+    },
+    MoveLocation {
+        location: u32,
+        unit: u16,
+        player: PlayerId,
+        dest_location: u32,
+    },
     Comment {
         text: String,
     },
@@ -1353,6 +1418,9 @@ impl fmt::Display for StockAction {
                 player,
             } => write!(f, "KillUnitAt({count}, unit={unit}, loc={location}, {player})"),
             Self::MinimapPing { location } => write!(f, "MinimapPing(loc={location})"),
+            Self::SetScore { player, modifier, amount, score_type } => write!(f, "SetScore({player}, {modifier}, {amount}, type={score_type})"),
+            Self::SetSwitch { switch, action } => write!(f, "SetSwitch({switch}, {action:?})"),
+            Self::MoveLocation { location, unit, player, dest_location } => write!(f, "MoveLocation(loc={location}, unit={unit}, {player}, dest={dest_location})"),
             Self::Comment { text } => write!(f, "Comment({text:?})"),
             Self::PreserveTrigger => write!(f, "PreserveTrigger()"),
             Self::Victory => write!(f, "Victory()"),

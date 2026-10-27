@@ -1,7 +1,7 @@
 use eudkit_core::hir::{
     parse_format_template, Comparison, FuncId, FuncPtrId, HirBinOp, HirByteBuf, HirExpr,
     HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget, ResourceType, StockAction,
-    StockCondition, SwitchState, VarId,
+    StockCondition, SwitchAction, SwitchState, VarId,
 };
 use eudkit_core::{CompilationConfig, CompilationSession, EudkitError, HirBuilder};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
@@ -58,6 +58,18 @@ fn decode_switch_state(code: u8) -> PyResult<SwitchState> {
         3 => Ok(SwitchState::Cleared),
         other => Err(PyValueError::new_err(format!(
             "invalid switch state code: {other}"
+        ))),
+    }
+}
+
+fn decode_switch_action(code: u8) -> PyResult<SwitchAction> {
+    match code {
+        4 | 2 => Ok(SwitchAction::Set),
+        5 | 3 => Ok(SwitchAction::Clear),
+        6 => Ok(SwitchAction::Toggle),
+        11 | 7 => Ok(SwitchAction::Random),
+        other => Err(PyValueError::new_err(format!(
+            "invalid switch action code: {other}"
         ))),
     }
 }
@@ -350,6 +362,24 @@ impl PyCondition {
         }))
     }
 
+    #[staticmethod]
+    fn elapsed_time(comparison: u8, seconds: u32) -> PyResult<Self> {
+        Ok(Self(StockCondition::ElapsedTime {
+            comparison: decode_comparison(comparison)?,
+            seconds,
+        }))
+    }
+
+    #[staticmethod]
+    fn score(player: i32, score_type: u8, comparison: u8, amount: u32) -> PyResult<Self> {
+        Ok(Self(StockCondition::Score {
+            player: decode_player(player),
+            score_type,
+            comparison: decode_comparison(comparison)?,
+            amount,
+        }))
+    }
+
     fn __repr__(&self) -> String {
         format!("{}", self.0)
     }
@@ -559,6 +589,34 @@ impl PyAction {
     #[staticmethod]
     fn minimap_ping(location: u32) -> Self {
         Self(StockAction::MinimapPing { location })
+    }
+
+    #[staticmethod]
+    fn set_score(player: i32, modifier: u8, amount: u32, score_type: u8) -> PyResult<Self> {
+        Ok(Self(StockAction::SetScore {
+            player: decode_player(player),
+            modifier: decode_modifier(modifier)?,
+            amount,
+            score_type,
+        }))
+    }
+
+    #[staticmethod]
+    fn set_switch(switch: u8, action: u8) -> PyResult<Self> {
+        Ok(Self(StockAction::SetSwitch {
+            switch,
+            action: decode_switch_action(action)?,
+        }))
+    }
+
+    #[staticmethod]
+    fn move_location(location: u32, unit: u16, player: i32, dest_location: u32) -> Self {
+        Self(StockAction::MoveLocation {
+            location,
+            unit,
+            player: decode_player(player),
+            dest_location,
+        })
     }
 
     #[staticmethod]

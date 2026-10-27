@@ -2,7 +2,7 @@ use crate::error::{EudkitTsError, Result};
 use eudkit_core::hir::{
     epd, parse_format_template, CmpOp, Comparison, HirBinOp, HirBuilder, HirExpr,
     HirModule, HirStmt, HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget,
-    ReactiveRule, ResourceType, StockAction, StockCondition, VarId,
+    ReactiveRule, ResourceType, StockAction, StockCondition, SwitchAction, VarId,
 };
 use eudkit_core::map_context::MapContext;
 use oxc_allocator::Allocator;
@@ -1278,6 +1278,26 @@ impl<'a> TsCompiler<'a> {
                     resource: res,
                 }))
             }
+            "ElapsedTime" => {
+                let cmp = self.resolve_comparison(call.arguments[0].as_expression().unwrap())?;
+                let seconds = self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u32;
+                Ok(Some(StockCondition::ElapsedTime {
+                    comparison: cmp,
+                    seconds,
+                }))
+            }
+            "Score" => {
+                let p = self.eval_const_expr(call.arguments[0].as_expression().unwrap())?;
+                let score_type = self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u8;
+                let cmp = self.resolve_comparison(call.arguments[2].as_expression().unwrap())?;
+                let amt = self.eval_const_expr(call.arguments[3].as_expression().unwrap())? as u32;
+                Ok(Some(StockCondition::Score {
+                    player: PlayerId::from_player_slot(p as u8),
+                    score_type,
+                    comparison: cmp,
+                    amount: amt,
+                }))
+            }
             _ => Ok(None),
         }
     }
@@ -1565,6 +1585,46 @@ impl<'a> TsCompiler<'a> {
                 let loc =
                     self.resolve_location_id(call.arguments[0].as_expression().unwrap())?;
                 Ok(Some(StockAction::MinimapPing { location: loc }))
+            }
+            "SetScore" => {
+                let p = self.eval_const_expr(call.arguments[0].as_expression().unwrap())?;
+                let modifier = self.resolve_modifier(call.arguments[1].as_expression().unwrap())?;
+                let amount = self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u32;
+                let score_type = if let Some(arg3) = call.arguments.get(3).and_then(|a| a.as_expression()) {
+                    self.eval_const_expr(arg3)? as u8
+                } else {
+                    0
+                };
+                Ok(Some(StockAction::SetScore {
+                    player: PlayerId::from_player_slot(p as u8),
+                    modifier,
+                    amount,
+                    score_type,
+                }))
+            }
+            "SetSwitch" => {
+                let sw = self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
+                let action_code = self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u8;
+                let action = match action_code {
+                    4 | 2 => SwitchAction::Set,
+                    5 | 3 => SwitchAction::Clear,
+                    6 => SwitchAction::Toggle,
+                    11 | 7 => SwitchAction::Random,
+                    _ => SwitchAction::Set,
+                };
+                Ok(Some(StockAction::SetSwitch { switch: sw, action }))
+            }
+            "MoveLocation" => {
+                let loc = self.resolve_location_id(call.arguments[0].as_expression().unwrap())?;
+                let unit = self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
+                let player = self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u8;
+                let dest_loc = self.resolve_location_id(call.arguments[3].as_expression().unwrap())?;
+                Ok(Some(StockAction::MoveLocation {
+                    location: loc,
+                    unit,
+                    player: PlayerId::from_player_slot(player),
+                    dest_location: dest_loc,
+                }))
             }
             "Comment" => {
                 let text = if let Some(Expression::StringLiteral(slit)) =
