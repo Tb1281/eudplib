@@ -1,6 +1,8 @@
 use crate::error::{EudkitError, Result};
 use crate::hir::epd;
-use crate::lir::{LirAction, LirCondition, LirModule, LirObject, LirTrigger, ValueExpr};
+use crate::lir::{
+    LirAction, LirCondition, LirModule, LirObject, LirTrigger, LirVProcBuffer, ValueExpr,
+};
 
 #[derive(Debug, Clone, Default)]
 struct OccupationBuilder {
@@ -95,6 +97,34 @@ impl OccupationBuilder {
         self.occup1();
     }
 
+    fn write_vproc_buffer(&mut self, slot_count: usize) {
+        for _ in 0..4 {
+            self.push(true); // nextptr
+            self.write_space(15);
+            self.occup1(); // nocond
+            self.write_space(52);
+        }
+        self.push(true); // nextptr (slot 4)
+        self.write_space(15);
+        self.occup1(); // nocond (slot 4)
+        self.write_space(16);
+
+        // 72 * slot_count bytes of repeating action/nextptr blocks
+        self.write_bytes_len(72 * slot_count);
+
+        self.write_space(32);
+        self.push(true); // flags
+        self.write_space(27);
+        self.occup1(); // currentAction
+
+        for _ in 0..27 {
+            self.write_space(40);
+            self.push(true); // flags
+            self.write_space(27);
+            self.occup1(); // currentAction
+        }
+    }
+
     fn finish(mut self) -> Vec<i32> {
         if self.suboccupidx > 0 {
             self.push(self.suboccupmap);
@@ -107,6 +137,15 @@ impl OccupationBuilder {
 pub fn trigger_occupation_map(condition_count: usize, action_count: usize) -> Vec<i32> {
     let mut builder = OccupationBuilder::new();
     builder.write_trigger(condition_count, action_count);
+    builder.finish()
+}
+
+pub fn vproc_buffer_occupation_map(slot_count: usize) -> Vec<i32> {
+    if slot_count == 0 {
+        return Vec::new();
+    }
+    let mut builder = OccupationBuilder::new();
+    builder.write_vproc_buffer(slot_count);
     builder.finish()
 }
 
@@ -296,6 +335,69 @@ impl PayloadWriter {
         debug_assert_eq!(self.datacur - start, 2408);
         Ok(())
     }
+
+    fn write_vproc_buffer(&mut self, vbuf: &LirVProcBuffer, object_offsets: &[u32]) -> Result<()> {
+        if vbuf.slots.is_empty() {
+            return Ok(());
+        }
+        let start = self.datacur;
+        let slot_count = vbuf.slots.len();
+
+        // First 5 nextptr + nocond header blocks (4 * 72 + 36 = 324 bytes)
+        for i in 0..5 {
+            let nptr = vbuf
+                .slots
+                .get(i)
+                .map(|s| s.next_ptr)
+                .unwrap_or(ValueExpr::Const(0));
+            self.write_expr(nptr, object_offsets)?;
+            self.write_space(15);
+            self.write_u8(0); // nocond = 0
+            if i < 4 {
+                self.write_space(52);
+            } else {
+                self.write_space(16);
+            }
+        }
+        debug_assert_eq!(self.datacur - start, 324);
+
+        // 72 * slot_count repeating action/nextptr blocks
+        for (i, slot) in vbuf.slots.iter().enumerate() {
+            let blk_start = self.datacur;
+            self.write_expr(slot.mask, object_offsets)?; // +0..+4: mask
+            self.write_bytes(&[0u8; 12]); // +4..+16: strid, wavid, time (and nocond=0 for slot i-4)
+            self.write_expr(slot.dest, object_offsets)?; // +16..+20: player1 (dest EPD)
+            self.write_expr(slot.value, object_offsets)?; // +20..+24: player2 (value)
+            let mod_dword = ((slot.modifier.encode() as u32) << 24) | 0x002D_0000;
+            self.write_u32(mod_dword); // +24..+28: unitid=0, acttype=45 (SetDeaths), amount=modifier
+            self.write_bytes(b"\x00\x00SC"); // +28..+32: flags=0, pad=0, eudx="SC"
+            self.write_u32(4); // +32..+36: flags=4 (PRESERVE_TRIGGER) for slot i-28
+            let next_slot_nptr = vbuf
+                .slots
+                .get(i + 5)
+                .map(|s| s.next_ptr)
+                .unwrap_or(ValueExpr::Const(0));
+            self.write_expr(next_slot_nptr, object_offsets)?; // +36..+40: nextptr for slot i+5
+            self.write_bytes(&[0u8; 32]); // +40..+72: zeroed (includes nocond=0 for slot i+5, act1 acttype=0 for slot i, currentAction=0 for slot i-28)
+            debug_assert_eq!(self.datacur - blk_start, 72);
+        }
+
+        // Trailing footer (2008 bytes)
+        self.write_space(32);
+        self.write_u32(4); // flags = 4
+        self.write_space(27);
+        self.write_u8(0); // currentAction = 0
+
+        for _ in 0..27 {
+            self.write_space(40);
+            self.write_u32(4); // flags = 4
+            self.write_space(27);
+            self.write_u8(0); // currentAction = 0
+        }
+
+        debug_assert_eq!(self.datacur - start, 2404 + 72 * (slot_count - 1));
+        Ok(())
+    }
 }
 
 pub fn evaluate_value_expr(expr: ValueExpr, object_offsets: &[u32]) -> Result<(i32, i32)> {
@@ -323,20 +425,20 @@ pub fn evaluate_value_expr(expr: ValueExpr, object_offsets: &[u32]) -> Result<(i
             let base = *object_offsets.get(fr.object.0 as usize).ok_or_else(|| {
                 EudkitError::Allocation(format!("invalid ObjectId {}", fr.object.0))
             })?;
-            let addr = base.wrapping_add(fr.byte_offset());
-            Ok((addr as i32, 4))
+            let addr = (base as i32).wrapping_add(fr.signed_byte_offset());
+            Ok((addr, 4))
         }
         ValueExpr::FieldEpd(fr) => {
             let base = *object_offsets.get(fr.object.0 as usize).ok_or_else(|| {
                 EudkitError::Allocation(format!("invalid ObjectId {}", fr.object.0))
             })?;
-            let addr = base.wrapping_add(fr.byte_offset());
-            if addr % 4 != 0 {
+            let addr = (base as i32).wrapping_add(fr.signed_byte_offset());
+            if addr.rem_euclid(4) != 0 {
                 return Err(EudkitError::Allocation(format!(
                     "FieldEpd requires 4-byte aligned field, got offset {addr}"
                 )));
             }
-            Ok((epd(addr), 1))
+            Ok((epd(addr as u32), 1))
         }
     }
 }
@@ -347,6 +449,9 @@ pub fn allocate_lir_module(lir: &LirModule) -> Result<AllocatedPayload> {
         match obj {
             LirObject::Trigger(t) => {
                 occup_maps.push(trigger_occupation_map(t.conditions.len(), t.actions.len()));
+            }
+            LirObject::VProcBuffer(vb) => {
+                occup_maps.push(vproc_buffer_occupation_map(vb.slots.len()));
             }
             LirObject::ByteBuf(b) => {
                 occup_maps.push(byte_buf_occupation_map(b.data.len()));
@@ -361,6 +466,7 @@ pub fn allocate_lir_module(lir: &LirModule) -> Result<AllocatedPayload> {
         writer.seek(object_offsets[idx] as usize);
         match obj {
             LirObject::Trigger(t) => writer.write_trigger(t, &object_offsets)?,
+            LirObject::VProcBuffer(vb) => writer.write_vproc_buffer(vb, &object_offsets)?,
             LirObject::ByteBuf(b) => writer.write_bytes(&b.data),
         }
     }

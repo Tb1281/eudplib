@@ -271,6 +271,243 @@ impl fmt::Display for HirValue {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HirUnaryOp {
+    Neg,
+    BitNot,
+}
+
+impl fmt::Display for HirUnaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Neg => write!(f, "-"),
+            Self::BitNot => write!(f, "~"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HirBinOp {
+    Add,
+    Sub,
+    SubSat,
+    Mul,
+    Div,
+    Rem,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+}
+
+impl fmt::Display for HirBinOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Add => write!(f, "+"),
+            Self::Sub => write!(f, "-"),
+            Self::SubSat => write!(f, "-_sat"),
+            Self::Mul => write!(f, "*"),
+            Self::Div => write!(f, "//"),
+            Self::Rem => write!(f, "%"),
+            Self::BitAnd => write!(f, "&"),
+            Self::BitOr => write!(f, "|"),
+            Self::BitXor => write!(f, "^"),
+            Self::Shl => write!(f, "<<"),
+            Self::Shr => write!(f, ">>"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HirExpr {
+    Const(i32),
+    Var(VarId),
+    UnaryOp {
+        op: HirUnaryOp,
+        operand: Box<HirExpr>,
+    },
+    BinOp {
+        op: HirBinOp,
+        lhs: Box<HirExpr>,
+        rhs: Box<HirExpr>,
+    },
+}
+
+impl HirExpr {
+    pub fn fold_constants(&self) -> Self {
+        match self {
+            Self::Const(c) => Self::Const(*c),
+            Self::Var(v) => Self::Var(*v),
+            Self::UnaryOp { op, operand } => {
+                let inner = operand.fold_constants();
+                if let Self::Const(c) = inner {
+                    let cu = c as u32;
+                    let res = match op {
+                        HirUnaryOp::Neg => cu.wrapping_neg(),
+                        HirUnaryOp::BitNot => !cu,
+                    };
+                    return Self::Const(res as i32);
+                }
+                if let Self::UnaryOp {
+                    op: inner_op,
+                    operand: inner_operand,
+                } = &inner
+                {
+                    if op == inner_op {
+                        return (**inner_operand).clone();
+                    }
+                }
+                Self::UnaryOp {
+                    op: *op,
+                    operand: Box::new(inner),
+                }
+            }
+            Self::BinOp { op, lhs, rhs } => {
+                let l = lhs.fold_constants();
+                let r = rhs.fold_constants();
+                if let (Self::Const(lc), Self::Const(rc)) = (&l, &r) {
+                    let lu = *lc as u32;
+                    let ru = *rc as u32;
+                    let res = match op {
+                        HirBinOp::Add => lu.wrapping_add(ru),
+                        HirBinOp::Sub => lu.wrapping_sub(ru),
+                        HirBinOp::SubSat => lu.saturating_sub(ru),
+                        HirBinOp::Mul => lu.wrapping_mul(ru),
+                        HirBinOp::Div => {
+                            if ru == 0 {
+                                u32::MAX
+                            } else {
+                                lu / ru
+                            }
+                        }
+                        HirBinOp::Rem => {
+                            if ru == 0 {
+                                lu
+                            } else {
+                                lu % ru
+                            }
+                        }
+                        HirBinOp::BitAnd => lu & ru,
+                        HirBinOp::BitOr => lu | ru,
+                        HirBinOp::BitXor => lu ^ ru,
+                        HirBinOp::Shl => {
+                            if ru >= 32 {
+                                0
+                            } else {
+                                lu << ru
+                            }
+                        }
+                        HirBinOp::Shr => {
+                            if ru >= 32 {
+                                0
+                            } else {
+                                lu >> ru
+                            }
+                        }
+                    };
+                    return Self::Const(res as i32);
+                }
+
+                // Algebraic simplifications with one constant operand
+                match (op, &l, &r) {
+                    (HirBinOp::Add, _, Self::Const(0)) => return l,
+                    (HirBinOp::Add, Self::Const(0), _) => return r,
+                    (HirBinOp::Sub, _, Self::Const(0)) => return l,
+                    (HirBinOp::Sub, Self::Const(0), _) => {
+                        return Self::UnaryOp {
+                            op: HirUnaryOp::Neg,
+                            operand: Box::new(r),
+                        };
+                    }
+                    (HirBinOp::Sub, Self::Var(v1), Self::Var(v2)) if v1 == v2 => {
+                        return Self::Const(0);
+                    }
+                    (HirBinOp::SubSat, _, Self::Const(0)) => return l,
+                    (HirBinOp::SubSat, Self::Const(0), _) => return Self::Const(0),
+                    (HirBinOp::SubSat, Self::Var(v1), Self::Var(v2)) if v1 == v2 => {
+                        return Self::Const(0);
+                    }
+                    (HirBinOp::Mul, _, Self::Const(0)) | (HirBinOp::Mul, Self::Const(0), _) => {
+                        return Self::Const(0);
+                    }
+                    (HirBinOp::Mul, _, Self::Const(1)) => return l,
+                    (HirBinOp::Mul, Self::Const(1), _) => return r,
+                    (HirBinOp::Mul, _, Self::Const(c)) if (*c as u32).is_power_of_two() => {
+                        let k = (*c as u32).trailing_zeros();
+                        return Self::BinOp {
+                            op: HirBinOp::Shl,
+                            lhs: Box::new(l),
+                            rhs: Box::new(Self::Const(k as i32)),
+                        };
+                    }
+                    (HirBinOp::Mul, Self::Const(c), _) if (*c as u32).is_power_of_two() => {
+                        let k = (*c as u32).trailing_zeros();
+                        return Self::BinOp {
+                            op: HirBinOp::Shl,
+                            lhs: Box::new(r),
+                            rhs: Box::new(Self::Const(k as i32)),
+                        };
+                    }
+                    (HirBinOp::Div, _, Self::Const(1)) => return l,
+                    (HirBinOp::Div, _, Self::Const(c)) if (*c as u32).is_power_of_two() => {
+                        let k = (*c as u32).trailing_zeros();
+                        return Self::BinOp {
+                            op: HirBinOp::Shr,
+                            lhs: Box::new(l),
+                            rhs: Box::new(Self::Const(k as i32)),
+                        };
+                    }
+                    (HirBinOp::Rem, _, Self::Const(1)) => return Self::Const(0),
+                    (HirBinOp::Rem, _, Self::Const(c)) if (*c as u32).is_power_of_two() => {
+                        let mask = (*c as u32) - 1;
+                        return Self::BinOp {
+                            op: HirBinOp::BitAnd,
+                            lhs: Box::new(l),
+                            rhs: Box::new(Self::Const(mask as i32)),
+                        };
+                    }
+                    (HirBinOp::BitAnd, _, Self::Const(0))
+                    | (HirBinOp::BitAnd, Self::Const(0), _) => return Self::Const(0),
+                    (HirBinOp::BitAnd, _, Self::Const(-1)) => return l,
+                    (HirBinOp::BitAnd, Self::Const(-1), _) => return r,
+                    (HirBinOp::BitOr, _, Self::Const(0)) => return l,
+                    (HirBinOp::BitOr, Self::Const(0), _) => return r,
+                    (HirBinOp::BitOr, _, Self::Const(-1))
+                    | (HirBinOp::BitOr, Self::Const(-1), _) => return Self::Const(-1),
+                    (HirBinOp::BitXor, _, Self::Const(0)) => return l,
+                    (HirBinOp::BitXor, Self::Const(0), _) => return r,
+                    (HirBinOp::BitXor, Self::Var(v1), Self::Var(v2)) if v1 == v2 => {
+                        return Self::Const(0);
+                    }
+                    (HirBinOp::Shl | HirBinOp::Shr, _, Self::Const(0)) => return l,
+                    (HirBinOp::Shl | HirBinOp::Shr, _, Self::Const(c)) if (*c as u32) >= 32 => {
+                        return Self::Const(0);
+                    }
+                    _ => {}
+                }
+
+                Self::BinOp {
+                    op: *op,
+                    lhs: Box::new(l),
+                    rhs: Box::new(r),
+                }
+            }
+        }
+    }
+}
+
+impl fmt::Display for HirExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Const(c) => write!(f, "{c}"),
+            Self::Var(v) => write!(f, "@v{}", v.0),
+            Self::UnaryOp { op, operand } => write!(f, "({op}{operand})"),
+            Self::BinOp { op, lhs, rhs } => write!(f, "({lhs} {op} {rhs})"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StockCondition {
     Always,
@@ -288,6 +525,13 @@ pub enum StockCondition {
         unit: u16,
         mask: u32,
     },
+    DeathsDynamic {
+        player: HirExpr,
+        comparison: Comparison,
+        amount: HirExpr,
+        unit: u16,
+        mask: Option<u32>,
+    },
     Memory {
         address: u32,
         comparison: Comparison,
@@ -299,11 +543,22 @@ pub enum StockCondition {
         value: u32,
         mask: u32,
     },
+    MemoryDynamic {
+        address: u32,
+        comparison: Comparison,
+        value: HirExpr,
+        mask: Option<u32>,
+    },
     VarCmp {
         var: VarId,
         comparison: Comparison,
         value: u32,
         mask: Option<u32>,
+    },
+    ExprCmp {
+        lhs: HirExpr,
+        comparison: Comparison,
+        rhs: HirExpr,
     },
     Accumulate {
         player: PlayerId,
@@ -442,6 +697,7 @@ impl StockCondition {
                 unit,
                 location,
             }),
+            Self::DeathsDynamic { .. } | Self::MemoryDynamic { .. } | Self::ExprCmp { .. } => None,
         }
     }
 }
@@ -467,6 +723,26 @@ impl fmt::Display for StockCondition {
                 f,
                 "DeathsX({player}, {comparison}, {amount}, unit={unit}, mask={mask:#010X})"
             ),
+            Self::DeathsDynamic {
+                player,
+                comparison,
+                amount,
+                unit,
+                mask: None,
+            } => write!(
+                f,
+                "DeathsDynamic({player}, {comparison}, {amount}, unit={unit})"
+            ),
+            Self::DeathsDynamic {
+                player,
+                comparison,
+                amount,
+                unit,
+                mask: Some(mask),
+            } => write!(
+                f,
+                "DeathsDynamic({player}, {comparison}, {amount}, unit={unit}, mask={mask:#010X})"
+            ),
             Self::Memory {
                 address,
                 comparison,
@@ -480,6 +756,24 @@ impl fmt::Display for StockCondition {
             } => write!(
                 f,
                 "MemoryX({address:#010X}, {comparison}, {value}, mask={mask:#010X})"
+            ),
+            Self::MemoryDynamic {
+                address,
+                comparison,
+                value,
+                mask: None,
+            } => write!(
+                f,
+                "MemoryDynamic({address:#010X}, {comparison}, {value})"
+            ),
+            Self::MemoryDynamic {
+                address,
+                comparison,
+                value,
+                mask: Some(mask),
+            } => write!(
+                f,
+                "MemoryDynamic({address:#010X}, {comparison}, {value}, mask={mask:#010X})"
             ),
             Self::VarCmp {
                 var,
@@ -497,6 +791,11 @@ impl fmt::Display for StockCondition {
                 "VarCmp(@v{}, {comparison}, {value}, mask={mask:#010X})",
                 var.0
             ),
+            Self::ExprCmp {
+                lhs,
+                comparison,
+                rhs,
+            } => write!(f, "ExprCmp({lhs}, {comparison}, {rhs})"),
             Self::Accumulate {
                 player,
                 comparison,
@@ -539,6 +838,13 @@ pub enum StockAction {
         unit: u16,
         mask: u32,
     },
+    SetDeathsDynamic {
+        player: HirExpr,
+        modifier: Modifier,
+        value: HirExpr,
+        unit: u16,
+        mask: Option<u32>,
+    },
     SetMemory {
         address: u32,
         modifier: Modifier,
@@ -550,6 +856,12 @@ pub enum StockAction {
         value: HirValue,
         mask: u32,
     },
+    SetMemoryDynamic {
+        address: u32,
+        modifier: Modifier,
+        value: HirExpr,
+        mask: Option<u32>,
+    },
     SetVarConst {
         var: VarId,
         modifier: Modifier,
@@ -560,6 +872,12 @@ pub enum StockAction {
         target: FieldRef,
         modifier: Modifier,
         value: HirValue,
+    },
+    SetFieldDynamic {
+        target: FieldRef,
+        modifier: Modifier,
+        value: HirExpr,
+        mask: Option<u32>,
     },
     SetResources {
         player: PlayerId,
@@ -608,6 +926,26 @@ impl fmt::Display for StockAction {
                 f,
                 "SetDeathsX({player}, {modifier}, {value}, unit={unit}, mask={mask:#010X})"
             ),
+            Self::SetDeathsDynamic {
+                player,
+                modifier,
+                value,
+                unit,
+                mask: None,
+            } => write!(
+                f,
+                "SetDeathsDynamic({player}, {modifier}, {value}, unit={unit})"
+            ),
+            Self::SetDeathsDynamic {
+                player,
+                modifier,
+                value,
+                unit,
+                mask: Some(mask),
+            } => write!(
+                f,
+                "SetDeathsDynamic({player}, {modifier}, {value}, unit={unit}, mask={mask:#010X})"
+            ),
             Self::SetMemory {
                 address,
                 modifier,
@@ -621,6 +959,24 @@ impl fmt::Display for StockAction {
             } => write!(
                 f,
                 "SetMemoryX({address:#010X}, {modifier}, {value}, mask={mask:#010X})"
+            ),
+            Self::SetMemoryDynamic {
+                address,
+                modifier,
+                value,
+                mask: None,
+            } => write!(
+                f,
+                "SetMemoryDynamic({address:#010X}, {modifier}, {value})"
+            ),
+            Self::SetMemoryDynamic {
+                address,
+                modifier,
+                value,
+                mask: Some(mask),
+            } => write!(
+                f,
+                "SetMemoryDynamic({address:#010X}, {modifier}, {value}, mask={mask:#010X})"
             ),
             Self::SetVarConst {
                 var,
@@ -643,6 +999,21 @@ impl fmt::Display for StockAction {
                 modifier,
                 value,
             } => write!(f, "SetField({target}, {modifier}, {value})"),
+            Self::SetFieldDynamic {
+                target,
+                modifier,
+                value,
+                mask: None,
+            } => write!(f, "SetFieldDynamic({target}, {modifier}, {value})"),
+            Self::SetFieldDynamic {
+                target,
+                modifier,
+                value,
+                mask: Some(mask),
+            } => write!(
+                f,
+                "SetFieldDynamic({target}, {modifier}, {value}, mask={mask:#010X})"
+            ),
             Self::SetResources {
                 player,
                 modifier,
@@ -703,6 +1074,10 @@ pub enum HirStmt {
         modifier: Modifier,
         value: i32,
         mask: u32,
+    },
+    VarAssignExpr {
+        var: VarId,
+        expr: HirExpr,
     },
     If {
         conditions: Vec<StockCondition>,
@@ -901,6 +1276,9 @@ impl HirModule {
                     "{pad}@v{} [mask={mask:#010X}] {modifier} {value}",
                     var.0
                 );
+            }
+            HirStmt::VarAssignExpr { var, expr } => {
+                let _ = writeln!(out, "{pad}@v{} = {expr}", var.0);
             }
             HirStmt::If {
                 conditions,

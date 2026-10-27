@@ -256,6 +256,162 @@ class TestEudkitPythonFrontend(unittest.TestCase):
                 f"v2 compile time ({v2_compile_sec:.4f}s) must be <= v1 compile time ({v1_compile_sec:.4f}s)",
             )
 
+    def test_dynamic_vproc_storage_lowering_compound_exprs_and_field_refs(self):
+        import eudkit
+        from eudkit import (
+            Add,
+            Deaths,
+            Exactly,
+            Memory,
+            Player1,
+            SetDeaths,
+            SetMemory,
+            SetTo,
+            eud,
+        )
+
+        session = eudkit.Session(TESTMAP_PATH)
+        const_only = session.var(100, name="const_only")
+        a = session.var(10, name="a")
+        b = session.var(20, name="b")
+        c = session.var(3, name="c")
+        out = session.var(0, name="out")
+
+        @session.fn
+        def main_exprs():
+            # Constant-only updates on `const_only` -> stays in 4-byte ByteBuf cell!
+            const_only += 10 + 20 * 2
+
+            # Direct variable copy: out = a
+            out = a
+
+            # Compound arithmetic & bitwise expression with constant folding and scratch reuse:
+            # (a + b) + (a - c) + (b & 0xFF) + (c << 2)
+            out = (a + b) + (a - c) + (b & 0xFF) + (c << 2)
+
+            # Bitwise XOR, OR, NOT, Negation, Shift Right, Mul/Div/Rem by constants & vars:
+            out = ((a ^ b) | (~c)) + (-a) + (b >> 1) + (a * 3) + (b // 5) + (b % 5)
+
+            # Augmented assignments with expressions:
+            out += a - c
+            out -= b & 0x0F
+            out &= a | 0xFF
+            out |= c << 1
+            out ^= a + 1
+
+            # Dynamic variable comparisons (`==`, `!=`, `>=`, `<=`, `>`, `<`)
+            if a >= b and a != c:
+                const_only += 1
+            elif a < b or a > c or a <= b or a == c:
+                const_only += 2
+
+            # Dynamic condition/action arguments patched via FieldRef!
+            if Deaths(a, Exactly, b, "Terran Marine") and Memory(0x58A364, Exactly, c):
+                SetDeaths(a, SetTo, b + 1, "Terran Marine")
+                SetMemory(0x58A364, Add, c)
+
+        lir_text = session.dump_lir()
+        # `const_only` and `out` are never read as dynamic copy sources -> 4-byte ByteBuf cells!
+        self.assertIn("ByteBuf @var_const_only", lir_text)
+        self.assertIn("ByteBuf @var_out", lir_text)
+        # `a`, `b`, `c` and reused scratch slots are in the unified VProcBuffer!
+        self.assertIn("[VProcBuffer]", lir_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_map = Path(tmpdir) / "vproc_expr_out.scx"
+            report = session.compile(out_map)
+            self.assertGreaterEqual(report.vproc_count, 3)
+            self.assertLessEqual(
+                report.vproc_count,
+                5,
+                f"Expected 3 dynamic vars + 1..2 reused scratch VProc slots, got {report.vproc_count}",
+            )
+            self.assertEqual(report.byte_buf_count, 2)
+            self.assertTrue(out_map.exists())
+
+    def test_v2_vs_v1_dynamic_vproc_and_compound_expressions_budget_gate(self):
+        import eudkit
+        from eudkit import Exactly, Player1, SetDeaths, SetTo
+        import eudplib as ep
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            v1_out = Path(tmpdir) / "v1_expr_bench.scx"
+            v2_out = Path(tmpdir) / "v2_expr_bench.scx"
+
+            # --- 1. Compile dynamic expression workload with legacy eudplib (v1) ---
+            ep.LoadMap(str(BASEMAP_STRX_PATH))
+            ep.CompressPayload(True)
+
+            @ep.EUDFunc
+            def v1_expr_main():
+                a = ep.EUDVariable(10)
+                b = ep.EUDVariable(20)
+                c = ep.EUDVariable(5)
+                d = ep.EUDVariable(0)
+                const_counter = ep.EUDVariable(0)
+
+                const_counter += 15
+                d << (a + b) + (a - c) + (b & 0xFF)
+                d << (a ^ b) | (c & 0x0F)
+
+                if ep.EUDIf()(a >= b):
+                    d << a + c
+                if ep.EUDElse()():
+                    d << b - c
+                ep.EUDEndIf()
+
+                if ep.EUDIf()(ep.Deaths(Player1, ep.Exactly, a, "Terran Marine")):
+                    ep.DoActions(ep.SetDeaths(Player1, ep.SetTo, d, "Terran Marine"))
+                ep.EUDEndIf()
+
+            ep.SaveMap(str(v1_out), v1_expr_main)
+
+            v1_verify_session = eudkit.Session(v1_out)
+            v1_base_session = eudkit.Session(BASEMAP_STRX_PATH)
+            v1_strx_growth = (
+                v1_verify_session.strx_byte_len() - v1_base_session.strx_byte_len()
+            )
+            v1_raw_triggers = sum(
+                1
+                for obj in ep.core.allocator.payload._found_objects_dict
+                if isinstance(obj, ep.RawTrigger)
+            )
+
+            # --- 2. Compile equivalent workload with eudkit (v2) ---
+            session = eudkit.Session(BASEMAP_STRX_PATH)
+            a = session.var(10, name="a")
+            b = session.var(20, name="b")
+            c = session.var(5, name="c")
+            d = session.var(0, name="d")
+            const_counter = session.var(0, name="const_counter")
+
+            @session.fn
+            def v2_expr_main():
+                const_counter += 15
+                d = (a + b) + (a - c) + (b & 0xFF)
+                d = (a ^ b) | (c & 0x0F)
+
+                if a >= b:
+                    d = a + c
+                else:
+                    d = b - c
+
+                if eudkit.Deaths(Player1, Exactly, a, "Terran Marine"):
+                    SetDeaths(Player1, SetTo, d, "Terran Marine")
+
+            v2_report = session.compile(v2_out)
+
+            self.assertLessEqual(
+                v2_report.payload_size,
+                v1_strx_growth,
+                f"v2 payload ({v2_report.payload_size}B) must be <= v1 STRx payload growth ({v1_strx_growth}B)",
+            )
+            self.assertLessEqual(
+                v2_report.trigger_count,
+                v1_raw_triggers,
+                f"v2 triggers ({v2_report.trigger_count}) must be <= v1 triggers ({v1_raw_triggers})",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
