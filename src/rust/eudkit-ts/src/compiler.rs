@@ -1,6 +1,6 @@
 use crate::error::{EudkitTsError, Result};
 use eudkit_core::hir::{
-    epd, parse_format_template, Comparison, HirBasicBlock, HirBinOp, HirExpr, HirFunction,
+    epd, parse_format_template, CmpOp, Comparison, HirBasicBlock, HirBinOp, HirExpr, HirFunction,
     HirModule, HirStmt, HirTerminator, HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget,
     ResourceType, StockAction, StockCondition, VarId,
 };
@@ -1142,40 +1142,13 @@ impl<'a> TsCompiler<'a> {
                 let lhs = self.lower_expr(&bin.left)?;
                 let rhs = self.lower_expr(&bin.right)?;
 
-                let (cmp, swap) = match bin.operator {
-                    BinaryOperator::GreaterEqualThan => (Comparison::AtLeast, false),
-                    BinaryOperator::LessEqualThan => (Comparison::AtMost, false),
-                    BinaryOperator::Equality | BinaryOperator::StrictEquality => {
-                        (Comparison::Exactly, false)
-                    }
-                    BinaryOperator::GreaterThan => {
-                        // a > b -> a >= b + 1
-                        let rhs_plus_1 = HirExpr::BinOp {
-                            op: HirBinOp::Add,
-                            lhs: Box::new(rhs),
-                            rhs: Box::new(HirExpr::Const(1)),
-                        }
-                        .fold_constants();
-                        return Ok(vec![self.make_condition(
-                            lhs,
-                            Comparison::AtLeast,
-                            rhs_plus_1,
-                        )]);
-                    }
-                    BinaryOperator::LessThan => {
-                        // a < b -> a <= b - 1
-                        let rhs_minus_1 = HirExpr::BinOp {
-                            op: HirBinOp::Sub,
-                            lhs: Box::new(rhs),
-                            rhs: Box::new(HirExpr::Const(1)),
-                        }
-                        .fold_constants();
-                        return Ok(vec![self.make_condition(
-                            lhs,
-                            Comparison::AtMost,
-                            rhs_minus_1,
-                        )]);
-                    }
+                let op = match bin.operator {
+                    BinaryOperator::GreaterEqualThan => CmpOp::Ge,
+                    BinaryOperator::LessEqualThan => CmpOp::Le,
+                    BinaryOperator::Equality | BinaryOperator::StrictEquality => CmpOp::Eq,
+                    BinaryOperator::Inequality | BinaryOperator::StrictInequality => CmpOp::Ne,
+                    BinaryOperator::GreaterThan => CmpOp::Gt,
+                    BinaryOperator::LessThan => CmpOp::Lt,
                     _ => {
                         return Err(EudkitTsError::Compile(format!(
                             "unsupported binary comparison {:?}",
@@ -1184,13 +1157,7 @@ impl<'a> TsCompiler<'a> {
                     }
                 };
 
-                let (actual_lhs, actual_cmp, actual_rhs) = if swap {
-                    (rhs, cmp, lhs)
-                } else {
-                    (lhs, cmp, rhs)
-                };
-
-                Ok(vec![self.make_condition(actual_lhs, actual_cmp, actual_rhs)])
+                Ok(vec![StockCondition::from_cmp(lhs, op, rhs)])
             }
             Expression::CallExpression(call) => {
                 if let Some(cond) = self.try_lower_condition_call(call)? {
@@ -1204,22 +1171,6 @@ impl<'a> TsCompiler<'a> {
             _ => Err(EudkitTsError::Compile(
                 "unsupported expression in condition".to_string(),
             )),
-        }
-    }
-
-    fn make_condition(&self, lhs: HirExpr, cmp: Comparison, rhs: HirExpr) -> StockCondition {
-        match (&lhs, &rhs) {
-            (HirExpr::Var(v), HirExpr::Const(c)) => StockCondition::VarCmp {
-                var: *v,
-                comparison: cmp,
-                value: *c as u32,
-                mask: None,
-            },
-            _ => StockCondition::ExprCmp {
-                lhs,
-                comparison: cmp,
-                rhs,
-            },
         }
     }
 
@@ -1242,13 +1193,13 @@ impl<'a> TsCompiler<'a> {
         if let Some(obj) = obj_name {
             if obj != "eud" {
                 if let Some(&var_id) = self.vars.get(obj) {
-                    let cmp = match fn_name {
-                        "atLeast" => Some(Comparison::AtLeast),
-                        "atMost" => Some(Comparison::AtMost),
-                        "exactly" => Some(Comparison::Exactly),
+                    let op = match fn_name {
+                        "atLeast" => Some(CmpOp::Ge),
+                        "atMost" => Some(CmpOp::Le),
+                        "exactly" => Some(CmpOp::Eq),
                         _ => None,
                     };
-                    if let Some(c) = cmp {
+                    if let Some(op) = op {
                         let arg = call
                             .arguments
                             .first()
@@ -1257,7 +1208,7 @@ impl<'a> TsCompiler<'a> {
                                 EudkitTsError::Compile(format!("{fn_name} requires 1 argument"))
                             })?;
                         let rhs = self.lower_expr(arg)?;
-                        return Ok(Some(self.make_condition(HirExpr::Var(var_id), c, rhs)));
+                        return Ok(Some(StockCondition::from_cmp(HirExpr::Var(var_id), op, rhs)));
                     }
                 }
                 return Ok(None);
