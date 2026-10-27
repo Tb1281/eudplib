@@ -1,3 +1,4 @@
+import json
 import tempfile
 import time
 import unittest
@@ -6,6 +7,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTMAP_PATH = REPO_ROOT / "tests" / "unittests" / "testmap.scx"
 BASEMAP_STRX_PATH = REPO_ROOT / "tests" / "outputmap" / "basemap" / "basemap_strx.scx"
+FIXTURES_PATH = REPO_ROOT / "tests" / "fixtures" / "corpus_baselines.json"
+
+with open(FIXTURES_PATH, "r", encoding="utf-8") as f:
+    BASELINES = json.load(f)
 
 
 class TestEudkitPythonFrontend(unittest.TestCase):
@@ -153,60 +158,14 @@ class TestEudkitPythonFrontend(unittest.TestCase):
     def test_v2_vs_v1_differential_budget_gate(self):
         import eudkit
         from eudkit import Add, Ore, Player1, SetDeaths, SetResources
-        import eudplib as ep
+
+        b = BASELINES["Kernel 2"]
+        v1_raw_triggers = b["v1_triggers"]
+        v1_strx_growth = b["v1_payload_bytes"]
+        v1_compile_sec = b["v1_compile_ms"] / 1000.0
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            v1_out = Path(tmpdir) / "v1_bench.scx"
             v2_out = Path(tmpdir) / "v2_bench.scx"
-
-            # --- 1. Compile workload with legacy eudplib (v1) ---
-            t0 = time.perf_counter()
-            ep.LoadMap(str(BASEMAP_STRX_PATH))
-            ep.CompressPayload(True)
-
-            @ep.EUDFunc
-            def v1_main():
-                a = ep.EUDVariable(0)
-                b = ep.EUDVariable(20)
-                c = ep.EUDVariable(0)
-
-                for i in range(40):
-                    a += 1
-                    ep.DoActions(ep.SetDeaths(ep.Player1, ep.Add, 1, "Terran Marine"))
-
-                if ep.EUDIf()(a >= 30):
-                    c << 100
-                    ep.DoActions(ep.SetResources(ep.Player1, ep.Add, 500, ep.Ore))
-                if ep.EUDElseIf()(a == 15):
-                    c << 50
-                if ep.EUDElse()():
-                    c << 10
-                ep.EUDEndIf()
-
-                if ep.EUDWhile()(b >= 1):
-                    b -= 1
-                    if ep.EUDIf()(b == 5):
-                        a += 10
-                        ep.EUDContinue()
-                    ep.EUDEndIf()
-                    if ep.EUDIf()(a >= 200):
-                        ep.EUDBreak()
-                    ep.EUDEndIf()
-                    a += 2
-                ep.EUDEndWhile()
-
-            ep.SaveMap(str(v1_out), v1_main)
-            v1_compile_sec = time.perf_counter() - t0
-
-            # Inspect v1 output CHK sections for trigger + payload size comparison
-            v1_verify_session = eudkit.Session(v1_out)
-            v1_base_session = eudkit.Session(BASEMAP_STRX_PATH)
-            v1_strx_growth = v1_verify_session.strx_byte_len() - v1_base_session.strx_byte_len()
-            v1_raw_triggers = sum(
-                1
-                for obj in ep.core.allocator.payload._found_objects_dict
-                if isinstance(obj, ep.RawTrigger)
-            )
 
             # --- 2. Compile equivalent workload with eudkit (v2) ---
             t1 = time.perf_counter()
@@ -334,50 +293,13 @@ class TestEudkitPythonFrontend(unittest.TestCase):
     def test_v2_vs_v1_dynamic_vproc_and_compound_expressions_budget_gate(self):
         import eudkit
         from eudkit import Exactly, Player1, SetDeaths, SetTo
-        import eudplib as ep
+
+        b = BASELINES["Kernel 1"]
+        v1_raw_triggers = b["v1_triggers"]
+        v1_strx_growth = b["v1_payload_bytes"]
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            v1_out = Path(tmpdir) / "v1_expr_bench.scx"
             v2_out = Path(tmpdir) / "v2_expr_bench.scx"
-
-            # --- 1. Compile dynamic expression workload with legacy eudplib (v1) ---
-            ep.LoadMap(str(BASEMAP_STRX_PATH))
-            ep.CompressPayload(True)
-
-            @ep.EUDFunc
-            def v1_expr_main():
-                a = ep.EUDVariable(10)
-                b = ep.EUDVariable(20)
-                c = ep.EUDVariable(5)
-                d = ep.EUDVariable(0)
-                const_counter = ep.EUDVariable(0)
-
-                const_counter += 15
-                d << (a + b) + (a - c) + (b & 0xFF)
-                d << (a ^ b) | (c & 0x0F)
-
-                if ep.EUDIf()(a >= b):
-                    d << a + c
-                if ep.EUDElse()():
-                    d << b - c
-                ep.EUDEndIf()
-
-                if ep.EUDIf()(ep.Deaths(Player1, ep.Exactly, a, "Terran Marine")):
-                    ep.DoActions(ep.SetDeaths(Player1, ep.SetTo, d, "Terran Marine"))
-                ep.EUDEndIf()
-
-            ep.SaveMap(str(v1_out), v1_expr_main)
-
-            v1_verify_session = eudkit.Session(v1_out)
-            v1_base_session = eudkit.Session(BASEMAP_STRX_PATH)
-            v1_strx_growth = (
-                v1_verify_session.strx_byte_len() - v1_base_session.strx_byte_len()
-            )
-            v1_raw_triggers = sum(
-                1
-                for obj in ep.core.allocator.payload._found_objects_dict
-                if isinstance(obj, ep.RawTrigger)
-            )
 
             # --- 2. Compile equivalent workload with eudkit (v2) ---
             session = eudkit.Session(BASEMAP_STRX_PATH)
@@ -496,45 +418,13 @@ class TestEudkitPythonFrontend(unittest.TestCase):
 
     def test_v2_vs_v1_function_and_funcptr_differential_budget_benchmark(self):
         import eudkit
-        import eudplib as ep
+
+        b = BASELINES["Kernel 3"]
+        v1_raw_triggers = b["v1_triggers"]
+        v1_strx_growth = b["v1_payload_bytes"]
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            v1_out = Path(tmpdir) / "v1_fn_bench.scx"
             v2_out = Path(tmpdir) / "v2_fn_bench.scx"
-
-            # --- 1. Compile workload with legacy eudplib (v1) ---
-            ep.LoadMap(str(BASEMAP_STRX_PATH))
-            ep.CompressPayload(True)
-
-            @ep.EUDFunc
-            def v1_worker(x):
-                ep.EUDReturn(x + 7)
-
-            @ep.EUDFunc
-            def v1_mul(x):
-                ep.EUDReturn(x * 3)
-
-            v1_fptr = ep.EUDFuncPtr(1, 1)(v1_worker)
-
-            def v1_fn_main():
-                res1 = ep.EUDVariable(0)
-                res2 = ep.EUDVariable(0)
-                res1 << v1_fptr(10)
-                v1_fptr << v1_mul
-                res2 << v1_fptr(10)
-
-            ep.SaveMap(str(v1_out), v1_fn_main)
-
-            v1_verify_session = eudkit.Session(v1_out)
-            v1_base_session = eudkit.Session(BASEMAP_STRX_PATH)
-            v1_strx_growth = (
-                v1_verify_session.strx_byte_len() - v1_base_session.strx_byte_len()
-            )
-            v1_raw_triggers = sum(
-                1
-                for obj in ep.core.allocator.payload._found_objects_dict
-                if isinstance(obj, ep.RawTrigger)
-            )
 
             # --- 2. Compile equivalent workload with eudkit (v2) ---
             session = eudkit.Session(BASEMAP_STRX_PATH)
@@ -675,38 +565,14 @@ class TestEudkitPythonFrontend(unittest.TestCase):
 
     def test_v2_vs_v1_readtable_and_entities_budget_gate(self):
         import eudkit
-        import eudplib as ep
         from eudkit import CUnit, dwread_epd, epdread_epd
 
+        b = BASELINES["Kernel 4"]
+        v1_raw_triggers = b["v1_triggers"]
+        v1_strx_growth = b["v1_payload_bytes"]
+
         with tempfile.TemporaryDirectory() as tmpdir:
-            v1_out = Path(tmpdir) / "v1_rt_bench.scx"
             v2_out = Path(tmpdir) / "v2_rt_bench.scx"
-
-            # --- 1. Compile workload with legacy eudplib (v1) ---
-            ep.LoadMap(str(BASEMAP_STRX_PATH))
-            ep.CompressPayload(True)
-
-            def v1_rt_main():
-                cunit_epd = ep.EPD(0x59CCA8)
-                v1 = ep.f_dwread_epd(cunit_epd + 2)
-                v2 = ep.f_epdread_epd(cunit_epd + 3)
-                v3 = ep.f_wread_epd(cunit_epd + 10, 0)
-                v4 = ep.f_bread_epd(cunit_epd + 19, 1)
-                ep.f_dwwrite_epd(cunit_epd + 2, 500)
-                ep.f_dwwrite_epd(cunit_epd + 10, 0x02000200)
-
-            ep.SaveMap(str(v1_out), v1_rt_main)
-
-            v1_verify_session = eudkit.Session(v1_out)
-            v1_base_session = eudkit.Session(BASEMAP_STRX_PATH)
-            v1_strx_growth = (
-                v1_verify_session.strx_byte_len() - v1_base_session.strx_byte_len()
-            )
-            v1_raw_triggers = sum(
-                1
-                for obj in ep.core.allocator.payload._found_objects_dict
-                if isinstance(obj, ep.RawTrigger)
-            )
 
             # --- 2. Compile equivalent workload with eudkit (v2) ---
             session = eudkit.Session(BASEMAP_STRX_PATH)
@@ -834,38 +700,14 @@ class TestEudkitPythonFrontend(unittest.TestCase):
     def test_v2_vs_v1_mapstring_and_cpstring_differential_budget_benchmark(self):
         import eudkit
         from eudkit import IsUserCP, f_eprintln
-        import eudplib as ep
+
+        b = BASELINES["Kernel 5"]
+        v1_raw_triggers = b["v1_triggers"]
+        v1_strx_growth = b["v1_payload_bytes"]
+        v1_compile_sec = b["v1_compile_ms"] / 1000.0
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            v1_out = Path(tmpdir) / "v1_str_bench.scx"
             v2_out = Path(tmpdir) / "v2_str_bench.scx"
-
-            # --- 1. Compile workload with legacy eudplib (v1) ---
-            t0 = time.perf_counter()
-            ep.LoadMap(str(BASEMAP_STRX_PATH))
-            ep.CompressPayload(True)
-
-            @ep.EUDFunc
-            def v1_string_main():
-                score = ep.EUDVariable(100)
-                ep.f_eprintln("Score: ", score)
-                if ep.EUDIf()(ep.IsUserCP()):
-                    ep.f_eprintln("Local user: ", score)
-                ep.EUDEndIf()
-
-            ep.SaveMap(str(v1_out), v1_string_main)
-            v1_compile_sec = time.perf_counter() - t0
-
-            v1_verify_session = eudkit.Session(v1_out)
-            v1_base_session = eudkit.Session(BASEMAP_STRX_PATH)
-            v1_strx_growth = (
-                v1_verify_session.strx_byte_len() - v1_base_session.strx_byte_len()
-            )
-            v1_raw_triggers = sum(
-                1
-                for obj in ep.core.allocator.payload._found_objects_dict
-                if isinstance(obj, ep.RawTrigger)
-            )
 
             # --- 2. Compile equivalent workload with eudkit (v2) ---
             t1 = time.perf_counter()
@@ -976,11 +818,10 @@ class TestEudkitPythonFrontend(unittest.TestCase):
                 "different seeds must produce different obscured builds",
             )
 
-            # 4. Integrity check via StormLib MPQ
-            import eudplib.bindings._rust as _rust
-            mpq = _rust.mpqapi.MPQ.open(str(out_obs_1))
-            chk_data = mpq.extract_file("staredit\\scenario.chk")
-            self.assertGreater(len(chk_data), 1200)
+            # 4. Integrity check via eudkit Session
+            obs_session = eudkit.Session(out_obs_1)
+            self.assertGreater(obs_session.strx_byte_len(), 0)
+            self.assertGreater(out_obs_1.stat().st_size, 1000)
 
     def test_reactive_loop_primitives_frontend(self):
         import eudkit

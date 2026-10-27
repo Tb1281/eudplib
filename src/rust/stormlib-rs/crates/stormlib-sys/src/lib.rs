@@ -19,11 +19,17 @@ fn test_w3x() {
   use std::ffi::*;
   use std::ptr;
 
+  let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+  let archive_path = manifest_dir.join("../../samples/test_tft.w3x");
+  let sample_path = manifest_dir.join("../../samples/war3map.j");
+
   #[cfg(not(target_os = "windows"))]
-  let path = CString::new("../../samples/test_tft.w3x").unwrap();
+  let path = CString::new(archive_path.to_str().unwrap()).unwrap();
   #[cfg(target_os = "windows")]
   let path: Vec<_> = {
-    "../../samples/test_tft.w3x"
+    archive_path
+      .to_str()
+      .unwrap()
       .as_bytes()
       .iter()
       .cloned()
@@ -69,7 +75,10 @@ fn test_w3x() {
 
     println!("read size = {}", read);
 
-    assert_eq!(buf, std::fs::read("../../samples/war3map.j").unwrap());
+    let expected = std::fs::read(sample_path).unwrap();
+    let buf_norm: Vec<u8> = buf.into_iter().filter(|&b| b != b'\r').collect();
+    let exp_norm: Vec<u8> = expected.into_iter().filter(|&b| b != b'\r').collect();
+    assert_eq!(buf_norm, exp_norm);
 
     assert!(SFileCloseFile(file_handle));
 
