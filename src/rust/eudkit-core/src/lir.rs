@@ -1,7 +1,7 @@
 use crate::error::{EudkitError, Result};
 use crate::hir::{
-    epd, BlockId, ByteBufId, HirModule, HirStmt, HirTerminator, HirValue, StockAction,
-    StockCondition, END_OF_TRIGGERS_SENTINEL,
+    epd, BlockId, ByteBufId, HirBasicBlock, HirFunction, HirModule, HirStmt, HirTerminator,
+    HirValue, Modifier, StockAction, StockCondition, VarId, END_OF_TRIGGERS_SENTINEL,
 };
 use crate::map_context::MapContext;
 use std::collections::HashMap;
@@ -276,6 +276,10 @@ impl LirModule {
         &mut self.objects
     }
 
+    pub fn vproc_count(&self) -> usize {
+        0
+    }
+
     pub fn dump_lir(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(
@@ -325,24 +329,410 @@ impl LirModule {
     }
 }
 
+fn stmt_to_leaf_action(stmt: &HirStmt) -> Option<StockAction> {
+    match stmt {
+        HirStmt::Action(a) => Some(a.clone()),
+        HirStmt::VarAssignConst { var, value } => Some(StockAction::SetVarConst {
+            var: *var,
+            modifier: Modifier::SetTo,
+            value: *value,
+            mask: None,
+        }),
+        HirStmt::VarAddConst { var, value } => Some(StockAction::SetVarConst {
+            var: *var,
+            modifier: Modifier::Add,
+            value: *value,
+            mask: None,
+        }),
+        HirStmt::VarSubConst { var, value } => Some(StockAction::SetVarConst {
+            var: *var,
+            modifier: Modifier::Subtract,
+            value: *value,
+            mask: None,
+        }),
+        HirStmt::VarSetMaskConst {
+            var,
+            modifier,
+            value,
+            mask,
+        } => Some(StockAction::SetVarConst {
+            var: *var,
+            modifier: *modifier,
+            value: *value,
+            mask: Some(*mask),
+        }),
+        _ => None,
+    }
+}
+
+fn extract_leaf_actions(stmts: &[HirStmt]) -> Option<Vec<StockAction>> {
+    let mut actions = Vec::with_capacity(stmts.len());
+    for s in stmts {
+        actions.push(stmt_to_leaf_action(s)?);
+    }
+    Some(actions)
+}
+
+fn actions_cannot_mutate_condition(actions: &[StockAction], cond: &StockCondition) -> bool {
+    actions.iter().all(|act| match act {
+        StockAction::DisplayText { .. }
+        | StockAction::DisplayTextId { .. }
+        | StockAction::Comment { .. }
+        | StockAction::PreserveTrigger
+        | StockAction::Victory
+        | StockAction::Defeat => true,
+        StockAction::CreateUnit { .. } => !matches!(
+            cond,
+            StockCondition::Command { .. } | StockCondition::Bring { .. }
+        ),
+        StockAction::SetResources { .. } => !matches!(cond, StockCondition::Accumulate { .. }),
+        StockAction::SetVarConst { var: act_var, .. } => match cond {
+            StockCondition::VarCmp { var: cond_var, .. } => act_var != cond_var,
+            _ => true,
+        },
+        StockAction::SetDeaths { .. }
+        | StockAction::SetDeathsX { .. }
+        | StockAction::SetMemory { .. }
+        | StockAction::SetMemoryX { .. }
+        | StockAction::SetField { .. } => false,
+    })
+}
+
+fn flatten_structured_cfg(func: &HirFunction) -> Result<HirFunction> {
+    let has_structured_cf = func.blocks.iter().any(|b| {
+        b.stmts.iter().any(|s| {
+            matches!(
+                s,
+                HirStmt::If { .. }
+                    | HirStmt::While { .. }
+                    | HirStmt::Break
+                    | HirStmt::Continue
+            )
+        })
+    });
+
+    if !has_structured_cf {
+        let mut cloned = func.clone();
+        for blk in &mut cloned.blocks {
+            for stmt in &mut blk.stmts {
+                if let Some(act) = stmt_to_leaf_action(stmt) {
+                    *stmt = HirStmt::Action(act);
+                }
+            }
+        }
+        return Ok(cloned);
+    }
+
+    let mut out_blocks: Vec<HirBasicBlock> = func
+        .blocks
+        .iter()
+        .map(|b| HirBasicBlock {
+            id: b.id,
+            label: b.label.clone(),
+            stmts: Vec::new(),
+            terminator: HirTerminator::Return,
+        })
+        .collect();
+
+    fn alloc_block(out_blocks: &mut Vec<HirBasicBlock>, label: impl Into<String>) -> BlockId {
+        let id = BlockId(out_blocks.len() as u32);
+        let mut blk = HirBasicBlock::new(label);
+        blk.id = id;
+        out_blocks.push(blk);
+        id
+    }
+
+    fn lower_stmts(
+        stmts: &[HirStmt],
+        mut cur_block: BlockId,
+        out_blocks: &mut Vec<HirBasicBlock>,
+        loop_ctx: Option<(BlockId, BlockId)>,
+    ) -> Result<Option<BlockId>> {
+        for stmt in stmts {
+            if let Some(act) = stmt_to_leaf_action(stmt) {
+                out_blocks[cur_block.0 as usize]
+                    .stmts
+                    .push(HirStmt::Action(act));
+                continue;
+            }
+            match stmt {
+                HirStmt::Trigger { .. } => {
+                    out_blocks[cur_block.0 as usize].stmts.push(stmt.clone());
+                }
+                HirStmt::Action(_)
+                | HirStmt::VarAssignConst { .. }
+                | HirStmt::VarAddConst { .. }
+                | HirStmt::VarSubConst { .. }
+                | HirStmt::VarSetMaskConst { .. } => unreachable!(),
+                HirStmt::Break => {
+                    let (_, break_target) = loop_ctx.ok_or_else(|| {
+                        EudkitError::Ir("break statement outside of while loop".to_string())
+                    })?;
+                    out_blocks[cur_block.0 as usize]
+                        .set_terminator(HirTerminator::Jump(break_target));
+                    return Ok(None);
+                }
+                HirStmt::Continue => {
+                    let (cond_target, _) = loop_ctx.ok_or_else(|| {
+                        EudkitError::Ir("continue statement outside of while loop".to_string())
+                    })?;
+                    out_blocks[cur_block.0 as usize]
+                        .set_terminator(HirTerminator::Jump(cond_target));
+                    return Ok(None);
+                }
+                HirStmt::If {
+                    conditions,
+                    then_body,
+                    else_body,
+                } => {
+                    if else_body.is_empty() && conditions.len() <= 16 {
+                        if let Some(leaf_actions) = extract_leaf_actions(then_body) {
+                            if leaf_actions.is_empty() {
+                                continue;
+                            }
+                            if leaf_actions.len() <= 64 {
+                                out_blocks[cur_block.0 as usize].stmts.push(HirStmt::Trigger {
+                                    label: Some("if_then".to_string()),
+                                    conditions: conditions.clone(),
+                                    actions: leaf_actions,
+                                    preserved: true,
+                                });
+                                continue;
+                            }
+                        }
+                    } else if conditions.len() == 1 {
+                        if let Some(inv_cond) = conditions[0].invert() {
+                            if let (Some(then_actions), Some(else_actions)) = (
+                                extract_leaf_actions(then_body),
+                                extract_leaf_actions(else_body),
+                            ) {
+                                if then_actions.len() <= 64
+                                    && else_actions.len() <= 64
+                                    && actions_cannot_mutate_condition(
+                                        &then_actions,
+                                        &conditions[0],
+                                    )
+                                {
+                                    if !then_actions.is_empty() {
+                                        out_blocks[cur_block.0 as usize].stmts.push(
+                                            HirStmt::Trigger {
+                                                label: Some("if_then_inplace".to_string()),
+                                                conditions: conditions.clone(),
+                                                actions: then_actions,
+                                                preserved: true,
+                                            },
+                                        );
+                                    }
+                                    if !else_actions.is_empty() {
+                                        out_blocks[cur_block.0 as usize].stmts.push(
+                                            HirStmt::Trigger {
+                                                label: Some("if_else_inplace".to_string()),
+                                                conditions: vec![inv_cond],
+                                                actions: else_actions,
+                                                preserved: true,
+                                            },
+                                        );
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    let then_block = alloc_block(out_blocks, "if_then");
+                    if else_body.is_empty() {
+                        let merge_block = alloc_block(out_blocks, "if_merge");
+                        out_blocks[cur_block.0 as usize].set_terminator(HirTerminator::Branch {
+                            conditions: conditions.clone(),
+                            then_block,
+                            else_block: merge_block,
+                        });
+                        if let Some(then_end) =
+                            lower_stmts(then_body, then_block, out_blocks, loop_ctx)?
+                        {
+                            out_blocks[then_end.0 as usize]
+                                .set_terminator(HirTerminator::Jump(merge_block));
+                        }
+                        cur_block = merge_block;
+                    } else {
+                        let else_block = alloc_block(out_blocks, "if_else");
+                        out_blocks[cur_block.0 as usize].set_terminator(HirTerminator::Branch {
+                            conditions: conditions.clone(),
+                            then_block,
+                            else_block,
+                        });
+                        let then_end = lower_stmts(then_body, then_block, out_blocks, loop_ctx)?;
+                        let else_end = lower_stmts(else_body, else_block, out_blocks, loop_ctx)?;
+                        match (then_end, else_end) {
+                            (None, None) => return Ok(None),
+                            _ => {
+                                let merge_block = alloc_block(out_blocks, "if_merge");
+                                if let Some(te) = then_end {
+                                    out_blocks[te.0 as usize]
+                                        .set_terminator(HirTerminator::Jump(merge_block));
+                                }
+                                if let Some(ee) = else_end {
+                                    out_blocks[ee.0 as usize]
+                                        .set_terminator(HirTerminator::Jump(merge_block));
+                                }
+                                cur_block = merge_block;
+                            }
+                        }
+                    }
+                }
+                HirStmt::While { conditions, body } => {
+                    let cond_block = alloc_block(out_blocks, "while_cond");
+                    let body_block = alloc_block(out_blocks, "while_body");
+                    let exit_block = alloc_block(out_blocks, "while_exit");
+
+                    out_blocks[cur_block.0 as usize]
+                        .set_terminator(HirTerminator::Jump(cond_block));
+                    out_blocks[cond_block.0 as usize].set_terminator(HirTerminator::Branch {
+                        conditions: conditions.clone(),
+                        then_block: body_block,
+                        else_block: exit_block,
+                    });
+
+                    if let Some(body_end) =
+                        lower_stmts(body, body_block, out_blocks, Some((cond_block, exit_block)))?
+                    {
+                        out_blocks[body_end.0 as usize]
+                            .set_terminator(HirTerminator::Jump(cond_block));
+                    }
+                    cur_block = exit_block;
+                }
+            }
+        }
+        Ok(Some(cur_block))
+    }
+
+    for orig_block in &func.blocks {
+        if let Some(end_block) =
+            lower_stmts(&orig_block.stmts, orig_block.id, &mut out_blocks, None)?
+        {
+            out_blocks[end_block.0 as usize].set_terminator(orig_block.terminator.clone());
+        }
+    }
+
+    // Forward empty pass-through Jump blocks (except entry block 0) so Break/Continue/Merge
+    // don't emit redundant no-op pass-through triggers.
+    let resolve_jump = |mut bid: BlockId, blocks: &[HirBasicBlock]| -> BlockId {
+        for _ in 0..64 {
+            if bid.0 == 0 {
+                break;
+            }
+            let blk = &blocks[bid.0 as usize];
+            if blk.stmts.is_empty() {
+                if let HirTerminator::Jump(next) = blk.terminator {
+                    if next != bid {
+                        bid = next;
+                        continue;
+                    }
+                }
+            }
+            break;
+        }
+        bid
+    };
+
+    let snapshot = out_blocks.clone();
+    for blk in &mut out_blocks {
+        match &mut blk.terminator {
+            HirTerminator::Jump(target) => {
+                *target = resolve_jump(*target, &snapshot);
+            }
+            HirTerminator::Branch {
+                then_block,
+                else_block,
+                ..
+            } => {
+                *then_block = resolve_jump(*then_block, &snapshot);
+                *else_block = resolve_jump(*else_block, &snapshot);
+            }
+            HirTerminator::Return => {}
+        }
+    }
+
+    // Collect reachable blocks starting from BlockId(0)
+    let mut reachable = vec![false; out_blocks.len()];
+    let mut worklist = vec![BlockId(0)];
+    reachable[0] = true;
+    while let Some(bid) = worklist.pop() {
+        let blk = &out_blocks[bid.0 as usize];
+        match &blk.terminator {
+            HirTerminator::Jump(t) => {
+                if !reachable[t.0 as usize] {
+                    reachable[t.0 as usize] = true;
+                    worklist.push(*t);
+                }
+            }
+            HirTerminator::Branch {
+                then_block,
+                else_block,
+                ..
+            } => {
+                if !reachable[then_block.0 as usize] {
+                    reachable[then_block.0 as usize] = true;
+                    worklist.push(*then_block);
+                }
+                if !reachable[else_block.0 as usize] {
+                    reachable[else_block.0 as usize] = true;
+                    worklist.push(*else_block);
+                }
+            }
+            HirTerminator::Return => {}
+        }
+    }
+
+    let mut old_to_new: HashMap<BlockId, BlockId> = HashMap::new();
+    let mut compact_blocks: Vec<HirBasicBlock> = Vec::new();
+    for (idx, mut blk) in out_blocks.into_iter().enumerate() {
+        if reachable[idx] {
+            let new_id = BlockId(compact_blocks.len() as u32);
+            old_to_new.insert(blk.id, new_id);
+            blk.id = new_id;
+            compact_blocks.push(blk);
+        }
+    }
+    for blk in &mut compact_blocks {
+        match &mut blk.terminator {
+            HirTerminator::Jump(t) => *t = old_to_new[t],
+            HirTerminator::Branch {
+                then_block,
+                else_block,
+                ..
+            } => {
+                *then_block = old_to_new[then_block];
+                *else_block = old_to_new[else_block];
+            }
+            HirTerminator::Return => {}
+        }
+    }
+
+    Ok(HirFunction {
+        id: func.id,
+        name: func.name.clone(),
+        is_main_loop: func.is_main_loop,
+        blocks: compact_blocks,
+    })
+}
+
 pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<LirModule> {
     let main_fn_id = hir
         .main_loop
         .or_else(|| hir.functions.first().map(|f| f.id))
         .ok_or_else(|| EudkitError::Ir("HIR module has no functions".to_string()))?;
-    let main_fn = &hir.functions[main_fn_id.0 as usize];
-    if main_fn.blocks.is_empty() {
+    let raw_main_fn = &hir.functions[main_fn_id.0 as usize];
+    if raw_main_fn.blocks.is_empty() {
         return Err(EudkitError::Ir(format!(
             "function '{}' has no basic blocks",
-            main_fn.name
+            raw_main_fn.name
         )));
     }
+    let main_fn = flatten_structured_cfg(raw_main_fn)?;
 
     // Reserve ObjectIds for triggers first so Trigger 0 gets @obj0 (predictable FieldRef IDs),
-    // or allocate ByteBufs after triggers and remap ByteBufId -> ObjectId.
-    // Wait: to resolve HirValue::ByteBufAddress(buf_id, ..) during trigger lowering, we can
-    // pre-count how many triggers will be emitted across all blocks, so we know exact ObjectIds
-    // for both triggers and ByteBufs up front!
+    // and allocate ByteBufs (including 4-byte lowered variables) right after triggers.
     let mut trigger_count = 0u32;
     let mut block_first_trigger: HashMap<BlockId, ObjectId> = HashMap::new();
 
@@ -367,19 +757,29 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
                         pending_actions = 0;
                     }
                 }
+                _ => unreachable!("flatten_structured_cfg must lower all structured HirStmts"),
             }
         }
-        if pending_actions > 0 {
-            block_trigs += 1;
-        }
         if matches!(block.terminator, HirTerminator::Branch { .. }) {
-            // A Branch terminator emits a reset trigger + conditional branch trigger (2 triggers),
-            // or if the block had a preceding trigger with < 64 actions, we still emit a dedicated
-            // reset+branch pair so control-flow lowering is clean and self-contained.
-            block_trigs += 2;
-        } else if block_trigs == 0 {
-            // Empty Jump/Return block needs 1 pass-through trigger
-            block_trigs += 1;
+            // Coalesce the branch_reset action into pending_actions if < 64 actions are pending,
+            // otherwise emit a dedicated reset trigger before the branch condition trigger.
+            pending_actions += 1;
+            if pending_actions == 64 {
+                block_trigs += 1;
+                pending_actions = 0;
+            }
+            if pending_actions > 0 {
+                block_trigs += 1;
+            }
+            block_trigs += 1; // branch_cond trigger
+        } else {
+            if pending_actions > 0 {
+                block_trigs += 1;
+            }
+            if block_trigs == 0 {
+                // Empty Jump/Return block needs 1 pass-through trigger
+                block_trigs += 1;
+            }
         }
         trigger_count += block_trigs;
     }
@@ -389,7 +789,16 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
         buf_id_to_obj.insert(buf.id, ObjectId(trigger_count + idx as u32));
     }
 
-    let lower_val = |v: HirValue, buf_map: &HashMap<ByteBufId, ObjectId>| -> ValueExpr {
+    let var_base_obj_idx = trigger_count + hir.byte_bufs.len() as u32;
+    let mut var_id_to_obj: HashMap<VarId, ObjectId> = HashMap::new();
+    for (idx, var) in hir.vars.iter().enumerate() {
+        var_id_to_obj.insert(var.id, ObjectId(var_base_obj_idx + idx as u32));
+    }
+
+    let lower_val = |v: HirValue,
+                     buf_map: &HashMap<ByteBufId, ObjectId>,
+                     var_map: &HashMap<VarId, ObjectId>|
+     -> ValueExpr {
         match v {
             HirValue::Const(c) => ValueExpr::Const(c),
             HirValue::ByteBufAddress(bid, off) => ValueExpr::ObjectAddress {
@@ -400,6 +809,14 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
                 object: buf_map[&bid],
                 dword_offset: off,
             },
+            HirValue::VarAddress(vid) => ValueExpr::ObjectAddress {
+                object: var_map[&vid],
+                byte_offset: 0,
+            },
+            HirValue::VarEpd(vid) => ValueExpr::FieldEpd(FieldRef::new(
+                var_map[&vid],
+                TriggerSlotField::ByteOffset(0),
+            )),
             HirValue::FieldAddress(fr) => ValueExpr::FieldAddress(fr),
             HirValue::FieldEpd(fr) => ValueExpr::FieldEpd(fr),
         }
@@ -493,6 +910,42 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
                 flags: 0,
                 eudx: EUDX_SIGNATURE,
             },
+            StockCondition::VarCmp {
+                var,
+                comparison,
+                value,
+                mask,
+            } => {
+                let var_obj = var_id_to_obj[&var];
+                let var_epd = ValueExpr::FieldEpd(FieldRef::new(
+                    var_obj,
+                    TriggerSlotField::ByteOffset(0),
+                ));
+                match mask {
+                    None => LirCondition {
+                        locid: ValueExpr::Const(0),
+                        player: var_epd,
+                        amount: ValueExpr::Const(value as i32),
+                        unitid: 0,
+                        comparison: comparison.encode(),
+                        condtype: 15,
+                        restype: 0,
+                        flags: 0,
+                        eudx: 0,
+                    },
+                    Some(m) => LirCondition {
+                        locid: ValueExpr::Const(m as i32),
+                        player: var_epd,
+                        amount: ValueExpr::Const(value as i32),
+                        unitid: 0,
+                        comparison: comparison.encode(),
+                        condtype: 15,
+                        restype: 0,
+                        flags: 0,
+                        eudx: EUDX_SIGNATURE,
+                    },
+                }
+            }
             StockCondition::Accumulate {
                 player,
                 comparison,
@@ -569,7 +1022,7 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
                 wavid: ValueExpr::Const(0),
                 time: ValueExpr::Const(0),
                 player1: ValueExpr::Const(player.encode()),
-                player2: lower_val(*value, &buf_id_to_obj),
+                player2: lower_val(*value, &buf_id_to_obj, &var_id_to_obj),
                 unitid: *unit,
                 acttype: 45,
                 amount: modifier.encode(),
@@ -588,7 +1041,7 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
                 wavid: ValueExpr::Const(0),
                 time: ValueExpr::Const(0),
                 player1: ValueExpr::Const(player.encode()),
-                player2: lower_val(*value, &buf_id_to_obj),
+                player2: lower_val(*value, &buf_id_to_obj, &var_id_to_obj),
                 unitid: *unit,
                 acttype: 45,
                 amount: modifier.encode(),
@@ -605,7 +1058,7 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
                 wavid: ValueExpr::Const(0),
                 time: ValueExpr::Const(0),
                 player1: ValueExpr::Const(epd(*address)),
-                player2: lower_val(*value, &buf_id_to_obj),
+                player2: lower_val(*value, &buf_id_to_obj, &var_id_to_obj),
                 unitid: 0,
                 acttype: 45,
                 amount: modifier.encode(),
@@ -623,13 +1076,53 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
                 wavid: ValueExpr::Const(0),
                 time: ValueExpr::Const(0),
                 player1: ValueExpr::Const(epd(*address)),
-                player2: lower_val(*value, &buf_id_to_obj),
+                player2: lower_val(*value, &buf_id_to_obj, &var_id_to_obj),
                 unitid: 0,
                 acttype: 45,
                 amount: modifier.encode(),
                 flags: 20,
                 eudx: EUDX_SIGNATURE,
             },
+            StockAction::SetVarConst {
+                var,
+                modifier,
+                value,
+                mask,
+            } => {
+                let var_obj = var_id_to_obj[var];
+                let var_epd = ValueExpr::FieldEpd(FieldRef::new(
+                    var_obj,
+                    TriggerSlotField::ByteOffset(0),
+                ));
+                match mask {
+                    None => LirAction {
+                        locid1: ValueExpr::Const(0),
+                        strid: ValueExpr::Const(0),
+                        wavid: ValueExpr::Const(0),
+                        time: ValueExpr::Const(0),
+                        player1: var_epd,
+                        player2: ValueExpr::Const(*value),
+                        unitid: 0,
+                        acttype: 45,
+                        amount: modifier.encode(),
+                        flags: 20,
+                        eudx: 0,
+                    },
+                    Some(m) => LirAction {
+                        locid1: ValueExpr::Const(*m as i32),
+                        strid: ValueExpr::Const(0),
+                        wavid: ValueExpr::Const(0),
+                        time: ValueExpr::Const(0),
+                        player1: var_epd,
+                        player2: ValueExpr::Const(*value),
+                        unitid: 0,
+                        acttype: 45,
+                        amount: modifier.encode(),
+                        flags: 20,
+                        eudx: EUDX_SIGNATURE,
+                    },
+                }
+            }
             StockAction::SetField {
                 target,
                 modifier,
@@ -640,7 +1133,7 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
                 wavid: ValueExpr::Const(0),
                 time: ValueExpr::Const(0),
                 player1: ValueExpr::FieldEpd(*target),
-                player2: lower_val(*value, &buf_id_to_obj),
+                player2: lower_val(*value, &buf_id_to_obj, &var_id_to_obj),
                 unitid: 0,
                 acttype: 45,
                 amount: modifier.encode(),
@@ -776,7 +1269,8 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
         }
     };
 
-    let mut objects: Vec<LirObject> = Vec::with_capacity(trigger_count as usize + hir.byte_bufs.len());
+    let mut objects: Vec<LirObject> =
+        Vec::with_capacity(trigger_count as usize + hir.byte_bufs.len() + hir.vars.len());
     let mut cur_obj_id = 0u32;
 
     for block in &main_fn.blocks {
@@ -849,17 +1343,18 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
                         );
                     }
                 }
+                _ => unreachable!("flatten_structured_cfg must lower all structured HirStmts"),
             }
         }
-        flush_pending(
-            &mut pending_actions,
-            &mut block_triggers,
-            &mut cur_obj_id,
-            &block.label,
-        );
 
         match &block.terminator {
             HirTerminator::Jump(target_block) => {
+                flush_pending(
+                    &mut pending_actions,
+                    &mut block_triggers,
+                    &mut cur_obj_id,
+                    &block.label,
+                );
                 if block_triggers.is_empty() {
                     let id = ObjectId(cur_obj_id);
                     cur_obj_id += 1;
@@ -887,6 +1382,12 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
                 };
             }
             HirTerminator::Return => {
+                flush_pending(
+                    &mut pending_actions,
+                    &mut block_triggers,
+                    &mut cur_obj_id,
+                    &block.label,
+                );
                 if block_triggers.is_empty() {
                     let id = ObjectId(cur_obj_id);
                     cur_obj_id += 1;
@@ -915,42 +1416,38 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
                 then_block,
                 else_block,
             } => {
-                let reset_id = ObjectId(cur_obj_id);
-                cur_obj_id += 1;
-                let branch_id = ObjectId(cur_obj_id);
-                cur_obj_id += 1;
-
+                // Pre-calculate branch_id: flush_pending will allocate 1 trigger (holding
+                // any remaining pending_actions + the branch_reset action), followed by branch_id!
+                let branch_id = ObjectId(cur_obj_id + 1);
                 let then_obj = block_first_trigger[then_block];
                 let else_obj = block_first_trigger[else_block];
                 let branch_next_field = FieldRef::new(branch_id, TriggerSlotField::NextPtr);
 
-                let reset_trig = LirTrigger {
-                    id: reset_id,
-                    label: Some(format!("{}_branch_reset", block.label)),
-                    prev_ptr: ValueExpr::Const(0),
-                    next_ptr: ValueExpr::ObjectAddress {
-                        object: branch_id,
+                pending_actions.push(LirAction {
+                    locid1: ValueExpr::Const(0),
+                    strid: ValueExpr::Const(0),
+                    wavid: ValueExpr::Const(0),
+                    time: ValueExpr::Const(0),
+                    player1: ValueExpr::FieldEpd(branch_next_field),
+                    player2: ValueExpr::ObjectAddress {
+                        object: else_obj,
                         byte_offset: 0,
                     },
-                    conditions: Vec::new(),
-                    actions: vec![LirAction {
-                        locid1: ValueExpr::Const(0),
-                        strid: ValueExpr::Const(0),
-                        wavid: ValueExpr::Const(0),
-                        time: ValueExpr::Const(0),
-                        player1: ValueExpr::FieldEpd(branch_next_field),
-                        player2: ValueExpr::ObjectAddress {
-                            object: else_obj,
-                            byte_offset: 0,
-                        },
-                        unitid: 0,
-                        acttype: 45,
-                        amount: 7, // SetTo
-                        flags: 20,
-                        eudx: 0,
-                    }],
-                    flags: 4,
-                };
+                    unitid: 0,
+                    acttype: 45,
+                    amount: 7, // SetTo
+                    flags: 20,
+                    eudx: 0,
+                });
+                flush_pending(
+                    &mut pending_actions,
+                    &mut block_triggers,
+                    &mut cur_obj_id,
+                    &format!("{}_branch_reset", block.label),
+                );
+
+                debug_assert_eq!(ObjectId(cur_obj_id), branch_id);
+                cur_obj_id += 1;
 
                 let branch_trig = LirTrigger {
                     id: branch_id,
@@ -980,7 +1477,6 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
                     flags: 4,
                 };
 
-                block_triggers.push(reset_trig);
                 block_triggers.push(branch_trig);
 
                 for i in 0..block_triggers.len() - 1 {
@@ -1004,6 +1500,15 @@ pub fn lower_hir_to_lir(hir: &HirModule, map_ctx: &mut MapContext) -> Result<Lir
             id: obj_id,
             label: Some(buf.name.clone()),
             data: buf.data.clone(),
+        }));
+    }
+
+    for var in &hir.vars {
+        let obj_id = var_id_to_obj[&var.id];
+        objects.push(LirObject::ByteBuf(LirByteBuf {
+            id: obj_id,
+            label: Some(format!("var_{}", var.name)),
+            data: var.init_val.to_le_bytes().to_vec(),
         }));
     }
 

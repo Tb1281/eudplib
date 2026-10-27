@@ -12,7 +12,7 @@ pub use allocator::{allocate_lir_module, stack_objects, AllocatedPayload};
 pub use chk::Chk;
 pub use config::ProjectConfig;
 pub use error::{EudkitError, Result};
-pub use hir::HirModule;
+pub use hir::{HirModule, HirVar, VarId};
 pub use injector::{inject_payload_into_chk, CompilationReport};
 pub use lir::{FieldRef, LirModule};
 pub use map_context::MapContext;
