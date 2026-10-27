@@ -4,7 +4,7 @@ use crate::error::{EudkitError, Result};
 use crate::hir::HirModule;
 use crate::injector::{inject_payload_into_chk, CompilationReport};
 use crate::lir::{lower_hir_to_lir, LirModule, LirObject};
-use crate::map_context::MapContext;
+use crate::map_context::{MapContext, MapString};
 use eudplib_stormlib::{Archive, OpenArchiveFlags};
 use std::fs;
 use std::io::Write;
@@ -95,6 +95,10 @@ impl CompilationSession {
 
     pub fn config(&self) -> &CompilationConfig {
         &self.config
+    }
+
+    pub fn register_map_string(&mut self, text: &str) -> Result<MapString> {
+        self.map_context.register_map_string(text)
     }
 
     pub fn set_hir_module(&mut self, hir: HirModule) {

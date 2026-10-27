@@ -175,3 +175,43 @@ export function main() {
     let has_call = stmts.iter().any(|s| matches!(s, HirStmt::Call { .. }));
     assert!(has_call, "must have HirStmt::Call to clampHp");
 }
+
+#[test]
+fn compiles_typescript_format_print_and_user_cp() {
+    let map_path = repo_root().join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_ctx = session.map_context();
+
+    let ts_source = r#"
+import { var_, IsUserCP, f_eprintln, print_at } from "@eudkit/sdk";
+
+let score = var_(150, "score");
+
+export function main() {
+    if (IsUserCP()) {
+        f_eprintln("Current score: %d pts", score);
+        print_at(3, "Fixed Line: %d", score);
+    }
+}
+"#;
+
+    let hir = compile_ts_to_hir(ts_source, "ts_print_test", map_ctx)
+        .expect("should compile TS print test");
+
+    assert_eq!(hir.variables().len(), 1);
+    assert_eq!(hir.variables()[0].name, "score");
+
+    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
+    let stmts = &main_fn.blocks[0].stmts;
+
+    let has_if_user_cp = stmts.iter().any(|s| match s {
+        HirStmt::If { conditions, then_body, .. } => {
+            conditions.iter().any(|c| matches!(c, eudkit_core::hir::StockCondition::IsUserCp))
+                && then_body.iter().any(|bs| matches!(bs, HirStmt::Action(StockAction::FormatPrint { .. })))
+                && then_body.iter().any(|bs| matches!(bs, HirStmt::Action(StockAction::PrintAt { .. })))
+        }
+        _ => false,
+    });
+    assert!(has_if_user_cp, "must compile If(IsUserCP()) with FormatPrint and PrintAt actions");
+}

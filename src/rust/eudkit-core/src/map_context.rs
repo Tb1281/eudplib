@@ -120,6 +120,15 @@ pub struct ScenarioProperties {
     pub force_flags: [u8; 4],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapString {
+    pub id: u32,
+    pub text: String,
+    pub offset: u32,
+    pub address: u32,
+    pub epd: i32,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StringTable {
     datatb: Vec<Vec<u8>>,
@@ -277,6 +286,34 @@ impl StringTable {
 
     pub fn is_empty(&self) -> bool {
         self.dataindextb.is_empty()
+    }
+
+    /// Returns the byte offset of string `id1` within the serialized STRx section.
+    pub fn string_offset(&self, id1: u32) -> Option<u32> {
+        if id1 == 0 || (id1 as usize) > self.dataindextb.len() {
+            return None;
+        }
+        let data_idx = *self.dataindextb.get((id1 - 1) as usize)?;
+        let count = self.dataindextb.len();
+        let table_size = 4 * (count + 1);
+        let mut out_index = roundup_by_4(table_size);
+        for (i, s) in self.datatb.iter().enumerate() {
+            if i == data_idx {
+                return Some(out_index as u32);
+            }
+            out_index += roundup_by_4(s.len() + 1);
+        }
+        None
+    }
+
+    /// Returns the virtual memory address in StarCraft for string `id1` (`0x191943C8 + offset`).
+    pub fn string_address(&self, id1: u32) -> Option<u32> {
+        self.string_offset(id1).map(|off| crate::hir::STRX_BASE_ADDR.wrapping_add(off))
+    }
+
+    /// Returns the EPD address for string `id1`.
+    pub fn string_epd(&self, id1: u32) -> Option<i32> {
+        self.string_address(id1).map(|addr| crate::hir::epd(addr))
     }
 
     /// Serializes into Remastered `STRx` format (32-bit offsets, 4-byte aligned entries).
@@ -703,6 +740,25 @@ impl MapContext {
 
     pub fn get_or_insert_string(&mut self, s: impl AsRef<[u8]>) -> u32 {
         self.string_table.get_or_insert(s.as_ref())
+    }
+
+    /// Registers a string in the STRx string table, deduplicating with existing entries,
+    /// and resolves its static offset, virtual address, and EPD without post-collection callbacks.
+    pub fn register_map_string(&mut self, text: &str) -> Result<MapString> {
+        let id = self.string_table.get_or_insert(text.as_bytes());
+        let offset = self
+            .string_table
+            .string_offset(id)
+            .ok_or_else(|| EudkitError::Ir(format!("failed to compute offset for string ID {id}")))?;
+        let address = crate::hir::STRX_BASE_ADDR.wrapping_add(offset);
+        let epd = crate::hir::epd(address);
+        Ok(MapString {
+            id,
+            text: text.to_string(),
+            offset,
+            address,
+            epd,
+        })
     }
 
     pub fn locations(&self) -> &[LocationInfo] {

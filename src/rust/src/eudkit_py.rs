@@ -1,7 +1,7 @@
 use eudkit_core::hir::{
-    Comparison, FuncId, FuncPtrId, HirBasicBlock, HirBinOp, HirByteBuf, HirExpr, HirFunction,
-    HirModule, HirStmt, HirTerminator, HirUnaryOp, HirValue, InlineHint, Modifier, PlayerId,
-    ResourceType, StockAction, StockCondition, SwitchState, VarId,
+    parse_format_template, Comparison, FuncId, FuncPtrId, HirBasicBlock, HirBinOp, HirByteBuf,
+    HirExpr, HirFunction, HirModule, HirStmt, HirTerminator, HirUnaryOp, HirValue, InlineHint,
+    Modifier, PlayerId, PrintTarget, ResourceType, StockAction, StockCondition, SwitchState, VarId,
 };
 use eudkit_core::{CompilationConfig, CompilationSession, EudkitError};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
@@ -162,6 +162,33 @@ impl PyExpr {
 #[derive(Clone, Debug)]
 #[pyclass(
     from_py_object,
+    name = "RawMapString",
+    module = "eudplib.bindings._rust.eudkit"
+)]
+pub struct PyMapString {
+    #[pyo3(get)]
+    pub id: u32,
+    #[pyo3(get)]
+    pub offset: u32,
+    #[pyo3(get)]
+    pub address: u32,
+    #[pyo3(get)]
+    pub epd: i32,
+}
+
+#[pymethods]
+impl PyMapString {
+    fn __repr__(&self) -> String {
+        format!(
+            "RawMapString(id={}, offset=0x{:X}, address=0x{:X}, epd={})",
+            self.id, self.offset, self.address, self.epd
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+#[pyclass(
+    from_py_object,
     name = "RawCondition",
     module = "eudplib.bindings._rust.eudkit"
 )]
@@ -177,6 +204,11 @@ impl PyCondition {
     #[staticmethod]
     fn never() -> Self {
         Self(StockCondition::Never)
+    }
+
+    #[staticmethod]
+    fn is_user_cp() -> Self {
+        Self(StockCondition::IsUserCp)
     }
 
     #[staticmethod]
@@ -458,6 +490,53 @@ impl PyAction {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (template, args=None, always_display=true))]
+    fn format_display_text(
+        template: String,
+        args: Option<Vec<PyExpr>>,
+        always_display: bool,
+    ) -> PyResult<Self> {
+        let arg_exprs: Vec<HirExpr> = args.unwrap_or_default().into_iter().map(|e| e.0).collect();
+        let parts = parse_format_template(&template, &arg_exprs).map_err(|e| PyValueError::new_err(e))?;
+        Ok(Self(StockAction::FormatPrint {
+            target: PrintTarget::DisplayText,
+            parts,
+            always_display,
+        }))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (line, template, args=None))]
+    fn print_at(
+        line: u8,
+        template: String,
+        args: Option<Vec<PyExpr>>,
+    ) -> PyResult<Self> {
+        let arg_exprs: Vec<HirExpr> = args.unwrap_or_default().into_iter().map(|e| e.0).collect();
+        let parts = parse_format_template(&template, &arg_exprs).map_err(|e| PyValueError::new_err(e))?;
+        Ok(Self(StockAction::PrintAt {
+            line,
+            parts,
+        }))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (string_id, template, args=None))]
+    fn format_map_string(
+        string_id: u32,
+        template: String,
+        args: Option<Vec<PyExpr>>,
+    ) -> PyResult<Self> {
+        let arg_exprs: Vec<HirExpr> = args.unwrap_or_default().into_iter().map(|e| e.0).collect();
+        let parts = parse_format_template(&template, &arg_exprs).map_err(|e| PyValueError::new_err(e))?;
+        Ok(Self(StockAction::FormatPrint {
+            target: PrintTarget::MapString(string_id),
+            parts,
+            always_display: false,
+        }))
+    }
+
+    #[staticmethod]
     fn create_unit(count: u8, unit: u16, location: u32, player: i32) -> Self {
         Self(StockAction::CreateUnit {
             count,
@@ -686,6 +765,16 @@ impl PyCompilationSession {
         self.session
             .map_context_mut()
             .get_or_insert_string(text.as_bytes())
+    }
+
+    fn register_map_string(&mut self, text: &str) -> PyResult<PyMapString> {
+        let ms = self.session.register_map_string(text).map_err(to_py_err)?;
+        Ok(PyMapString {
+            id: ms.id,
+            offset: ms.offset,
+            address: ms.address,
+            epd: ms.epd,
+        })
     }
 
     fn classic_trigger_count(&self) -> usize {
@@ -1033,5 +1122,7 @@ impl PyCompilationSession {
 #[pyo3(name = "eudkit")]
 pub(crate) mod eudkit_mod {
     #[pymodule_export]
-    use super::{PyAction, PyCompilationReport, PyCompilationSession, PyCondition, PyExpr};
+    use super::{
+        PyAction, PyCompilationReport, PyCompilationSession, PyCondition, PyExpr, PyMapString,
+    };
 }

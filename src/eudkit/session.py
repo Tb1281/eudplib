@@ -11,9 +11,13 @@ from .ast_lowering import EudFuncPtr, EudFunction
 from .types import (
     ActionSpec,
     Condition,
+    MapString,
     Var,
     _active_builder_session,
     coerce_conditions,
+    displayText,
+    f_eprintln,
+    print_at,
 )
 
 
@@ -91,6 +95,22 @@ class Session:
             name = f"buf{self._buf_counter}"
         self._buf_counter += 1
         return self._raw.add_byte_buf(name, bytes(data))
+
+    def map_string(self, text: str) -> MapString:
+        """Registers or retrieves a MapString inside this Compilation Session."""
+        return MapString(text, session=self)
+
+    def f_eprintln(self, *args: Any, always_display: bool = True) -> None:
+        """Formats and displays text using CPString streaming actions."""
+        self.do(f_eprintln(*args, always_display=always_display))
+
+    def displayText(self, *args: Any, always_display: bool = True) -> None:
+        """Displays static or formatted text."""
+        self.do(displayText(*args, always_display=always_display))
+
+    def print_at(self, line: int, *args: Any) -> None:
+        """Formats and writes text to a specific screen line (0..12)."""
+        self.do(print_at(line, *args))
 
     @overload
     def fn(self, func: Callable[..., Any]) -> EudFunction: ...
