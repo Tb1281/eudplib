@@ -17,7 +17,6 @@ from .types import (
     MaskedVar,
     Var,
     _active_builder_session,
-    _in_ast_lowering,
     _coerce_raw_expr,
     _to_i32,
     bread_epd,
@@ -338,11 +337,9 @@ class AstToHirLowerer:
             inline,
         )
         tok_sess = _active_builder_session.set(self.session)
-        tok_lowering = _in_ast_lowering.set(True)
         try:
             self.lower_stmt_list(fn_node.body)
         finally:
-            _in_ast_lowering.reset(tok_lowering)
             _active_builder_session.reset(tok_sess)
             fn_id = self.session._raw.end_function()
         return fn_id
@@ -589,7 +586,7 @@ class AstToHirLowerer:
                 return
         res = self.eval_expr(expr)
         if isinstance(res, ActionSpec):
-            self.session._raw.push_action(res.resolve(self.session))
+            self.session.do(res)
 
     def _expand_if_clauses(
         self, node: ast.If
