@@ -1146,6 +1146,13 @@ pub enum HirStmt {
         args: Vec<HirExpr>,
         rets: Vec<VarId>,
     },
+    MemRead {
+        dst: VarId,
+        epd: HirExpr,
+        mask: u32,
+        shift: i32,
+        initial_val: i32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1461,6 +1468,13 @@ impl HirModule {
                         arg_strs.join(", ")
                     );
                 }
+            }
+            HirStmt::MemRead { dst, epd, mask, shift, initial_val } => {
+                let _ = writeln!(
+                    out,
+                    "{pad}@v{} = mem_read(epd={epd}, mask={mask:#010X}, shift={shift}, init={initial_val})",
+                    dst.0
+                );
             }
         }
     }

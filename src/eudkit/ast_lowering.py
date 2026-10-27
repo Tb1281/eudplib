@@ -15,9 +15,14 @@ from .types import (
     MaskedVar,
     Var,
     _active_builder_session,
+    _in_ast_lowering,
     _coerce_raw_expr,
     _to_i32,
+    bread_epd,
     coerce_conditions,
+    dwread_epd,
+    epdread_epd,
+    wread_epd,
 )
 
 if TYPE_CHECKING:
@@ -217,6 +222,10 @@ class AstToHirLowerer:
         if isinstance(node, ast.Attribute):
             base = self.eval_expr(node.value)
             return getattr(base, node.attr)
+        if isinstance(node, ast.Subscript):
+            base = self.eval_expr(node.value)
+            slice_val = self.eval_expr(node.slice)
+            return base[slice_val]
         if isinstance(node, ast.UnaryOp):
             operand = self.eval_expr(node.operand)
             if isinstance(node.op, ast.USub):
@@ -272,13 +281,7 @@ class AstToHirLowerer:
             fn = self.eval_expr(node.func)
             args = [self.eval_expr(a) for a in node.args]
             kwargs = {kw.arg: self.eval_expr(kw.value) for kw in node.keywords if kw.arg}
-            # Temporarily clear _active_builder_session so ActionSpec construction does not
-            # double-push before lower_stmt handles the returned ActionSpec.
-            tok = _active_builder_session.set(None)
-            try:
-                return fn(*args, **kwargs)
-            finally:
-                _active_builder_session.reset(tok)
+            return fn(*args, **kwargs)
         if isinstance(node, (ast.List, ast.Tuple)):
             return [self.eval_expr(elt) for elt in node.elts]
         raise TypeError(f"Unsupported expression in @eud.fn: {ast.dump(node)}")
@@ -332,9 +335,13 @@ class AstToHirLowerer:
             return_count,
             inline,
         )
+        tok_sess = _active_builder_session.set(self.session)
+        tok_lowering = _in_ast_lowering.set(True)
         try:
             self.lower_stmt_list(fn_node.body)
         finally:
+            _in_ast_lowering.reset(tok_lowering)
+            _active_builder_session.reset(tok_sess)
             fn_id = self.session._raw.end_function()
         return fn_id
 
@@ -431,6 +438,30 @@ class AstToHirLowerer:
                     self.session._raw.push_call_indirect(fn.id, raw_args, ret_ids)
                 return
 
+            if fn in (dwread_epd, epdread_epd, wread_epd, bread_epd) and isinstance(target, ast.Name):
+                kw_names = {kw.arg for kw in stmt.value.keywords if kw.arg}
+                if "ret" not in kw_names:
+                    target_var = self._resolve_target_var(target.id, init_if_new=0)
+                    args = [self.eval_expr(a) for a in stmt.value.args]
+                    kwargs = {kw.arg: self.eval_expr(kw.value) for kw in stmt.value.keywords if kw.arg}
+                    kwargs["ret"] = target_var
+                    kwargs["session"] = self.session
+                    fn(*args, **kwargs)
+                    return
+
+        if isinstance(target, ast.Attribute):
+            base = self.eval_expr(target.value)
+            val = self.eval_expr(stmt.value)
+            setattr(base, target.attr, val)
+            return
+
+        if isinstance(target, ast.Subscript):
+            base = self.eval_expr(target.value)
+            slice_val = self.eval_expr(target.slice)
+            val = self.eval_expr(stmt.value)
+            base[slice_val] = val
+            return
+
         if not isinstance(target, ast.Name):
             raise ValueError("Only single variable assignments are supported in @eud.fn")
         target_name = target.id
@@ -443,7 +474,8 @@ class AstToHirLowerer:
             var = self._resolve_target_var(target_name, init_if_new=0)
             var.set(val, session=self.session)
             return
-        raise TypeError(f"Unsupported assignment value for {target_name!r}: {val!r}")
+        self.compile_time_vars[target_name] = val
+        return
 
     def _lower_aug_assign(self, stmt: ast.AugAssign) -> None:
         val = self.eval_expr(stmt.value)
@@ -479,6 +511,48 @@ class AstToHirLowerer:
             if isinstance(stmt.op, ast.RShift):
                 var.set(var >> val, session=self.session)
                 return
+        elif isinstance(stmt.target, ast.Attribute):
+            base = self.eval_expr(stmt.target.value)
+            attr = stmt.target.attr
+            cur_val = getattr(base, attr)
+            if isinstance(stmt.op, ast.Add):
+                setattr(base, attr, cur_val + val)
+            elif isinstance(stmt.op, ast.Sub):
+                setattr(base, attr, cur_val - val)
+            elif isinstance(stmt.op, ast.Mult):
+                setattr(base, attr, cur_val * val)
+            elif isinstance(stmt.op, ast.BitAnd):
+                setattr(base, attr, cur_val & val)
+            elif isinstance(stmt.op, ast.BitOr):
+                setattr(base, attr, cur_val | val)
+            elif isinstance(stmt.op, ast.BitXor):
+                setattr(base, attr, cur_val ^ val)
+            else:
+                raise TypeError(
+                    f"Unsupported aug_assign operator on attribute: {ast.dump(stmt.op)}"
+                )
+            return
+        elif isinstance(stmt.target, ast.Subscript):
+            base = self.eval_expr(stmt.target.value)
+            slice_val = self.eval_expr(stmt.target.slice)
+            cur_val = base[slice_val]
+            if isinstance(stmt.op, ast.Add):
+                base[slice_val] = cur_val + val
+            elif isinstance(stmt.op, ast.Sub):
+                base[slice_val] = cur_val - val
+            elif isinstance(stmt.op, ast.Mult):
+                base[slice_val] = cur_val * val
+            elif isinstance(stmt.op, ast.BitAnd):
+                base[slice_val] = cur_val & val
+            elif isinstance(stmt.op, ast.BitOr):
+                base[slice_val] = cur_val | val
+            elif isinstance(stmt.op, ast.BitXor):
+                base[slice_val] = cur_val ^ val
+            else:
+                raise TypeError(
+                    f"Unsupported aug_assign operator on subscript: {ast.dump(stmt.op)}"
+                )
+            return
         else:
             target_obj = self.eval_expr(stmt.target)
             if isinstance(target_obj, MaskedVar) and isinstance(val, int):
@@ -508,13 +582,9 @@ class AstToHirLowerer:
                 else:
                     self.session._raw.push_call_indirect(fn.id, raw_args, [])
                 return
-        tok = _active_builder_session.set(self.session)
-        try:
-            res = self.eval_expr(expr)
-            if isinstance(res, ActionSpec):
-                self.session._raw.push_action(res.resolve(self.session))
-        finally:
-            _active_builder_session.reset(tok)
+        res = self.eval_expr(expr)
+        if isinstance(res, ActionSpec):
+            self.session._raw.push_action(res.resolve(self.session))
 
     def _expand_if_clauses(
         self, node: ast.If

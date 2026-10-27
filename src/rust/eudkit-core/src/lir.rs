@@ -2,7 +2,7 @@ use crate::error::{EudkitError, Result};
 use crate::hir::{
     epd, BlockId, ByteBufId, Comparison, HirBinOp, HirExpr, HirModule, HirStmt, HirTerminator,
     HirUnaryOp, HirValue, Modifier, PlayerId, StockAction, StockCondition, VarId,
-    END_OF_TRIGGERS_SENTINEL,
+    CURRENT_PLAYER_ADDR, END_OF_TRIGGERS_SENTINEL,
 };
 use crate::map_context::MapContext;
 use std::collections::{HashMap, HashSet};
@@ -351,6 +351,13 @@ impl LirModule {
             .sum()
     }
 
+    pub fn trigger_count(&self) -> usize {
+        self.objects
+            .iter()
+            .filter(|o| matches!(o, LirObject::Trigger(_)))
+            .count()
+    }
+
     pub fn dump_lir(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(
@@ -534,6 +541,14 @@ enum ExpandedOp {
     FuncPtrAssignTarget {
         ptr: crate::hir::FuncPtrId,
         target: crate::hir::FuncId,
+    },
+    MemReadSetup {
+        dst: VarId,
+        epd: HirExpr,
+        mask: u32,
+        shift: i32,
+        initial_val: i32,
+        return_block: BlockId,
     },
 }
 
@@ -1986,6 +2001,10 @@ enum ExpandedTerminator {
     },
     Return,
     FunctionReturn(crate::hir::FuncId),
+    ReadTableJump {
+        mask: u32,
+        shift: i32,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -2110,6 +2129,31 @@ fn lower_and_expand_cfg(
                     });
                     let tramp_entry = fp_trampoline_block[ptr];
                     out_blocks[cur_block.0 as usize].terminator = ExpandedTerminator::Jump(tramp_entry);
+                    cur_block = return_block;
+                }
+                HirStmt::MemRead { dst, epd, mask, shift, initial_val } => {
+                    let epd_lowered = if let HirExpr::Const(_) = epd {
+                        epd.clone()
+                    } else if let HirExpr::Var(_) = epd {
+                        epd.clone()
+                    } else {
+                        let epd_scratch = scratch.acquire(hir);
+                        lower_expr_into(epd, epd_scratch, hir, scratch, &mut out_blocks[cur_block.0 as usize].ops);
+                        HirExpr::Var(epd_scratch)
+                    };
+                    let return_block = alloc_block(out_blocks, format!("{}_memread_ret", out_blocks[cur_block.0 as usize].label));
+                    out_blocks[cur_block.0 as usize].ops.push(ExpandedOp::MemReadSetup {
+                        dst: *dst,
+                        epd: epd_lowered,
+                        mask: *mask,
+                        shift: *shift,
+                        initial_val: *initial_val,
+                        return_block,
+                    });
+                    out_blocks[cur_block.0 as usize].terminator = ExpandedTerminator::ReadTableJump {
+                        mask: *mask,
+                        shift: *shift,
+                    };
                     cur_block = return_block;
                 }
                 HirStmt::FuncPtrAssign { ptr, target } => {
@@ -2456,7 +2500,8 @@ fn lower_and_expand_cfg(
         for op in &mut blk.ops {
             match op {
                 ExpandedOp::CallSetup { return_block, .. }
-                | ExpandedOp::CallIndirectSetup { return_block, .. } => {
+                | ExpandedOp::CallIndirectSetup { return_block, .. }
+                | ExpandedOp::MemReadSetup { return_block, .. } => {
                     *return_block = resolve_jump(*return_block, &snapshot);
                 }
                 _ => {}
@@ -2474,7 +2519,9 @@ fn lower_and_expand_cfg(
                 *then_block = resolve_jump(*then_block, &snapshot);
                 *else_block = resolve_jump(*else_block, &snapshot);
             }
-            ExpandedTerminator::Return | ExpandedTerminator::FunctionReturn(_) => {}
+            ExpandedTerminator::Return
+            | ExpandedTerminator::FunctionReturn(_)
+            | ExpandedTerminator::ReadTableJump { .. } => {}
         }
     }
 
@@ -2487,7 +2534,8 @@ fn lower_and_expand_cfg(
         for op in &blk.ops {
             match op {
                 ExpandedOp::CallSetup { return_block, .. }
-                | ExpandedOp::CallIndirectSetup { return_block, .. } => {
+                | ExpandedOp::CallIndirectSetup { return_block, .. }
+                | ExpandedOp::MemReadSetup { return_block, .. } => {
                     if !reachable[return_block.0 as usize] {
                         reachable[return_block.0 as usize] = true;
                         worklist.push(*return_block);
@@ -2524,7 +2572,9 @@ fn lower_and_expand_cfg(
                     worklist.push(*else_block);
                 }
             }
-            ExpandedTerminator::Return | ExpandedTerminator::FunctionReturn(_) => {}
+            ExpandedTerminator::Return
+            | ExpandedTerminator::FunctionReturn(_)
+            | ExpandedTerminator::ReadTableJump { .. } => {}
         }
     }
 
@@ -2542,7 +2592,8 @@ fn lower_and_expand_cfg(
         for op in &mut blk.ops {
             match op {
                 ExpandedOp::CallSetup { return_block, .. }
-                | ExpandedOp::CallIndirectSetup { return_block, .. } => {
+                | ExpandedOp::CallIndirectSetup { return_block, .. }
+                | ExpandedOp::MemReadSetup { return_block, .. } => {
                     *return_block = old_to_new[return_block];
                 }
                 _ => {}
@@ -2558,7 +2609,9 @@ fn lower_and_expand_cfg(
                 *then_block = old_to_new[then_block];
                 *else_block = old_to_new[else_block];
             }
-            ExpandedTerminator::Return | ExpandedTerminator::FunctionReturn(_) => {}
+            ExpandedTerminator::Return
+            | ExpandedTerminator::FunctionReturn(_)
+            | ExpandedTerminator::ReadTableJump { .. } => {}
         }
     }
 
@@ -2575,11 +2628,372 @@ fn lower_and_expand_cfg(
         }
     }
 
+    schedule_cp_cursor(&mut compact_blocks);
+
     Ok(ExpandedCfg {
         blocks: compact_blocks,
         fn_entry_block: new_fn_entry_block,
         fp_trampoline_block: new_fp_trampoline_block,
     })
+}
+
+fn schedule_cp_cursor(blocks: &mut [ExpandedBlock]) {
+    for block in blocks {
+        let epd_access_count = block
+            .ops
+            .iter()
+            .filter(|op| match op {
+                ExpandedOp::LeafAction(StockAction::SetDeaths {
+                    player: PlayerId::Epd(p),
+                    ..
+                })
+                | ExpandedOp::LeafAction(StockAction::SetDeathsX {
+                    player: PlayerId::Epd(p),
+                    ..
+                }) => *p != epd(CURRENT_PLAYER_ADDR),
+                _ => false,
+            })
+            .count();
+
+        if epd_access_count < 2 {
+            continue;
+        }
+
+        let old_ops = std::mem::take(&mut block.ops);
+        let mut new_ops = Vec::with_capacity(old_ops.len() + 4);
+        let mut current_cp: Option<i32> = None;
+
+        for op in old_ops {
+            match op {
+                ExpandedOp::LeafAction(StockAction::SetDeaths {
+                    player: PlayerId::Epd(target_epd),
+                    modifier,
+                    value,
+                    unit,
+                }) if unit == 0 && target_epd != epd(CURRENT_PLAYER_ADDR) => {
+                    let u = match current_cp {
+                        None => {
+                            new_ops.push(ExpandedOp::LeafAction(StockAction::SetDeaths {
+                                player: PlayerId::Epd(epd(CURRENT_PLAYER_ADDR)),
+                                modifier: Modifier::SetTo,
+                                value: HirValue::Const(target_epd),
+                                unit: 0,
+                            }));
+                            current_cp = Some(target_epd);
+                            0
+                        }
+                        Some(cur) => {
+                            let diff = target_epd - cur;
+                            if diff >= 0 && diff % 12 == 0 && (diff / 12) <= 227 {
+                                (diff / 12) as u16
+                            } else {
+                                let adj = target_epd - cur;
+                                new_ops.push(ExpandedOp::LeafAction(StockAction::SetDeaths {
+                                    player: PlayerId::Epd(epd(CURRENT_PLAYER_ADDR)),
+                                    modifier: Modifier::Add,
+                                    value: HirValue::Const(adj),
+                                    unit: 0,
+                                }));
+                                current_cp = Some(target_epd);
+                                0
+                            }
+                        }
+                    };
+                    new_ops.push(ExpandedOp::LeafAction(StockAction::SetDeaths {
+                        player: PlayerId::CurrentPlayer,
+                        modifier,
+                        value,
+                        unit: u,
+                    }));
+                }
+                ExpandedOp::LeafAction(StockAction::SetDeathsX {
+                    player: PlayerId::Epd(target_epd),
+                    modifier,
+                    value,
+                    unit,
+                    mask,
+                }) if unit == 0 && target_epd != epd(CURRENT_PLAYER_ADDR) => {
+                    let u = match current_cp {
+                        None => {
+                            new_ops.push(ExpandedOp::LeafAction(StockAction::SetDeaths {
+                                player: PlayerId::Epd(epd(CURRENT_PLAYER_ADDR)),
+                                modifier: Modifier::SetTo,
+                                value: HirValue::Const(target_epd),
+                                unit: 0,
+                            }));
+                            current_cp = Some(target_epd);
+                            0
+                        }
+                        Some(cur) => {
+                            let diff = target_epd - cur;
+                            if diff >= 0 && diff % 12 == 0 && (diff / 12) <= 227 {
+                                (diff / 12) as u16
+                            } else {
+                                let adj = target_epd - cur;
+                                new_ops.push(ExpandedOp::LeafAction(StockAction::SetDeaths {
+                                    player: PlayerId::Epd(epd(CURRENT_PLAYER_ADDR)),
+                                    modifier: Modifier::Add,
+                                    value: HirValue::Const(adj),
+                                    unit: 0,
+                                }));
+                                current_cp = Some(target_epd);
+                                0
+                            }
+                        }
+                    };
+                    new_ops.push(ExpandedOp::LeafAction(StockAction::SetDeathsX {
+                        player: PlayerId::CurrentPlayer,
+                        modifier,
+                        value,
+                        unit: u,
+                        mask,
+                    }));
+                }
+                other => {
+                    if matches!(
+                        other,
+                        ExpandedOp::CallSetup { .. }
+                            | ExpandedOp::CallIndirectSetup { .. }
+                            | ExpandedOp::MemReadSetup { .. }
+                    ) {
+                        if current_cp.is_some() {
+                            new_ops.push(ExpandedOp::LeafAction(StockAction::SetDeaths {
+                                player: PlayerId::Epd(epd(CURRENT_PLAYER_ADDR)),
+                                modifier: Modifier::SetTo,
+                                value: HirValue::Const(0),
+                                unit: 0,
+                            }));
+                            current_cp = None;
+                        }
+                    }
+                    new_ops.push(other);
+                }
+            }
+        }
+
+        if current_cp.is_some() {
+            new_ops.push(ExpandedOp::LeafAction(StockAction::SetDeaths {
+                player: PlayerId::Epd(epd(CURRENT_PLAYER_ADDR)),
+                modifier: Modifier::SetTo,
+                value: HirValue::Const(0),
+                unit: 0,
+            }));
+        }
+
+        block.ops = new_ops;
+    }
+}
+
+pub struct ReadTable {
+    pub read_end_id: ObjectId,
+    pub triggers: Vec<LirTrigger>,
+    pub entries: HashMap<(u32, i32), ObjectId>,
+}
+
+impl ReadTable {
+    pub fn build(start_obj_id: u32) -> Self {
+        let mut cur_id = start_obj_id;
+        let read_end_id = ObjectId(cur_id);
+        cur_id += 1;
+
+        let mut triggers = Vec::new();
+        let mut entries = HashMap::new();
+
+        let copy_ret_action = LirAction {
+            locid1: ValueExpr::Const(0),
+            strid: ValueExpr::Const(0),
+            wavid: ValueExpr::Const(0),
+            time: ValueExpr::Const(0),
+            player1: ValueExpr::Const(0),
+            player2: ValueExpr::Const(0),
+            unitid: 0,
+            acttype: 45,
+            amount: Modifier::SetTo.encode(),
+            flags: 20,
+            eudx: 0,
+        };
+        let reset_copy_ret = LirAction {
+            locid1: ValueExpr::Const(0),
+            strid: ValueExpr::Const(0),
+            wavid: ValueExpr::Const(0),
+            time: ValueExpr::Const(0),
+            player1: ValueExpr::FieldEpd(FieldRef::new(
+                read_end_id,
+                TriggerSlotField::Action(0, ActField::Player2),
+            )),
+            player2: ValueExpr::Const(0),
+            unitid: 0,
+            acttype: 45,
+            amount: Modifier::SetTo.encode(),
+            flags: 20,
+            eudx: 0,
+        };
+        let reset_cp = LirAction {
+            locid1: ValueExpr::Const(0),
+            strid: ValueExpr::Const(0),
+            wavid: ValueExpr::Const(0),
+            time: ValueExpr::Const(0),
+            player1: ValueExpr::Const(epd(CURRENT_PLAYER_ADDR)),
+            player2: ValueExpr::Const(0),
+            unitid: 0,
+            acttype: 45,
+            amount: Modifier::SetTo.encode(),
+            flags: 20,
+            eudx: 0,
+        };
+        let read_end_trig = LirTrigger {
+            id: read_end_id,
+            label: Some("ReadTable_end".to_string()),
+            prev_ptr: ValueExpr::Const(0),
+            next_ptr: ValueExpr::Const(0),
+            conditions: Vec::new(),
+            actions: vec![copy_ret_action, reset_copy_ret, reset_cp],
+            flags: 4,
+        };
+        triggers.push(read_end_trig);
+
+        let build_chain = |msb: u32,
+                               lsb: u32,
+                               shift: i32,
+                               triggers: &mut Vec<LirTrigger>,
+                               cur_id: &mut u32|
+         -> HashMap<u32, ObjectId> {
+            let mut bit_to_obj = HashMap::new();
+            let mut chain_ids = Vec::new();
+            for bit in (lsb..=msb).rev() {
+                let id = ObjectId(*cur_id);
+                *cur_id += 1;
+                bit_to_obj.insert(bit, id);
+                chain_ids.push((bit, id));
+            }
+            for i in 0..chain_ids.len() {
+                let (bit, id) = chain_ids[i];
+                let next_obj = if i + 1 < chain_ids.len() {
+                    chain_ids[i + 1].1
+                } else {
+                    read_end_id
+                };
+                let add_val = if shift >= 0 {
+                    (1u32 << (bit + shift as u32)) as i32
+                } else {
+                    (1u32 << (bit - (-shift) as u32)) as i32
+                };
+                let cond = LirCondition {
+                    locid: ValueExpr::Const((1u32 << bit) as i32),
+                    player: ValueExpr::Const(13),
+                    amount: ValueExpr::Const(1),
+                    unitid: 0,
+                    comparison: Comparison::AtLeast.encode(),
+                    condtype: 15,
+                    restype: 0,
+                    flags: 0,
+                    eudx: EUDX_SIGNATURE,
+                };
+                let act = LirAction {
+                    locid1: ValueExpr::Const(0),
+                    strid: ValueExpr::Const(0),
+                    wavid: ValueExpr::Const(0),
+                    time: ValueExpr::Const(0),
+                    player1: ValueExpr::FieldEpd(FieldRef::new(
+                        read_end_id,
+                        TriggerSlotField::Action(0, ActField::Player2),
+                    )),
+                    player2: ValueExpr::Const(add_val),
+                    unitid: 0,
+                    acttype: 45,
+                    amount: Modifier::Add.encode(),
+                    flags: 20,
+                    eudx: 0,
+                };
+                triggers.push(LirTrigger {
+                    id,
+                    label: Some(format!("ReadTable_s{shift}_b{bit}")),
+                    prev_ptr: ValueExpr::Const(0),
+                    next_ptr: ValueExpr::ObjectAddress {
+                        object: next_obj,
+                        byte_offset: 0,
+                    },
+                    conditions: vec![cond],
+                    actions: vec![act],
+                    flags: 4,
+                });
+            }
+            bit_to_obj
+        };
+
+        // Chain 1: shift 0, bits 31..0
+        let s0 = build_chain(31, 0, 0, &mut triggers, &mut cur_id);
+        entries.insert((0xFFFF_FFFF, 0), s0[&31]);
+        entries.insert((0x0000_FFFF, 0), s0[&15]);
+        entries.insert((0x0000_00FF, 0), s0[&7]);
+
+        // Chain 2: shift -2, bits 31..2
+        let s_2 = build_chain(31, 2, -2, &mut triggers, &mut cur_id);
+        entries.insert((0xFFFF_FFFC, -2), s_2[&31]);
+
+        // Chain 3: shift -8, bits 15..8
+        let s_8 = build_chain(15, 8, -8, &mut triggers, &mut cur_id);
+        entries.insert((0x0000_FF00, -8), s_8[&15]);
+
+        // Chain 4: shift -16, bits 31..16
+        let s_16 = build_chain(31, 16, -16, &mut triggers, &mut cur_id);
+        entries.insert((0xFFFF_0000, -16), s_16[&31]);
+        entries.insert((0x00FF_0000, -16), s_16[&23]);
+
+        // Chain 5: shift -24, bits 31..24
+        let s_24 = build_chain(31, 24, -24, &mut triggers, &mut cur_id);
+        entries.insert((0xFF00_0000, -24), s_24[&31]);
+
+        ReadTable {
+            read_end_id,
+            triggers,
+            entries,
+        }
+    }
+
+    pub fn entry(&self, mask: u32, shift: i32) -> ObjectId {
+        if let Some(&id) = self.entries.get(&(mask, shift)) {
+            return id;
+        }
+        let msb = 31 - mask.leading_zeros();
+        match shift {
+            0 => self
+                .triggers
+                .iter()
+                .find(|t| t.label.as_deref() == Some(&format!("ReadTable_s0_b{msb}")))
+                .map(|t| t.id)
+                .unwrap_or(self.read_end_id),
+            -2 => self
+                .triggers
+                .iter()
+                .find(|t| t.label.as_deref() == Some(&format!("ReadTable_s-2_b{msb}")))
+                .map(|t| t.id)
+                .unwrap_or(self.read_end_id),
+            -8 => self
+                .triggers
+                .iter()
+                .find(|t| t.label.as_deref() == Some(&format!("ReadTable_s-8_b{msb}")))
+                .map(|t| t.id)
+                .unwrap_or(self.read_end_id),
+            -16 => self
+                .triggers
+                .iter()
+                .find(|t| t.label.as_deref() == Some(&format!("ReadTable_s-16_b{msb}")))
+                .map(|t| t.id)
+                .unwrap_or(self.read_end_id),
+            -24 => self
+                .triggers
+                .iter()
+                .find(|t| t.label.as_deref() == Some(&format!("ReadTable_s-24_b{msb}")))
+                .map(|t| t.id)
+                .unwrap_or(self.read_end_id),
+            _ => self
+                .entries
+                .get(&(0xFFFF_FFFF, 0))
+                .copied()
+                .unwrap_or(self.read_end_id),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2628,39 +3042,44 @@ fn collect_vproc_vars(blocks: &[ExpandedBlock]) -> HashSet<VarId> {
     let mut set = HashSet::new();
     for blk in blocks {
         for op in &blk.ops {
-            match *op {
+            match op {
                 ExpandedOp::VProcCopyVar { src, .. }
                 | ExpandedOp::VProcBitAndVar { src, .. }
                 | ExpandedOp::VProcBitOrVar { src, .. }
                 | ExpandedOp::VProcBitXorVar { src, .. }
                 | ExpandedOp::PatchNextTriggerCond { src, .. }
                 | ExpandedOp::PatchNextTriggerAct { src, .. } => {
-                    set.insert(src);
+                    set.insert(*src);
                 }
                 ExpandedOp::DynamicShl { dst, .. } => {
-                    set.insert(dst);
+                    set.insert(*dst);
                 }
                 ExpandedOp::DynamicShr {
                     pow2_scratch,
                     div_x_scratch,
                     ..
                 } => {
-                    set.insert(pow2_scratch);
-                    set.insert(div_x_scratch);
+                    set.insert(*pow2_scratch);
+                    set.insert(*div_x_scratch);
                 }
                 ExpandedOp::DynamicMul { rhs, .. } => {
-                    set.insert(rhs);
+                    set.insert(*rhs);
                 }
                 ExpandedOp::DynamicDivRem {
                     divisor,
                     div_x_scratch,
                     ..
                 } => {
-                    set.insert(divisor);
-                    set.insert(div_x_scratch);
+                    set.insert(*divisor);
+                    set.insert(*div_x_scratch);
                 }
                 ExpandedOp::WriteFuncReturnSlot { src_var: Some(src), .. } => {
-                    set.insert(src);
+                    set.insert(*src);
+                }
+                ExpandedOp::MemReadSetup { epd, .. } => {
+                    if let HirExpr::Var(v) = epd {
+                        set.insert(*v);
+                    }
                 }
                 ExpandedOp::LeafAction(_)
                 | ExpandedOp::Trigger { .. }
@@ -2768,6 +3187,19 @@ fn count_block_triggers(blk: &ExpandedBlock) -> u32 {
             }
             ExpandedOp::FuncPtrAssignTarget { .. } => {
                 add_pending(1, &mut pending_actions, &mut count);
+            }
+            ExpandedOp::MemReadSetup { epd, initial_val, .. } => {
+                let acts = if *initial_val != 0 { 3 } else { 2 };
+                match epd {
+                    HirExpr::Const(_) => {
+                        add_pending(acts + 1, &mut pending_actions, &mut count);
+                    }
+                    HirExpr::Var(_) => {
+                        add_pending(acts + 3, &mut pending_actions, &mut count);
+                        flush_pending(&mut pending_actions, &mut count);
+                    }
+                    _ => unreachable!(),
+                }
             }
         }
     }
@@ -2907,6 +3339,20 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
             fn_void_ret_trig.insert(func.id, void_id);
         }
     }
+
+    let has_mem_read = expanded_blocks.iter().any(|b| {
+        b.ops
+            .iter()
+            .any(|op| matches!(op, ExpandedOp::MemReadSetup { .. }))
+    });
+    let (read_table, read_table_count) = if has_mem_read {
+        let rt = ReadTable::build(trigger_count);
+        let count = rt.triggers.len() as u32;
+        (Some(rt), count)
+    } else {
+        (None, 0)
+    };
+    trigger_count += read_table_count;
 
     let mut next_obj_idx = trigger_count;
     let vbuf_obj_id = if !vproc_var_set.is_empty() || has_ret_slots {
@@ -3575,6 +4021,13 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
                 // A Branch terminator always emits at least 2 triggers at the end of the block,
                 // so any VProc op in `block.ops` is guaranteed to be followed by another trigger in this block!
                 ValueExpr::Const(0)
+            }
+            ExpandedTerminator::ReadTableJump { mask, shift } => {
+                let rt = read_table.as_ref().expect("read_table must be present");
+                ValueExpr::ObjectAddress {
+                    object: rt.entry(*mask, *shift),
+                    byte_offset: 0,
+                }
             }
         };
         let block_end_obj_id = if blk_idx + 1 < expanded_blocks.len() {
@@ -4636,6 +5089,128 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
                         None,
                     ));
                 }
+                ExpandedOp::MemReadSetup {
+                    dst,
+                    epd,
+                    mask,
+                    shift,
+                    initial_val,
+                    return_block,
+                } => {
+                    let ret_site = block_first_trigger[return_block];
+                    let ret_site_addr = ValueExpr::ObjectAddress {
+                        object: ret_site,
+                        byte_offset: 0,
+                    };
+                    let dst_epd = var_storage[dst].value_epd();
+                    let rt = read_table.as_ref().expect("read_table must be present");
+                    let read_end_id = rt.read_end_id;
+
+                    let acts_needed = if *initial_val != 0 { 3 } else { 2 };
+                    match epd {
+                        HirExpr::Const(c) => {
+                            ensure_capacity(
+                                acts_needed + 1,
+                                &mut pending_actions,
+                                &mut block_triggers,
+                                &mut cur_obj_id,
+                                &block.label,
+                            );
+                            pending_actions.push(make_set_deaths_action(
+                                ValueExpr::FieldEpd(FieldRef::next_ptr(read_end_id.0)),
+                                Modifier::SetTo,
+                                ret_site_addr,
+                                None,
+                            ));
+                            pending_actions.push(make_set_deaths_action(
+                                ValueExpr::FieldEpd(FieldRef::new(
+                                    read_end_id,
+                                    TriggerSlotField::Action(0, ActField::Player1),
+                                )),
+                                Modifier::SetTo,
+                                dst_epd,
+                                None,
+                            ));
+                            if *initial_val != 0 {
+                                pending_actions.push(make_set_deaths_action(
+                                    ValueExpr::FieldEpd(FieldRef::new(
+                                        read_end_id,
+                                        TriggerSlotField::Action(0, ActField::Player2),
+                                    )),
+                                    Modifier::SetTo,
+                                    ValueExpr::Const(*initial_val),
+                                    None,
+                                ));
+                            }
+                            pending_actions.push(make_set_deaths_action(
+                                ValueExpr::Const(crate::hir::epd(CURRENT_PLAYER_ADDR)),
+                                Modifier::SetTo,
+                                ValueExpr::Const(*c),
+                                None,
+                            ));
+                        }
+                        HirExpr::Var(v) => {
+                            let src_st = var_storage[v];
+                            ensure_capacity(
+                                acts_needed + 3,
+                                &mut pending_actions,
+                                &mut block_triggers,
+                                &mut cur_obj_id,
+                                &block.label,
+                            );
+                            pending_actions.push(make_set_deaths_action(
+                                ValueExpr::FieldEpd(FieldRef::next_ptr(read_end_id.0)),
+                                Modifier::SetTo,
+                                ret_site_addr,
+                                None,
+                            ));
+                            pending_actions.push(make_set_deaths_action(
+                                ValueExpr::FieldEpd(FieldRef::new(
+                                    read_end_id,
+                                    TriggerSlotField::Action(0, ActField::Player1),
+                                )),
+                                Modifier::SetTo,
+                                dst_epd,
+                                None,
+                            ));
+                            if *initial_val != 0 {
+                                pending_actions.push(make_set_deaths_action(
+                                    ValueExpr::FieldEpd(FieldRef::new(
+                                        read_end_id,
+                                        TriggerSlotField::Action(0, ActField::Player2),
+                                    )),
+                                    Modifier::SetTo,
+                                    ValueExpr::Const(*initial_val),
+                                    None,
+                                ));
+                            }
+                            let entry_obj = rt.entry(*mask, *shift);
+                            let entry_addr = ValueExpr::ObjectAddress {
+                                object: entry_obj,
+                                byte_offset: 0,
+                            };
+                            pending_actions.push(make_vproc_set_dest(
+                                src_st,
+                                ValueExpr::Const(crate::hir::epd(CURRENT_PLAYER_ADDR)),
+                                Modifier::SetTo,
+                            ));
+                            pending_actions.push(make_vproc_set_modifier(src_st, Modifier::SetTo));
+                            pending_actions.push(make_vproc_set_nextptr(src_st, entry_addr));
+
+                            let acts = std::mem::take(&mut pending_actions);
+                            emit_custom_trigger(
+                                format!("{}_memread_vproc_{}", block.label, cur_obj_id),
+                                vproc_trigger_addr(src_st),
+                                Vec::new(),
+                                acts,
+                                true,
+                                &mut block_triggers,
+                                &mut cur_obj_id,
+                            );
+                        }
+                        _ => unreachable!("lowered epd must be Const or Var"),
+                    }
+                }
             }
         }
 
@@ -4821,6 +5396,39 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
 
                 block_triggers.push(branch_trig);
             }
+            ExpandedTerminator::ReadTableJump { mask, shift } => {
+                flush_pending_normal(
+                    &mut pending_actions,
+                    &mut block_triggers,
+                    &mut cur_obj_id,
+                    &block.label,
+                );
+                let rt = read_table.as_ref().expect("read_table must be present");
+                let entry_obj = rt.entry(*mask, *shift);
+                let entry_addr = ValueExpr::ObjectAddress {
+                    object: entry_obj,
+                    byte_offset: 0,
+                };
+                if block_triggers.is_empty() {
+                    let id = ObjectId(cur_obj_id);
+                    cur_obj_id += 1;
+                    block_triggers.push(LirTrigger {
+                        id,
+                        label: Some(format!("{}_readtable_jump", block.label)),
+                        prev_ptr: ValueExpr::Const(0),
+                        next_ptr: entry_addr.clone(),
+                        conditions: Vec::new(),
+                        actions: Vec::new(),
+                        flags: 4,
+                    });
+                }
+                let last_trig = block_triggers.last_mut().expect("block must have triggers");
+                if last_trig.next_ptr == ValueExpr::Const(0)
+                    || last_trig.next_ptr == ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32)
+                {
+                    last_trig.next_ptr = entry_addr;
+                }
+            }
         }
 
         // Resolve any placeholder `ObjectId(u32::MAX)` in `PatchNextTriggerCond` / `PatchNextTriggerAct`:
@@ -4892,7 +5500,16 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
         }));
     }
 
-    debug_assert_eq!(cur_obj_id + fn_void_ret_trig.len() as u32, trigger_count);
+    if let Some(rt) = read_table {
+        for t in rt.triggers {
+            objects.push(LirObject::Trigger(t));
+        }
+    }
+
+    debug_assert_eq!(
+        cur_obj_id + fn_void_ret_trig.len() as u32 + read_table_count,
+        trigger_count
+    );
 
     if let Some(vbuf_id) = vbuf_obj_id {
         objects.push(LirObject::VProcBuffer(LirVProcBuffer {
