@@ -1,0 +1,21 @@
+=== MAP COMPARISON SUMMARY (Same Intent) ===
+
+Intent:
+1. Frame 0 (First tick):
+   - Display banner text
+   - Grant 5000 Ore (Minerals) and 2500 Gas to Player 1
+2. Every tick:
+   - Increment a frame counter
+   - Every 240 ticks:
+     - Reset counter to 0
+     - Display tick milestone notification
+     - Grant 100 Ore to Player 1
+
+Files Generated:
+1. v1 Map: test_maps/v1/verify_v1.scx (42,940 bytes)
+2. v2 Map: test_maps/v2/verify_v2.scx (23,819 bytes - 44.5% smaller payload!)
+
+Behavioral Invariant:
+- Both maps run in StarCraft: Remastered as Player 1.
+- Both maps immediately show 5000 Minerals and 2500 Gas in the HUD and display the startup message.
+- Every ~10 seconds on Fastest (240 game frames), 100 Minerals are added and the milestone message appears.
