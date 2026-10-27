@@ -267,3 +267,101 @@ obscurate = false
     assert!(chk.section(b"STRx").is_some());
     assert!(chk.section(b"TRIG").is_some());
 }
+
+#[test]
+fn cli_build_with_obscurate_flag_and_seed_produces_deterministic_scx() {
+    let root = repo_root();
+    let testmap = root.join("tests/unittests/testmap.scx");
+    let temp = tempfile::tempdir().unwrap();
+
+    let out_plain = temp.path().join("plain.scx");
+    let out_obs1 = temp.path().join("obs1.scx");
+    let out_obs2 = temp.path().join("obs2.scx");
+    let out_diff_seed = temp.path().join("obs_diff.scx");
+
+    // 1. Plain build without obscurate
+    let build_plain = Command::new(eudkit_bin())
+        .arg("build")
+        .arg("--input")
+        .arg(&testmap)
+        .arg("--output")
+        .arg(&out_plain)
+        .output()
+        .expect("build plain");
+    assert!(build_plain.status.success());
+
+    // 2. Obscured build with seed 42 (run 1)
+    let build_obs1 = Command::new(eudkit_bin())
+        .arg("build")
+        .arg("--input")
+        .arg(&testmap)
+        .arg("--output")
+        .arg(&out_obs1)
+        .arg("--obscurate")
+        .arg("--seed")
+        .arg("42")
+        .output()
+        .expect("build obs1");
+    assert!(
+        build_obs1.status.success(),
+        "build obs1 failed: {}",
+        String::from_utf8_lossy(&build_obs1.stderr)
+    );
+
+    // 3. Obscured build with seed 42 (run 2)
+    let build_obs2 = Command::new(eudkit_bin())
+        .arg("build")
+        .arg("--input")
+        .arg(&testmap)
+        .arg("--output")
+        .arg(&out_obs2)
+        .arg("--obscurate")
+        .arg("--seed")
+        .arg("42")
+        .output()
+        .expect("build obs2");
+    assert!(
+        build_obs2.status.success(),
+        "build obs2 failed: {}",
+        String::from_utf8_lossy(&build_obs2.stderr)
+    );
+
+    // 4. Obscured build with different seed (999)
+    let build_diff = Command::new(eudkit_bin())
+        .arg("build")
+        .arg("--input")
+        .arg(&testmap)
+        .arg("--output")
+        .arg(&out_diff_seed)
+        .arg("--obscurate")
+        .arg("--seed")
+        .arg("999")
+        .output()
+        .expect("build diff");
+    assert!(build_diff.status.success());
+
+    let b_plain = fs::read(&out_plain).unwrap();
+    let b1 = fs::read(&out_obs1).unwrap();
+    let b2 = fs::read(&out_obs2).unwrap();
+    let b_diff = fs::read(&out_diff_seed).unwrap();
+
+    // Determinism: seed 42 runs must be byte-for-byte identical
+    assert_eq!(b1, b2, "repeated --obscurate builds with same --seed must be byte-for-byte identical");
+
+    // Divergence: obscured build must differ from plain and from different seed
+    assert_ne!(b1, b_plain, "obscured build must differ from plain build");
+    assert_ne!(b1, b_diff, "different seeds must produce different output");
+
+    // Validate archive and scenario.chk
+    let mut archive = Archive::open(&out_obs1, OpenArchiveFlags::empty()).unwrap();
+    let raw_chk = archive
+        .open_file("staredit\\scenario.chk")
+        .unwrap()
+        .read_all()
+        .unwrap();
+    let chk = Chk::parse(&raw_chk).unwrap();
+    assert!(chk.has_isom_footer());
+    assert!(chk.section(b"STRx").is_some());
+    assert!(chk.section(b"TRIG").is_some());
+    assert!(chk.section(b"MRGN").is_some());
+}

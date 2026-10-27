@@ -26,6 +26,24 @@ pub fn inject_payload_into_chk(
     trigger_count: usize,
     byte_buf_count: usize,
 ) -> Result<CompilationReport> {
+    inject_payload_into_chk_with_restores(
+        chk,
+        map_ctx,
+        allocated,
+        trigger_count,
+        byte_buf_count,
+        &[],
+    )
+}
+
+pub fn inject_payload_into_chk_with_restores(
+    chk: &mut Chk,
+    map_ctx: &MapContext,
+    allocated: &AllocatedPayload,
+    trigger_count: usize,
+    byte_buf_count: usize,
+    restore_triggers: &[[u8; 2400]],
+) -> Result<CompilationReport> {
     let mut strx_bytes = map_ctx.string_table().serialize_strx();
     let str_padding = (4 - (strx_bytes.len() & 3)) & 3;
     strx_bytes.resize(strx_bytes.len() + str_padding, 0);
@@ -52,7 +70,7 @@ pub fn inject_payload_into_chk(
     strx_bytes.extend_from_slice(&relocated);
     chk.set_section(b"STRx", strx_bytes)?;
 
-    let trig_bytes = build_trig_section(payload_entry_addr, map_ctx.triggers());
+    let trig_bytes = build_trig_section(payload_entry_addr, map_ctx.triggers(), restore_triggers);
     chk.set_section(b"TRIG", trig_bytes)?;
 
     chk.fix_map_data();
@@ -69,7 +87,7 @@ pub fn inject_payload_into_chk(
     })
 }
 
-fn pack_chk_condition(
+pub fn pack_chk_condition(
     locid: u32,
     player: i32,
     amount: u32,
@@ -93,7 +111,7 @@ fn pack_chk_condition(
     out
 }
 
-fn pack_chk_action(
+pub fn pack_chk_action(
     locid1: u32,
     strid: u32,
     wavid: u32,
@@ -122,7 +140,7 @@ fn pack_chk_action(
     out
 }
 
-fn pack_chk_trigger(
+pub fn pack_chk_trigger(
     players: &[u8],
     conditions: &[[u8; 20]],
     actions: &[[u8; 32]],
@@ -145,15 +163,24 @@ fn pack_chk_trigger(
     out
 }
 
-/// Builds the `TRIG` section: preserves classic map triggers followed by the 70-trigger
-/// single-stage `TRIG` entry bootstrap that redirects `pts[player]` (`0x51A280`) into
-/// `payload_entry_addr` in `STRx`.
-pub fn build_trig_section(payload_entry_addr: u32, classic_triggers: &[MapTrigger]) -> Vec<u8> {
-    let mut out = Vec::with_capacity((classic_triggers.len() + 70) * 2400);
+/// Builds the `TRIG` section: preserves classic map triggers followed by optional
+/// obscuration restore triggers and the 70-trigger single-stage `TRIG` entry bootstrap
+/// that redirects `pts[player]` (`0x51A280`) into `payload_entry_addr` in `STRx`.
+pub fn build_trig_section(
+    payload_entry_addr: u32,
+    classic_triggers: &[MapTrigger],
+    restore_triggers: &[[u8; 2400]],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity((classic_triggers.len() + restore_triggers.len() + 70) * 2400);
 
     // 1. Preserve classic map triggers intact
     for trig in classic_triggers {
         out.extend_from_slice(&trig.raw);
+    }
+
+    // 2. Insert obscuration restore triggers
+    for trig in restore_triggers {
+        out.extend_from_slice(trig);
     }
 
     let pts_last = PTS_BASE_ADDR + 4; // 0x51A284 (pts[0].lasttrigger)

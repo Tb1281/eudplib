@@ -76,6 +76,14 @@ class Session:
         self._fp_counter = 0
         self._vars_by_name: dict[str, Var] = {}
 
+    def set_obscurate(self, obscurate: bool = True, *, seed: int | None = None) -> None:
+        """Enables or disables seeded Obscuration pass on this Compilation Session."""
+        self._raw.set_obscurate(obscurate, seed=seed)
+
+    def set_obscurate_seed(self, seed: int) -> None:
+        """Sets the seed for the Obscuration pass."""
+        self._raw.set_obscurate_seed(seed)
+
     def var(self, init: int = 0, *, name: str | None = None) -> Var:
         if name is None:
             name = f"v{self._var_counter}"

@@ -1,8 +1,7 @@
-use crate::allocator::allocate_lir_module;
 use crate::chk::Chk;
 use crate::error::{EudkitError, Result};
 use crate::hir::HirModule;
-use crate::injector::{inject_payload_into_chk, CompilationReport};
+use crate::injector::CompilationReport;
 use crate::lir::{lower_hir_to_lir, LirModule, LirObject};
 use crate::map_context::{MapContext, MapString};
 use eudplib_stormlib::{Archive, OpenArchiveFlags};
@@ -97,6 +96,14 @@ impl CompilationSession {
         &self.config
     }
 
+    pub fn set_obscurate(&mut self, obscurate: bool) {
+        self.config.obscurate = obscurate;
+    }
+
+    pub fn set_obscurate_seed(&mut self, seed: u64) {
+        self.config.obscurate_seed = Some(seed);
+    }
+
     pub fn register_map_string(&mut self, text: &str) -> Result<MapString> {
         self.map_context.register_map_string(text)
     }
@@ -178,8 +185,43 @@ impl CompilationSession {
         if self.lir_module.is_none() {
             self.lower_to_lir()?;
         }
-        let lir = self.lir_module.as_ref().unwrap();
-        let allocated = allocate_lir_module(lir)?;
+        let mut lir = self.lir_module.as_ref().unwrap().clone();
+
+        let obscurate = self.config.obscurate;
+        let seed = if obscurate {
+            Some(self.config.obscurate_seed.unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0xCAFE_BABE_1337_D00D)
+            }))
+        } else {
+            None
+        };
+
+        let mut out_chk = self.chk.clone();
+        let mut map_ctx = self.map_context.clone();
+
+        let restore_triggers = if let Some(s) = seed {
+            let mut rng = crate::obscurate::ObscureRng::new(s);
+
+            // 1. EPD unit-offset randomization on LIR
+            crate::obscurate::apply_unit_offset_randomization(&mut lir, &mut rng);
+
+            // 2. String protection: Seeded XOR scrambling of static strings in map_ctx
+            let string_restores = crate::obscurate::encrypt_static_strings(&mut map_ctx, &mut rng);
+
+            // 3. CHK protection: scramble MRGN, strip SWNM, strip comments
+            let mrgn_info = crate::obscurate::protect_chk_sections(&mut out_chk, &mut rng)?;
+
+            // 4. Build startup restore triggers for TRIG
+            crate::obscurate::build_obscuration_restore_triggers(mrgn_info.as_ref(), &string_restores)
+        } else {
+            Vec::new()
+        };
+
+        // 5. Object-layout permutation before stack_objects
+        let allocated = crate::allocator::allocate_lir_module_with_seed(&lir, seed)?;
 
         let trigger_count = lir
             .objects()
@@ -192,13 +234,13 @@ impl CompilationSession {
             .filter(|o| matches!(o, LirObject::ByteBuf(_)))
             .count();
 
-        let mut out_chk = self.chk.clone();
-        let report = inject_payload_into_chk(
+        let report = crate::injector::inject_payload_into_chk_with_restores(
             &mut out_chk,
-            &self.map_context,
+            &map_ctx,
             &allocated,
             trigger_count,
             byte_buf_count,
+            &restore_triggers,
         )?;
         Ok((out_chk.to_bytes(), report))
     }
