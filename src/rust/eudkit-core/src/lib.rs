@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod hir;
 pub mod injector;
+pub mod inlining;
 pub mod lir;
 pub mod map_context;
 pub mod session;

@@ -1,7 +1,7 @@
 use eudkit_core::hir::{
-    Comparison, HirBasicBlock, HirBinOp, HirByteBuf, HirExpr, HirFunction, HirModule, HirStmt,
-    HirTerminator, HirUnaryOp, HirValue, Modifier, PlayerId, ResourceType, StockAction,
-    StockCondition, SwitchState, VarId,
+    Comparison, FuncId, FuncPtrId, HirBasicBlock, HirBinOp, HirByteBuf, HirExpr, HirFunction,
+    HirModule, HirStmt, HirTerminator, HirUnaryOp, HirValue, InlineHint, Modifier, PlayerId,
+    ResourceType, StockAction, StockCondition, SwitchState, VarId,
 };
 use eudkit_core::{CompilationConfig, CompilationSession, EudkitError};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
@@ -522,6 +522,9 @@ enum OpenControlFrame {
     Function {
         name: String,
         is_main_loop: bool,
+        params: Vec<VarId>,
+        return_count: usize,
+        inline_hint: InlineHint,
         body: Vec<HirStmt>,
     },
     IfThen {
@@ -717,12 +720,27 @@ impl PyCompilationSession {
             .0
     }
 
-    #[pyo3(signature = (name, is_main_loop=true))]
-    fn begin_function(&mut self, name: &str, is_main_loop: bool) {
+    #[pyo3(signature = (name, is_main_loop=true, params=None, return_count=0, inline=None))]
+    fn begin_function(
+        &mut self,
+        name: &str,
+        is_main_loop: bool,
+        params: Option<Vec<u32>>,
+        return_count: usize,
+        inline: Option<bool>,
+    ) {
         self.dirty = true;
+        let inline_hint = match inline {
+            Some(true) => InlineHint::Always,
+            Some(false) => InlineHint::Never,
+            None => InlineHint::Auto,
+        };
         self.frames.push(OpenControlFrame::Function {
             name: name.to_string(),
             is_main_loop,
+            params: params.unwrap_or_default().into_iter().map(VarId).collect(),
+            return_count,
+            inline_hint,
             body: Vec::new(),
         });
     }
@@ -732,9 +750,15 @@ impl PyCompilationSession {
             Some(OpenControlFrame::Function {
                 name,
                 is_main_loop,
+                params,
+                return_count,
+                inline_hint,
                 body,
             }) => {
-                let mut func = HirFunction::new(name, is_main_loop);
+                let mut func = HirFunction::new(name, is_main_loop)
+                    .with_params(params)
+                    .with_return_count(return_count)
+                    .with_inline_hint(inline_hint);
                 let mut entry = HirBasicBlock::new("entry");
                 entry.stmts = body;
                 entry.set_terminator(HirTerminator::Return);
@@ -910,6 +934,49 @@ impl PyCompilationSession {
             conditions: conditions.into_iter().map(|c| c.0).collect(),
             actions: actions.into_iter().map(|a| a.0).collect(),
             preserved,
+        });
+    }
+
+    fn push_call(&mut self, callee: u32, args: Vec<PyExpr>, rets: Vec<u32>) {
+        self.active_stmts_mut().push(HirStmt::Call {
+            callee: FuncId(callee),
+            args: args.into_iter().map(|e| e.0).collect(),
+            rets: rets.into_iter().map(VarId).collect(),
+        });
+    }
+
+    fn push_return_values(&mut self, values: Vec<PyExpr>) {
+        self.active_stmts_mut().push(HirStmt::ReturnValues(
+            values.into_iter().map(|e| e.0).collect(),
+        ));
+    }
+
+    #[pyo3(signature = (name, param_count=0, return_count=0, initial_target=None))]
+    fn add_func_ptr(
+        &mut self,
+        name: &str,
+        param_count: usize,
+        return_count: usize,
+        initial_target: Option<u32>,
+    ) -> u32 {
+        self.dirty = true;
+        self.hir
+            .add_func_ptr(name, (param_count, return_count), initial_target.map(FuncId))
+            .0
+    }
+
+    fn push_func_ptr_assign(&mut self, ptr: u32, target: u32) {
+        self.active_stmts_mut().push(HirStmt::FuncPtrAssign {
+            ptr: FuncPtrId(ptr),
+            target: FuncId(target),
+        });
+    }
+
+    fn push_call_indirect(&mut self, ptr: u32, args: Vec<PyExpr>, rets: Vec<u32>) {
+        self.active_stmts_mut().push(HirStmt::CallIndirect {
+            ptr: FuncPtrId(ptr),
+            args: args.into_iter().map(|e| e.0).collect(),
+            rets: rets.into_iter().map(VarId).collect(),
         });
     }
 

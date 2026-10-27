@@ -335,6 +335,28 @@ pub enum HirExpr {
 }
 
 impl HirExpr {
+    pub fn substitute_vars(&self, subst: &std::collections::HashMap<VarId, HirExpr>) -> Self {
+        match self {
+            Self::Const(c) => Self::Const(*c),
+            Self::Var(v) => {
+                if let Some(replacement) = subst.get(v) {
+                    replacement.clone()
+                } else {
+                    Self::Var(*v)
+                }
+            }
+            Self::UnaryOp { op, operand } => Self::UnaryOp {
+                op: *op,
+                operand: Box::new(operand.substitute_vars(subst)),
+            },
+            Self::BinOp { op, lhs, rhs } => Self::BinOp {
+                op: *op,
+                lhs: Box::new(lhs.substitute_vars(subst)),
+                rhs: Box::new(rhs.substitute_vars(subst)),
+            },
+        }
+    }
+
     pub fn fold_constants(&self) -> Self {
         match self {
             Self::Const(c) => Self::Const(*c),
@@ -1048,6 +1070,25 @@ impl fmt::Display for StockAction {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InlineHint {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FuncPtrId(pub u32);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirFuncPtr {
+    pub id: FuncPtrId,
+    pub name: String,
+    pub signature: (usize, usize),
+    pub initial_target: Option<FuncId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HirStmt {
     Trigger {
@@ -1090,6 +1131,21 @@ pub enum HirStmt {
     },
     Break,
     Continue,
+    Call {
+        callee: FuncId,
+        args: Vec<HirExpr>,
+        rets: Vec<VarId>,
+    },
+    ReturnValues(Vec<HirExpr>),
+    FuncPtrAssign {
+        ptr: FuncPtrId,
+        target: FuncId,
+    },
+    CallIndirect {
+        ptr: FuncPtrId,
+        args: Vec<HirExpr>,
+        rets: Vec<VarId>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1135,6 +1191,9 @@ pub struct HirFunction {
     pub id: FuncId,
     pub name: String,
     pub is_main_loop: bool,
+    pub params: Vec<VarId>,
+    pub return_count: usize,
+    pub inline_hint: InlineHint,
     pub blocks: Vec<HirBasicBlock>,
 }
 
@@ -1144,12 +1203,30 @@ impl HirFunction {
             id: FuncId(0),
             name: name.into(),
             is_main_loop,
+            params: Vec::new(),
+            return_count: 0,
+            inline_hint: InlineHint::Auto,
             blocks: Vec::new(),
         }
     }
 
     pub fn new_main_loop(name: impl Into<String>) -> Self {
         Self::new(name, true)
+    }
+
+    pub fn with_params(mut self, params: impl IntoIterator<Item = VarId>) -> Self {
+        self.params = params.into_iter().collect();
+        self
+    }
+
+    pub fn with_return_count(mut self, return_count: usize) -> Self {
+        self.return_count = return_count;
+        self
+    }
+
+    pub fn with_inline_hint(mut self, hint: InlineHint) -> Self {
+        self.inline_hint = hint;
+        self
     }
 
     pub fn add_block(&mut self, mut block: HirBasicBlock) -> BlockId {
@@ -1192,6 +1269,7 @@ pub struct HirModule {
     pub main_loop: Option<FuncId>,
     pub byte_bufs: Vec<HirByteBuf>,
     pub vars: Vec<HirVar>,
+    pub func_ptrs: Vec<HirFuncPtr>,
 }
 
 impl HirModule {
@@ -1202,6 +1280,7 @@ impl HirModule {
             main_loop: None,
             byte_bufs: Vec::new(),
             vars: Vec::new(),
+            func_ptrs: Vec::new(),
         }
     }
 
@@ -1232,6 +1311,26 @@ impl HirModule {
         }
         self.functions.push(func);
         id
+    }
+
+    pub fn add_func_ptr(
+        &mut self,
+        name: impl Into<String>,
+        signature: (usize, usize),
+        initial_target: Option<FuncId>,
+    ) -> FuncPtrId {
+        let id = FuncPtrId(self.func_ptrs.len() as u32);
+        self.func_ptrs.push(HirFuncPtr {
+            id,
+            name: name.into(),
+            signature,
+            initial_target,
+        });
+        id
+    }
+
+    pub fn func_ptr(&self, id: FuncPtrId) -> &HirFuncPtr {
+        &self.func_ptrs[id.0 as usize]
     }
 
     fn dump_stmt(out: &mut String, stmt: &HirStmt, indent: usize) {
@@ -1314,6 +1413,43 @@ impl HirModule {
             HirStmt::Continue => {
                 let _ = writeln!(out, "{pad}continue");
             }
+            HirStmt::Call { callee, args, rets } => {
+                let arg_strs: Vec<String> = args.iter().map(ToString::to_string).collect();
+                let ret_strs: Vec<String> = rets.iter().map(|r| format!("@v{}", r.0)).collect();
+                if ret_strs.is_empty() {
+                    let _ = writeln!(out, "{pad}call @fn{}({})", callee.0, arg_strs.join(", "));
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "{pad}[{}] = call @fn{}({})",
+                        ret_strs.join(", "),
+                        callee.0,
+                        arg_strs.join(", ")
+                    );
+                }
+            }
+            HirStmt::ReturnValues(values) => {
+                let val_strs: Vec<String> = values.iter().map(ToString::to_string).collect();
+                let _ = writeln!(out, "{pad}return [{}]", val_strs.join(", "));
+            }
+            HirStmt::FuncPtrAssign { ptr, target } => {
+                let _ = writeln!(out, "{pad}@fp{} = @fn{}", ptr.0, target.0);
+            }
+            HirStmt::CallIndirect { ptr, args, rets } => {
+                let arg_strs: Vec<String> = args.iter().map(ToString::to_string).collect();
+                let ret_strs: Vec<String> = rets.iter().map(|r| format!("@v{}", r.0)).collect();
+                if ret_strs.is_empty() {
+                    let _ = writeln!(out, "{pad}call_indirect @fp{}({})", ptr.0, arg_strs.join(", "));
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "{pad}[{}] = call_indirect @fp{}({})",
+                        ret_strs.join(", "),
+                        ptr.0,
+                        arg_strs.join(", ")
+                    );
+                }
+            }
         }
     }
 
@@ -1337,13 +1473,41 @@ impl HirModule {
                 buf.data
             );
         }
+        for fp in &self.func_ptrs {
+            let init_str = fp
+                .initial_target
+                .map(|t| format!(" = @fn{}", t.0))
+                .unwrap_or_default();
+            let _ = writeln!(
+                out,
+                "  funcptr @{} (id=fp{}, sig=({}, {})){}",
+                fp.name, fp.id.0, fp.signature.0, fp.signature.1, init_str
+            );
+        }
         for func in &self.functions {
             let role = if func.is_main_loop {
                 " (main_loop)"
             } else {
                 ""
             };
-            let _ = writeln!(out, "  fn @{}{} {{", func.name, role);
+            if func.params.is_empty()
+                && func.return_count == 0
+                && func.inline_hint == InlineHint::Auto
+            {
+                let _ = writeln!(out, "  fn @{}{} {{", func.name, role);
+            } else {
+                let param_strs: Vec<String> =
+                    func.params.iter().map(|p| format!("@v{}", p.0)).collect();
+                let _ = writeln!(
+                    out,
+                    "  fn @{}({}) -> {} rets (hint={:?}){} {{",
+                    func.name,
+                    param_strs.join(", "),
+                    func.return_count,
+                    func.inline_hint,
+                    role
+                );
+            }
             for block in &func.blocks {
                 let _ = writeln!(out, "    bb{} (@{}):", block.id.0, block.label);
                 for stmt in &block.stmts {

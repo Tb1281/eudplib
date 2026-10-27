@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, overload
 
-from .ast_lowering import EudFunction, LoopRange, loop_range
+from .ast_lowering import EudFuncPtr, EudFunction, LoopRange, loop_range
 from .session import MapContext, Session
 from .types import (
     EPD,
@@ -88,21 +88,37 @@ class _EudNamespace:
 
     @overload
     def fn(
-        self, *, main_loop: bool = True
+        self, *, main_loop: bool | None = None, inline: bool | None = None
     ) -> Callable[[Callable[..., Any]], EudFunction]: ...
 
     def fn(
         self,
         func: Callable[..., Any] | None = None,
         *,
-        main_loop: bool = True,
+        main_loop: bool | None = None,
+        inline: bool | None = None,
     ) -> EudFunction | Callable[[Callable[..., Any]], EudFunction]:
         def _decorator(f: Callable[..., Any]) -> EudFunction:
-            return EudFunction(f, main_loop=main_loop)
+            return EudFunction(f, main_loop=main_loop, inline=inline)
 
         if func is not None:
             return _decorator(func)
         return _decorator
+
+    def func_ptr(
+        self,
+        param_count: int = 0,
+        return_count: int = 0,
+        *,
+        init: EudFunction | None = None,
+        name: str | None = None,
+    ) -> EudFuncPtr:
+        from .types import _active_builder_session
+
+        sess = _active_builder_session.get()
+        if sess is None:
+            raise RuntimeError("No active session found for func_ptr")
+        return sess.func_ptr(param_count, return_count, init=init, name=name)
 
     def loop_range(
         self, start: int, stop: int | None = None, step: int = 1
@@ -112,6 +128,7 @@ class _EudNamespace:
 
 eud = _EudNamespace()
 fn = eud.fn
+func_ptr = eud.func_ptr
 
 __all__ = [
     "EPD",
@@ -147,6 +164,7 @@ __all__ = [
     "Defeat",
     "DisplayText",
     "DisplayTextId",
+    "EudFuncPtr",
     "EudFunction",
     "Exactly",
     "Expr",
@@ -193,5 +211,6 @@ __all__ = [
     "Victory",
     "eud",
     "fn",
+    "func_ptr",
     "loop_range",
 ]

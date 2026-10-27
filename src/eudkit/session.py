@@ -7,7 +7,7 @@ from typing import Any, overload
 
 from eudplib.bindings._rust import eudkit as _rust_eudkit
 
-from .ast_lowering import EudFunction
+from .ast_lowering import EudFuncPtr, EudFunction
 from .types import (
     ActionSpec,
     Condition,
@@ -69,6 +69,7 @@ class Session:
         self.map_context = MapContext(self._raw)
         self._var_counter = 0
         self._buf_counter = 0
+        self._fp_counter = 0
         self._vars_by_name: dict[str, Var] = {}
 
     def var(self, init: int = 0, *, name: str | None = None) -> Var:
@@ -96,31 +97,53 @@ class Session:
 
     @overload
     def fn(
-        self, *, main_loop: bool = True
+        self, *, main_loop: bool | None = None, inline: bool | None = None
     ) -> Callable[[Callable[..., Any]], EudFunction]: ...
 
     def fn(
         self,
         func: Callable[..., Any] | None = None,
         *,
-        main_loop: bool = True,
+        main_loop: bool | None = None,
+        inline: bool | None = None,
     ) -> EudFunction | Callable[[Callable[..., Any]], EudFunction]:
         def _decorator(f: Callable[..., Any]) -> EudFunction:
-            ef = EudFunction(f, session=self, main_loop=main_loop)
-            ef.lower_into(self, main_loop=main_loop)
+            ef = EudFunction(f, session=self, main_loop=main_loop, inline=inline)
+            ef.lower_into(self, main_loop=main_loop, inline=inline)
             return ef
 
         if func is not None:
             return _decorator(func)
         return _decorator
 
+    def func_ptr(
+        self,
+        param_count: int = 0,
+        return_count: int = 0,
+        *,
+        init: EudFunction | None = None,
+        name: str | None = None,
+    ) -> EudFuncPtr:
+        if name is None:
+            name = f"fp{self._fp_counter}"
+            self._fp_counter += 1
+        if init is not None and init.fn_id is None:
+            init.lower_into(self)
+        init_id = init.fn_id if (init is not None and init.fn_id is not None) else None
+        ptr_id = self._raw.add_func_ptr(name, param_count, return_count, init_id)
+        return EudFuncPtr(self, ptr_id, name, param_count, return_count)
+
     def add_fn(
-        self, func: EudFunction | Callable[..., Any], *, main_loop: bool = True
+        self,
+        func: EudFunction | Callable[..., Any],
+        *,
+        main_loop: bool | None = None,
+        inline: bool | None = None,
     ) -> int:
         if isinstance(func, EudFunction):
-            return func.lower_into(self, main_loop=main_loop)
-        ef = EudFunction(func, session=self, main_loop=main_loop)
-        return ef.lower_into(self, main_loop=main_loop)
+            return func.lower_into(self, main_loop=main_loop, inline=inline)
+        ef = EudFunction(func, session=self, main_loop=main_loop, inline=inline)
+        return ef.lower_into(self, main_loop=main_loop, inline=inline)
 
     @contextlib.contextmanager
     def main_loop(self, name: str = "main") -> Iterator[Session]:

@@ -413,5 +413,161 @@ class TestEudkitPythonFrontend(unittest.TestCase):
             )
 
 
+    def test_hir_function_inlining_zero_overhead(self):
+        import eudkit
+
+        session = eudkit.Session(BASEMAP_STRX_PATH)
+        res = session.var(0, name="res")
+
+        @session.fn(inline=True)
+        def add_five(x):
+            return x + 5
+
+        @session.fn
+        def main():
+            res = add_five(10)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "inlining_test.scx"
+            report = session.compile(out)
+            self.assertTrue(out.exists())
+            self.assertGreater(report.payload_size, 0)
+            hir_text = session.dump_hir()
+            self.assertNotIn("call @add_five", hir_text)
+
+    def test_non_inlined_function_direct_return_convention(self):
+        import eudkit
+
+        session = eudkit.Session(BASEMAP_STRX_PATH)
+        out1 = session.var(0, name="out1")
+        out2 = session.var(0, name="out2")
+
+        @session.fn(inline=False)
+        def calc_stats(x, y):
+            return x * 2, y + 10
+
+        @session.fn
+        def main():
+            out1, out2 = calc_stats(15, 25)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "direct_return_test.scx"
+            report = session.compile(out)
+            self.assertTrue(out.exists())
+            self.assertGreater(report.payload_size, 0)
+            lir_text = session.dump_lir()
+            self.assertIn("VProcBuffer", lir_text)
+            self.assertIn("calc_stats_ret_0", lir_text)
+            self.assertIn("calc_stats_ret_1", lir_text)
+
+    def test_func_ptr_dynamic_dispatch_frontend(self):
+        import eudkit
+
+        session = eudkit.Session(BASEMAP_STRX_PATH)
+        r1 = session.var(0, name="r1")
+        r2 = session.var(0, name="r2")
+
+        @session.fn(inline=False)
+        def step_add(x):
+            return x + 10
+
+        @session.fn(inline=False)
+        def step_mul(x):
+            return x * 4
+
+        fp = session.func_ptr(1, 1, init=step_add, name="op_step")
+
+        @session.fn
+        def main():
+            r1 = fp(5)
+            fp.set(step_mul)
+            r2 = fp(5)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "func_ptr_test.scx"
+            report = session.compile(out)
+            self.assertTrue(out.exists())
+            self.assertGreater(report.payload_size, 0)
+            lir_text = session.dump_lir()
+            self.assertIn("fp_op_step_trampoline", lir_text)
+            self.assertIn("fp_op_step_ret_0", lir_text)
+
+    def test_v2_vs_v1_function_and_funcptr_differential_budget_benchmark(self):
+        import eudkit
+        import eudplib as ep
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            v1_out = Path(tmpdir) / "v1_fn_bench.scx"
+            v2_out = Path(tmpdir) / "v2_fn_bench.scx"
+
+            # --- 1. Compile workload with legacy eudplib (v1) ---
+            ep.LoadMap(str(BASEMAP_STRX_PATH))
+            ep.CompressPayload(True)
+
+            @ep.EUDFunc
+            def v1_worker(x):
+                ep.EUDReturn(x + 7)
+
+            @ep.EUDFunc
+            def v1_mul(x):
+                ep.EUDReturn(x * 3)
+
+            v1_fptr = ep.EUDFuncPtr(1, 1)(v1_worker)
+
+            def v1_fn_main():
+                res1 = ep.EUDVariable(0)
+                res2 = ep.EUDVariable(0)
+                res1 << v1_fptr(10)
+                v1_fptr << v1_mul
+                res2 << v1_fptr(10)
+
+            ep.SaveMap(str(v1_out), v1_fn_main)
+
+            v1_verify_session = eudkit.Session(v1_out)
+            v1_base_session = eudkit.Session(BASEMAP_STRX_PATH)
+            v1_strx_growth = (
+                v1_verify_session.strx_byte_len() - v1_base_session.strx_byte_len()
+            )
+            v1_raw_triggers = sum(
+                1
+                for obj in ep.core.allocator.payload._found_objects_dict
+                if isinstance(obj, ep.RawTrigger)
+            )
+
+            # --- 2. Compile equivalent workload with eudkit (v2) ---
+            session = eudkit.Session(BASEMAP_STRX_PATH)
+            res1 = session.var(0, name="res1")
+            res2 = session.var(0, name="res2")
+
+            @session.fn(inline=False)
+            def v2_worker(x):
+                return x + 7
+
+            @session.fn(inline=False)
+            def v2_mul(x):
+                return x * 3
+
+            v2_fptr = session.func_ptr(1, 1, init=v2_worker, name="v2_fptr")
+
+            @session.fn
+            def v2_fn_main():
+                res1 = v2_fptr(10)
+                v2_fptr.set(v2_mul)
+                res2 = v2_fptr(10)
+
+            v2_report = session.compile(v2_out)
+
+            self.assertLessEqual(
+                v2_report.payload_size,
+                v1_strx_growth,
+                f"v2 payload ({v2_report.payload_size}B) must be <= v1 STRx payload growth ({v1_strx_growth}B)",
+            )
+            self.assertLessEqual(
+                v2_report.trigger_count,
+                v1_raw_triggers,
+                f"v2 triggers ({v2_report.trigger_count}) must be <= v1 triggers ({v1_raw_triggers})",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
