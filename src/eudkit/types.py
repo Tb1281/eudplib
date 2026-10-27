@@ -12,6 +12,9 @@ if TYPE_CHECKING:
 _active_builder_session: contextvars.ContextVar[Session | None] = (
     contextvars.ContextVar("eudkit_active_builder_session", default=None)
 )
+_in_ast_lowering: contextvars.ContextVar[bool] = (
+    contextvars.ContextVar("eudkit_in_ast_lowering", default=False)
+)
 
 # Player IDs
 Player1 = 0
@@ -625,7 +628,7 @@ class ActionSpec:
     ) -> None:
         self._builder = builder
         active = _active_builder_session.get()
-        if active is not None:
+        if active is not None and not _in_ast_lowering.get():
             active._raw.push_action(self.resolve(active))
 
     def resolve(self, session: Session) -> _rust_eudkit.RawAction:
@@ -966,3 +969,567 @@ def Victory() -> ActionSpec:
 
 def Defeat() -> ActionSpec:
     return ActionSpec(lambda _s: _rust_eudkit.RawAction.defeat())
+
+
+# Memory I/O using ReadTable
+def dwread_epd(
+    epd: ExprLike,
+    *,
+    ret: Var | Sequence[Var] | None = None,
+    session: Session | None = None,
+) -> Var:
+    """Reads a 32-bit dword from `epd` using the unified backend ReadTable."""
+    sess = session or _active_builder_session.get()
+    if sess is None:
+        if isinstance(epd, Var):
+            sess = epd._session
+        elif isinstance(ret, Var):
+            sess = ret._session
+        elif isinstance(ret, (list, tuple)) and ret and isinstance(ret[0], Var):
+            sess = ret[0]._session
+        else:
+            raise RuntimeError("dwread_epd requires an active Session or Var target")
+    dst = ret[0] if isinstance(ret, (list, tuple)) else ret
+    if dst is None:
+        dst = sess.var(0)
+    raw_epd = _coerce_raw_expr(epd, sess)
+    sess._raw.push_mem_read(dst.id, raw_epd, 0xFFFFFFFF, 0, 0)
+    return dst
+
+
+def epdread_epd(
+    epd: ExprLike,
+    *,
+    ret: Var | Sequence[Var] | None = None,
+    session: Session | None = None,
+) -> Var:
+    """Reads a 32-bit pointer from `epd` and converts it to an EPD address using the ReadTable."""
+    sess = session or _active_builder_session.get()
+    if sess is None:
+        if isinstance(epd, Var):
+            sess = epd._session
+        elif isinstance(ret, Var):
+            sess = ret._session
+        elif isinstance(ret, (list, tuple)) and ret and isinstance(ret[0], Var):
+            sess = ret[0]._session
+        else:
+            raise RuntimeError("epdread_epd requires an active Session or Var target")
+    dst = ret[0] if isinstance(ret, (list, tuple)) else ret
+    if dst is None:
+        dst = sess.var(0)
+    raw_epd = _coerce_raw_expr(epd, sess)
+    sess._raw.push_mem_read(dst.id, raw_epd, 0xFFFFFFFC, -2, EPD(0))
+    return dst
+
+
+def wread_epd(
+    epd: ExprLike,
+    subp: int = 0,
+    *,
+    ret: Var | Sequence[Var] | None = None,
+    session: Session | None = None,
+) -> Var:
+    """Reads a 16-bit word at `epd` with subp 0 or 1 using the ReadTable."""
+    sess = session or _active_builder_session.get()
+    if sess is None:
+        if isinstance(epd, Var):
+            sess = epd._session
+        elif isinstance(ret, Var):
+            sess = ret._session
+        elif isinstance(ret, (list, tuple)) and ret and isinstance(ret[0], Var):
+            sess = ret[0]._session
+        else:
+            raise RuntimeError("wread_epd requires an active Session or Var target")
+    dst = ret[0] if isinstance(ret, (list, tuple)) else ret
+    if dst is None:
+        dst = sess.var(0)
+    raw_epd = _coerce_raw_expr(epd, sess)
+    if subp == 0:
+        mask, shift = 0x0000FFFF, 0
+    elif subp == 1:
+        mask, shift = 0xFFFF0000, -16
+    else:
+        raise ValueError(f"invalid word subp: {subp} (must be 0 or 1)")
+    sess._raw.push_mem_read(dst.id, raw_epd, mask, shift, 0)
+    return dst
+
+
+def bread_epd(
+    epd: ExprLike,
+    subp: int = 0,
+    *,
+    ret: Var | Sequence[Var] | None = None,
+    session: Session | None = None,
+) -> Var:
+    """Reads an 8-bit byte at `epd` with subp 0, 1, 2, or 3 using the ReadTable."""
+    sess = session or _active_builder_session.get()
+    if sess is None:
+        if isinstance(epd, Var):
+            sess = epd._session
+        elif isinstance(ret, Var):
+            sess = ret._session
+        elif isinstance(ret, (list, tuple)) and ret and isinstance(ret[0], Var):
+            sess = ret[0]._session
+        else:
+            raise RuntimeError("bread_epd requires an active Session or Var target")
+    dst = ret[0] if isinstance(ret, (list, tuple)) else ret
+    if dst is None:
+        dst = sess.var(0)
+    raw_epd = _coerce_raw_expr(epd, sess)
+    if subp == 0:
+        mask, shift = 0x000000FF, 0
+    elif subp == 1:
+        mask, shift = 0x0000FF00, -8
+    elif subp == 2:
+        mask, shift = 0x00FF0000, -16
+    elif subp == 3:
+        mask, shift = 0xFF000000, -24
+    else:
+        raise ValueError(f"invalid byte subp: {subp} (must be 0, 1, 2, or 3)")
+    sess._raw.push_mem_read(dst.id, raw_epd, mask, shift, 0)
+    return dst
+
+
+def dwwrite_epd(
+    epd: ExprLike, value: ExprLike, *, session: Session | None = None
+) -> None:
+    sess = session or _active_builder_session.get()
+    if sess is None:
+        if isinstance(epd, Var):
+            sess = epd._session
+        elif isinstance(value, Var):
+            sess = value._session
+        else:
+            raise RuntimeError("dwwrite_epd requires an active Session or Var target")
+    act = SetDeaths(epd, SetTo, value, 0)
+    if sess is not None and (_in_ast_lowering.get() or _active_builder_session.get() is None):
+        sess._raw.push_action(act.resolve(sess))
+
+
+def wwrite_epd(
+    epd: ExprLike, subp: int, value: ExprLike, *, session: Session | None = None
+) -> None:
+    sess = session or _active_builder_session.get()
+    if sess is None:
+        if isinstance(epd, Var):
+            sess = epd._session
+        elif isinstance(value, Var):
+            sess = value._session
+        else:
+            raise RuntimeError("wwrite_epd requires an active Session or Var target")
+    mask = 0x0000FFFF if subp == 0 else 0xFFFF0000
+    shifted_val = (
+        value
+        if subp == 0
+        else (value << 16 if isinstance(value, int) else (value << 16))
+    )
+    act = SetDeathsX(epd, SetTo, shifted_val, 0, mask)
+    if sess is not None and (_in_ast_lowering.get() or _active_builder_session.get() is None):
+        sess._raw.push_action(act.resolve(sess))
+
+
+def bwrite_epd(
+    epd: ExprLike, subp: int, value: ExprLike, *, session: Session | None = None
+) -> None:
+    sess = session or _active_builder_session.get()
+    if sess is None:
+        if isinstance(epd, Var):
+            sess = epd._session
+        elif isinstance(value, Var):
+            sess = value._session
+        else:
+            raise RuntimeError("bwrite_epd requires an active Session or Var target")
+    shift = subp * 8
+    mask = 0xFF << shift
+    shifted_val = (value << shift) if isinstance(value, int) else (value << shift)
+    act = SetDeathsX(epd, SetTo, shifted_val, 0, mask)
+    if sess is not None and (_in_ast_lowering.get() or _active_builder_session.get() is None):
+        sess._raw.push_action(act.resolve(sess))
+
+
+class Array:
+    """EPD-addressed contiguous dword array supporting constant and dynamic indexing."""
+
+    def __init__(
+        self,
+        length_or_init: int | Sequence[int],
+        *,
+        epd: ExprLike | None = None,
+        session: Session | None = None,
+    ) -> None:
+        if isinstance(length_or_init, int):
+            self.length = length_or_init
+            self._init = [0] * self.length
+        else:
+            self._init = list(length_or_init)
+            self.length = len(self._init)
+        self._session = session or _active_builder_session.get()
+        if epd is not None:
+            self._epd = epd
+        else:
+            self._epd = 0
+
+    @property
+    def epd(self) -> ExprLike:
+        return self._epd
+
+    def __getitem__(self, key: ExprLike) -> Var:
+        target_epd = (
+            self._epd if (isinstance(key, int) and key == 0) else self._epd + key
+        )
+        return dwread_epd(target_epd, session=self._session)
+
+    def __setitem__(self, key: ExprLike, value: ExprLike) -> None:
+        target_epd = (
+            self._epd if (isinstance(key, int) and key == 0) else self._epd + key
+        )
+        dwwrite_epd(target_epd, value, session=self._session)
+
+
+class VArray:
+    """Unified 72-byte-stride VProc trigger array supporting constant and dynamic indexing."""
+
+    def __init__(
+        self,
+        length_or_init: int | Sequence[int],
+        *,
+        epd: ExprLike | None = None,
+        session: Session | None = None,
+    ) -> None:
+        if isinstance(length_or_init, int):
+            self.length = length_or_init
+            self._init = [0] * self.length
+        else:
+            self._init = list(length_or_init)
+            self.length = len(self._init)
+        self._session = session or _active_builder_session.get()
+        self._epd = epd if epd is not None else 0
+
+    @property
+    def epd(self) -> ExprLike:
+        return self._epd
+
+    def _val_epd(self, key: ExprLike) -> ExprLike:
+        # 72-byte stride = 18 dwords per trigger slot.
+        # Action 0 player2 (value) field is at offset +87 from trigger base.
+        if isinstance(key, int):
+            return self._epd + 87 + 18 * key
+        else:
+            return self._epd + 87 + (key * 18)
+
+    def __getitem__(self, key: ExprLike) -> Var:
+        return dwread_epd(self._val_epd(key), session=self._session)
+
+    def __setitem__(self, key: ExprLike, value: ExprLike) -> None:
+        dwwrite_epd(self._val_epd(key), value, session=self._session)
+
+
+_CUNIT_BASE = 0x59CCA8
+_CUNIT_STRIDE = 336
+
+_UNSUPPORTED_CUNIT_MEMBERS = {
+    "orderQueueHead",
+    "order_queue_head",
+    "orderQueueTail",
+    "order_queue_tail",
+    "prevUnitType",
+    "prev_unit_type",
+    "lastEventTimer",
+    "last_event_timer",
+    "lastEventColor",
+    "last_event_color",
+    "loadedUnit1",
+    "loaded_unit_1",
+    "loadedUnit2",
+    "loaded_unit_2",
+    "loadedUnit3",
+    "loaded_unit_3",
+    "loadedUnit4",
+    "loaded_unit_4",
+    "loadedUnit5",
+    "loaded_unit_5",
+    "loadedUnit6",
+    "loaded_unit_6",
+    "loadedUnit7",
+    "loaded_unit_7",
+    "loadedUnit8",
+    "loaded_unit_8",
+    "prevBurrowedUnit",
+    "prev_burrowed_unit",
+    "nextBurrowedUnit",
+    "next_burrowed_unit",
+    "path",
+    "contourBoundsLT",
+    "contour_bounds_lt",
+    "contourBoundsRB",
+    "contour_bounds_rb",
+    "contourBoundsL",
+    "contour_bounds_l",
+    "contourBoundsT",
+    "contour_bounds_t",
+    "contourBoundsR",
+    "contour_bounds_r",
+    "contourBoundsB",
+    "contour_bounds_b",
+    "offsetIndex3by3",
+    "offset_index_3by3",
+    "unknown0x132",
+    "AI",
+    "ai",
+    "airStrength",
+    "air_strength",
+    "groundStrength",
+    "ground_strength",
+    "finderIndexLeft",
+    "finder_index_left",
+    "finderIndexRight",
+    "finder_index_right",
+    "finderIndexTop",
+    "finder_index_top",
+    "finderIndexBottom",
+    "finder_index_bottom",
+}
+
+
+class CUnit:
+    """Typed handle to a StarCraft: Remastered CUnit structure (0x59CCA8, 336 bytes)."""
+
+    def __init__(
+        self,
+        epd_or_ptr: ExprLike,
+        *,
+        session: Session | None = None,
+    ) -> None:
+        self._session = session or _active_builder_session.get()
+        if isinstance(epd_or_ptr, int):
+            if epd_or_ptr < 1700:
+                self._epd: ExprLike = EPD(_CUNIT_BASE + epd_or_ptr * _CUNIT_STRIDE)
+            elif epd_or_ptr >= 0x500000:
+                self._epd = EPD(epd_or_ptr)
+            else:
+                self._epd = epd_or_ptr
+        else:
+            self._epd = epd_or_ptr
+
+    @property
+    def epd(self) -> ExprLike:
+        return self._epd
+
+    def __getattr__(self, name: str) -> Any:
+        if name in _UNSUPPORTED_CUNIT_MEMBERS:
+            raise AttributeError(
+                f"StarCraft: Remastered does not support '{name}' and causes in-game errors."
+            )
+        raise AttributeError(f"'CUnit' object has no attribute '{name}'")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in ("_epd", "_session"):
+            super().__setattr__(name, value)
+            return
+        if name in _UNSUPPORTED_CUNIT_MEMBERS:
+            raise AttributeError(
+                f"StarCraft: Remastered does not support '{name}' and causes in-game errors."
+            )
+        prop = getattr(type(self), name, None)
+        if isinstance(prop, property) and prop.fset is not None:
+            prop.fset(self, value)
+            return
+        super().__setattr__(name, value)
+
+    # Unit HP (offset 0x008, EPD + 2)
+    @property
+    def hp(self) -> Var:
+        return dwread_epd(self._epd + 2, session=self._session)
+
+    @hp.setter
+    def hp(self, val: ExprLike) -> None:
+        dwwrite_epd(self._epd + 2, val, session=self._session)
+
+    # Unit Sprite pointer (offset 0x00C, EPD + 3)
+    @property
+    def sprite(self) -> CSprite:
+        s_epd = epdread_epd(self._epd + 3, session=self._session)
+        return CSprite(s_epd, session=self._session)
+
+    # Move target unit (offset 0x014, EPD + 5)
+    @property
+    def move_target(self) -> CUnit:
+        t_epd = epdread_epd(self._epd + 5, session=self._session)
+        return CUnit(t_epd, session=self._session)
+
+    moveTarget = move_target
+
+    # Unit position (offset 0x028, EPD + 10)
+    @property
+    def pos(self) -> Var:
+        return dwread_epd(self._epd + 10, session=self._session)
+
+    @pos.setter
+    def pos(self, val: ExprLike) -> None:
+        dwwrite_epd(self._epd + 10, val, session=self._session)
+
+    @property
+    def posX(self) -> Var:
+        return wread_epd(self._epd + 10, 0, session=self._session)
+
+    @posX.setter
+    def posX(self, val: ExprLike) -> None:
+        wwrite_epd(self._epd + 10, 0, val, session=self._session)
+
+    pos_x = posX
+
+    @property
+    def posY(self) -> Var:
+        return wread_epd(self._epd + 10, 1, session=self._session)
+
+    @posY.setter
+    def posY(self, val: ExprLike) -> None:
+        wwrite_epd(self._epd + 10, 1, val, session=self._session)
+
+    pos_y = posY
+
+    # Current order (offset 0x04D, EPD + 19 subp 1)
+    @property
+    def order(self) -> Var:
+        return bread_epd(self._epd + 19, 1, session=self._session)
+
+    @order.setter
+    def order(self, val: ExprLike) -> None:
+        bwrite_epd(self._epd + 19, 1, val, session=self._session)
+
+    # Order target position / coordinates (offset 0x058, EPD + 22)
+    @property
+    def order_coords(self) -> Var:
+        return dwread_epd(self._epd + 22, session=self._session)
+
+    @order_coords.setter
+    def order_coords(self, val: ExprLike) -> None:
+        dwwrite_epd(self._epd + 22, val, session=self._session)
+
+    orderTargetPos = order_coords
+    order_target_pos = order_coords
+
+    # Unit status flags (offset 0x0DC, EPD + 55)
+    @property
+    def status_flags(self) -> Var:
+        return dwread_epd(self._epd + 55, session=self._session)
+
+    @status_flags.setter
+    def status_flags(self, val: ExprLike) -> None:
+        dwwrite_epd(self._epd + 55, val, session=self._session)
+
+    statusFlags = status_flags
+
+    # Status flag helpers
+    def set_status_flag(self, value: int, mask: int | None = None) -> None:
+        m = value if mask is None else mask
+        act = SetDeathsX(self._epd + 55, SetTo, value, 0, m)
+        sess = self._session or _active_builder_session.get()
+        if sess is not None and (_in_ast_lowering.get() or _active_builder_session.get() is None):
+            sess._raw.push_action(act.resolve(sess))
+
+    def clear_status_flag(self, mask: int) -> None:
+        self.set_status_flag(0, mask)
+
+    def remove_collision(self) -> None:
+        self.set_status_flag(0x00A00000)
+
+    def set_collision(self) -> None:
+        self.clear_status_flag(0x00A00000)
+
+    def set_invincible(self) -> None:
+        self.set_status_flag(0x04000000)
+
+    def clear_invincible(self) -> None:
+        self.clear_status_flag(0x04000000)
+
+
+_CSPRITE_BASE = 0x629D98
+_CSPRITE_STRIDE = 36
+
+
+class CSprite:
+    """Typed handle to a StarCraft: Remastered CSprite structure (0x629D98, 36 bytes)."""
+
+    def __init__(
+        self,
+        epd_or_ptr: ExprLike,
+        *,
+        session: Session | None = None,
+    ) -> None:
+        self._session = session or _active_builder_session.get()
+        if isinstance(epd_or_ptr, int):
+            if epd_or_ptr < 2500:
+                self._epd: ExprLike = EPD(_CSPRITE_BASE + epd_or_ptr * _CSPRITE_STRIDE)
+            elif epd_or_ptr >= 0x500000:
+                self._epd = EPD(epd_or_ptr)
+            else:
+                self._epd = epd_or_ptr
+        else:
+            self._epd = epd_or_ptr
+
+    @property
+    def epd(self) -> ExprLike:
+        return self._epd
+
+    # Position (offset 0x14, EPD + 5)
+    @property
+    def pos(self) -> Var:
+        return dwread_epd(self._epd + 5, session=self._session)
+
+    @pos.setter
+    def pos(self, val: ExprLike) -> None:
+        dwwrite_epd(self._epd + 5, val, session=self._session)
+
+    @property
+    def posX(self) -> Var:
+        return wread_epd(self._epd + 5, 0, session=self._session)
+
+    @posX.setter
+    def posX(self, val: ExprLike) -> None:
+        wwrite_epd(self._epd + 5, 0, val, session=self._session)
+
+    pos_x = posX
+
+    @property
+    def posY(self) -> Var:
+        return wread_epd(self._epd + 5, 1, session=self._session)
+
+    @posY.setter
+    def posY(self, val: ExprLike) -> None:
+        wwrite_epd(self._epd + 5, 1, val, session=self._session)
+
+    pos_y = posY
+
+    # Main graphic image (offset 0x18, EPD + 6)
+    @property
+    def main_graphic(self) -> Var:
+        return dwread_epd(self._epd + 6, session=self._session)
+
+    mainGraphic = main_graphic
+
+
+class Player:
+    """Typed accessor for player properties (minerals, gas, deaths)."""
+
+    def __init__(self, player_id: int, *, session: Session | None = None) -> None:
+        self.id = player_id
+        self._session = session or _active_builder_session.get()
+
+    @property
+    def minerals(self) -> Var:
+        return dwread_epd(EPD(0x57F0F0) + self.id, session=self._session)
+
+    @minerals.setter
+    def minerals(self, val: ExprLike) -> None:
+        dwwrite_epd(EPD(0x57F0F0) + self.id, val, session=self._session)
+
+    ore = minerals
+
+    @property
+    def gas(self) -> Var:
+        return dwread_epd(EPD(0x57F120) + self.id, session=self._session)
+
+    @gas.setter
+    def gas(self, val: ExprLike) -> None:
+        dwwrite_epd(EPD(0x57F120) + self.id, val, session=self._session)

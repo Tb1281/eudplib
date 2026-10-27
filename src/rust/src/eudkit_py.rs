@@ -951,6 +951,24 @@ impl PyCompilationSession {
         ));
     }
 
+    #[pyo3(signature = (dst, epd, mask=0xFFFF_FFFF, shift=0, initial_val=0))]
+    fn push_mem_read(
+        &mut self,
+        dst: u32,
+        epd: &PyExpr,
+        mask: u32,
+        shift: i32,
+        initial_val: i32,
+    ) {
+        self.active_stmts_mut().push(HirStmt::MemRead {
+            dst: VarId(dst),
+            epd: epd.0.clone(),
+            mask,
+            shift,
+            initial_val,
+        });
+    }
+
     #[pyo3(signature = (name, param_count=0, return_count=0, initial_target=None))]
     fn add_func_ptr(
         &mut self,

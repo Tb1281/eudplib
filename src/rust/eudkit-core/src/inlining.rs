@@ -218,6 +218,7 @@ fn is_var_mutated_in_stmts(var: VarId, stmts: &[HirStmt]) -> bool {
             | HirStmt::VarSubConst { var: v, .. }
             | HirStmt::VarSetMaskConst { var: v, .. }
             | HirStmt::VarAssignExpr { var: v, .. }
+            | HirStmt::MemRead { dst: v, .. }
                 if *v == var =>
             {
                 return true;
@@ -537,6 +538,23 @@ fn lower_inlined_stmts(
                 out.push(HirStmt::VarAssignExpr {
                     var: target,
                     expr: folded,
+                });
+            }
+            HirStmt::MemRead { dst, epd, mask, shift, initial_val } => {
+                let target = current_subst
+                    .get(dst)
+                    .and_then(|e| match e {
+                        HirExpr::Var(v) => Some(*v),
+                        _ => None,
+                    })
+                    .unwrap_or(*dst);
+                let folded_epd = epd.substitute_vars(&current_subst).fold_constants();
+                out.push(HirStmt::MemRead {
+                    dst: target,
+                    epd: folded_epd,
+                    mask: *mask,
+                    shift: *shift,
+                    initial_val: *initial_val,
                 });
             }
             HirStmt::If {

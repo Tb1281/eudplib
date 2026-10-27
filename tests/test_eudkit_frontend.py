@@ -568,6 +568,174 @@ class TestEudkitPythonFrontend(unittest.TestCase):
                 f"v2 triggers ({v2_report.trigger_count}) must be <= v1 triggers ({v1_raw_triggers})",
             )
 
+    def test_read_table_frontend_memio(self):
+        import eudkit
+        from eudkit import (
+            EPD,
+            bread_epd,
+            dwread_epd,
+            epdread_epd,
+            wread_epd,
+        )
+
+        session = eudkit.Session(BASEMAP_STRX_PATH)
+        val_dw = session.var(0, name="val_dw")
+        val_epd = session.var(0, name="val_epd")
+        val_w = session.var(0, name="val_w")
+        val_b = session.var(0, name="val_b")
+
+        @session.fn
+        def memio_main():
+            # Constant EPD reads
+            val_dw = dwread_epd(EPD(0x59CCA8))
+            val_epd = epdread_epd(EPD(0x59CCA8 + 0x00C))
+            val_w = wread_epd(EPD(0x59CCA8 + 0x028), 0)
+            val_b = bread_epd(EPD(0x59CCA8 + 0x020), 0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "memio_test.scx"
+            report = session.compile(out)
+            self.assertTrue(out.exists())
+            self.assertGreater(report.payload_size, 0)
+            lir_text = session.dump_lir()
+            self.assertIn("ReadTable", lir_text)
+
+    def test_cunit_and_csprite_frontend(self):
+        import eudkit
+        from eudkit import CSprite, CUnit
+
+        session = eudkit.Session(BASEMAP_STRX_PATH)
+        unit = CUnit(0, session=session)
+        unit_hp = session.var(0, name="unit_hp")
+        sprite_pos = session.var(0, name="sprite_pos")
+
+        # 1. Compile-time rejection of unsupported SC:R fields
+        with self.assertRaises(AttributeError) as ctx:
+            _ = unit.order_queue_head
+        self.assertIn("StarCraft: Remastered does not support", str(ctx.exception))
+
+        with self.assertRaises(AttributeError) as ctx:
+            _ = unit.path
+        self.assertIn("StarCraft: Remastered does not support", str(ctx.exception))
+
+        with self.assertRaises(AttributeError) as ctx:
+            _ = unit.AI
+        self.assertIn("StarCraft: Remastered does not support", str(ctx.exception))
+
+        with self.assertRaises(AttributeError) as ctx:
+            _ = unit.contour_bounds_lt
+        self.assertIn("StarCraft: Remastered does not support", str(ctx.exception))
+
+        # 2. Reading and writing supported fields inside @session.fn
+        @session.fn
+        def unit_ops():
+            unit.hp = 10000
+            unit.pos = 0x01000100
+            unit.remove_collision()
+            unit.set_invincible()
+            unit_hp = unit.hp
+            sprite = unit.sprite
+            sprite_pos = sprite.pos
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "cunit_test.scx"
+            report = session.compile(out)
+            self.assertTrue(out.exists())
+            self.assertGreater(report.payload_size, 0)
+
+    def test_array_and_varray_indexing(self):
+        import eudkit
+        from eudkit import Array, VArray
+
+        session = eudkit.Session(BASEMAP_STRX_PATH)
+        arr = Array(10, epd=0x58A364 // 4, session=session)
+        varr = VArray(8, epd=0x58A364 // 4, session=session)
+        idx = session.var(2, name="idx")
+        read_val = session.var(0, name="read_val")
+
+        @session.fn
+        def array_main():
+            # Constant index write and read
+            arr[1] = 500
+            varr[0] = 777
+
+            # Dynamic index write and read
+            arr[idx] = 1234
+            varr[idx] = 5678
+            read_val = arr[idx]
+            read_val = varr[idx]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "array_test.scx"
+            report = session.compile(out)
+            self.assertTrue(out.exists())
+            self.assertGreater(report.payload_size, 0)
+
+    def test_v2_vs_v1_readtable_and_entities_budget_gate(self):
+        import eudkit
+        import eudplib as ep
+        from eudkit import CUnit, dwread_epd, epdread_epd
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            v1_out = Path(tmpdir) / "v1_rt_bench.scx"
+            v2_out = Path(tmpdir) / "v2_rt_bench.scx"
+
+            # --- 1. Compile workload with legacy eudplib (v1) ---
+            ep.LoadMap(str(BASEMAP_STRX_PATH))
+            ep.CompressPayload(True)
+
+            def v1_rt_main():
+                cunit_epd = ep.EPD(0x59CCA8)
+                v1 = ep.f_dwread_epd(cunit_epd + 2)
+                v2 = ep.f_epdread_epd(cunit_epd + 3)
+                v3 = ep.f_wread_epd(cunit_epd + 10, 0)
+                v4 = ep.f_bread_epd(cunit_epd + 19, 1)
+                ep.f_dwwrite_epd(cunit_epd + 2, 500)
+                ep.f_dwwrite_epd(cunit_epd + 10, 0x02000200)
+
+            ep.SaveMap(str(v1_out), v1_rt_main)
+
+            v1_verify_session = eudkit.Session(v1_out)
+            v1_base_session = eudkit.Session(BASEMAP_STRX_PATH)
+            v1_strx_growth = (
+                v1_verify_session.strx_byte_len() - v1_base_session.strx_byte_len()
+            )
+            v1_raw_triggers = sum(
+                1
+                for obj in ep.core.allocator.payload._found_objects_dict
+                if isinstance(obj, ep.RawTrigger)
+            )
+
+            # --- 2. Compile equivalent workload with eudkit (v2) ---
+            session = eudkit.Session(BASEMAP_STRX_PATH)
+            unit = CUnit(0, session=session)
+            v1 = session.var(0, name="v1")
+            v2 = session.var(0, name="v2")
+            v3 = session.var(0, name="v3")
+            v4 = session.var(0, name="v4")
+
+            @session.fn
+            def v2_rt_main():
+                v1 = unit.hp
+                v2 = epdread_epd(unit.epd + 3)
+                v3 = unit.posX
+                v4 = unit.order
+                unit.hp = 500
+                unit.pos = 0x02000200
+
+            v2_report = session.compile(v2_out)
+
+            self.assertLessEqual(
+                v2_report.payload_size,
+                v1_strx_growth,
+                f"v2 payload ({v2_report.payload_size}B) must be <= v1 STRx payload growth ({v1_strx_growth}B)",
+            )
+            self.assertLessEqual(
+                v2_report.trigger_count,
+                v1_raw_triggers,
+                f"v2 triggers ({v2_report.trigger_count}) must be <= v1 triggers ({v1_raw_triggers})",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
