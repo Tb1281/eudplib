@@ -1,5 +1,7 @@
 pub mod builder;
+pub mod reactive;
 pub use builder::{HirBuilder, OpenControlFrame};
+pub use reactive::lower_reactive_rules;
 
 use crate::lir::FieldRef;
 use std::fmt::{self, Write};
@@ -1363,6 +1365,30 @@ pub struct HirFuncPtr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReactiveRule {
+    Once {
+        cond: Vec<StockCondition>,
+        body: Vec<HirStmt>,
+    },
+    When {
+        cond: Vec<StockCondition>,
+        body: Vec<HirStmt>,
+    },
+    Until {
+        cond: Vec<StockCondition>,
+        body: Vec<HirStmt>,
+    },
+    After {
+        delay_ticks: u32,
+        body: Vec<HirStmt>,
+    },
+    Every {
+        period_ticks: u32,
+        body: Vec<HirStmt>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HirStmt {
     Trigger {
         label: Option<String>,
@@ -1426,6 +1452,7 @@ pub enum HirStmt {
         shift: i32,
         initial_val: i32,
     },
+    Reactive(ReactiveRule),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1749,6 +1776,52 @@ impl HirModule {
                     dst.0
                 );
             }
+            HirStmt::Reactive(rule) => match rule {
+                ReactiveRule::Once { cond, body } => {
+                    let _ = writeln!(out, "{pad}once {{");
+                    for c in cond {
+                        let _ = writeln!(out, "{pad}  cond: {c}");
+                    }
+                    for s in body {
+                        Self::dump_stmt(out, s, indent + 2);
+                    }
+                    let _ = writeln!(out, "{pad}}}");
+                }
+                ReactiveRule::When { cond, body } => {
+                    let _ = writeln!(out, "{pad}when {{");
+                    for c in cond {
+                        let _ = writeln!(out, "{pad}  cond: {c}");
+                    }
+                    for s in body {
+                        Self::dump_stmt(out, s, indent + 2);
+                    }
+                    let _ = writeln!(out, "{pad}}}");
+                }
+                ReactiveRule::Until { cond, body } => {
+                    let _ = writeln!(out, "{pad}until {{");
+                    for c in cond {
+                        let _ = writeln!(out, "{pad}  cond: {c}");
+                    }
+                    for s in body {
+                        Self::dump_stmt(out, s, indent + 2);
+                    }
+                    let _ = writeln!(out, "{pad}}}");
+                }
+                ReactiveRule::After { delay_ticks, body } => {
+                    let _ = writeln!(out, "{pad}after ({delay_ticks} loops) {{");
+                    for s in body {
+                        Self::dump_stmt(out, s, indent + 2);
+                    }
+                    let _ = writeln!(out, "{pad}}}");
+                }
+                ReactiveRule::Every { period_ticks, body } => {
+                    let _ = writeln!(out, "{pad}every ({period_ticks} loops) {{");
+                    for s in body {
+                        Self::dump_stmt(out, s, indent + 2);
+                    }
+                    let _ = writeln!(out, "{pad}}}");
+                }
+            },
         }
     }
 
@@ -1841,4 +1914,9 @@ impl HirModule {
         let _ = writeln!(out, "}}");
         out
     }
+
+    pub fn lower_reactive_rules(&mut self) -> crate::error::Result<()> {
+        lower_reactive_rules(self)
+    }
 }
+

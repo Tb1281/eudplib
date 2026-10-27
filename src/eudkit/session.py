@@ -237,17 +237,12 @@ class Session:
         executes once, and permanently deactivates its guard.
         If `conditions` is None, executes on the very first trigger loop and permanently deactivates.
         """
-        guard = self.var(1)
-        if conditions is None:
-            with self.if_(guard == 1):
-                guard.set(0, session=self)
-                yield
-        else:
-            cond_list = list(conditions) if isinstance(conditions, (list, tuple)) else [conditions]
-            cond_list.append(guard == 1)
-            with self.if_(cond_list):
-                guard.set(0, session=self)
-                yield
+        raw_conds = coerce_conditions(conditions, self) if conditions is not None else []
+        self._raw.begin_once(raw_conds)
+        try:
+            yield
+        finally:
+            self._raw.end_reactive()
 
     @contextlib.contextmanager
     def when(
@@ -258,26 +253,28 @@ class Session:
         In StarCraft's polling-based trigger VM, `when(cond)` evaluates conditions at the start
         of each trigger loop pass. As long as the conditions remain true, the enclosed actions execute.
         """
-        with self.if_(conditions):
+        raw_conds = coerce_conditions(conditions, self)
+        self._raw.begin_when(raw_conds)
+        try:
             yield
+        finally:
+            self._raw.end_reactive()
 
     @contextlib.contextmanager
     def until(
-        self, condition: Condition
+        self, condition: Condition | Sequence[Condition]
     ) -> Iterator[None]:
         """Continuous rule: executes every trigger loop until condition holds, then permanently deactivates.
         
         Evaluated each trigger loop cycle. As soon as `condition` becomes true, the guard flips
         and the block will never execute again in subsequent trigger loops.
         """
-        guard = self.var(0)
-        # While condition has not happened yet (guard == 0)
-        with self.if_(guard == 0):
-            # Check if terminating condition is reached
-            with self.if_(condition):
-                guard.set(1, session=self)
-            with self.else_():
-                yield
+        raw_conds = coerce_conditions(condition, self)
+        self._raw.begin_until(raw_conds)
+        try:
+            yield
+        finally:
+            self._raw.end_reactive()
 
     @contextlib.contextmanager
     def after(
@@ -298,14 +295,11 @@ class Session:
         
         :param loops: Number of trigger loop evaluation cycles to wait before executing (e.g. 24 loops = ~1 second under Turbo).
         """
-        timer = self.var(loops)
-        done = self.var(0)
-        with self.if_(done == 0):
-            with self.if_(timer > 0):
-                timer.sub(1, session=self)
-            with self.if_(timer == 0):
-                done.set(1, session=self)
-                yield
+        self._raw.begin_after(int(loops))
+        try:
+            yield
+        finally:
+            self._raw.end_reactive()
 
     @contextlib.contextmanager
     def every(
@@ -325,12 +319,11 @@ class Session:
         
         :param loops: Interval in trigger loop cycles between successive firings (e.g. 24 loops = every 1s under Turbo).
         """
-        timer = self.var(loops)
-        with self.if_(timer > 0):
-            timer.sub(1, session=self)
-        with self.if_(timer == 0):
-            timer.set(loops, session=self)
+        self._raw.begin_every(int(loops))
+        try:
             yield
+        finally:
+            self._raw.end_reactive()
 
     def break_(self) -> None:
         self._raw.push_break()

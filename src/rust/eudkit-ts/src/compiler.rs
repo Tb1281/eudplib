@@ -2,7 +2,7 @@ use crate::error::{EudkitTsError, Result};
 use eudkit_core::hir::{
     epd, parse_format_template, CmpOp, Comparison, HirBasicBlock, HirBinOp, HirExpr, HirFunction,
     HirModule, HirStmt, HirTerminator, HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget,
-    ResourceType, StockAction, StockCondition, VarId,
+    ReactiveRule, ResourceType, StockAction, StockCondition, VarId,
 };
 use eudkit_core::map_context::MapContext;
 use oxc_allocator::Allocator;
@@ -890,13 +890,6 @@ impl<'a> TsCompiler<'a> {
 
         match fn_name {
             "once" => {
-                let guard = self.hir.add_var("once_guard", 1);
-                let guard_cond = StockCondition::VarCmp {
-                    var: guard,
-                    comparison: Comparison::Exactly,
-                    value: 1,
-                    mask: None,
-                };
                 let (cond_opt, cb_arg) = if call.arguments.len() == 1 {
                     (None, call.arguments.first())
                 } else if call.arguments.len() >= 2 {
@@ -915,22 +908,18 @@ impl<'a> TsCompiler<'a> {
                     return Ok(None);
                 };
 
-                let mut conds = vec![guard_cond];
+                let mut conds = Vec::new();
                 if let Some(cond_expr) = cond_opt {
                     conds.extend(self.lower_condition(cond_expr)?);
                 }
-                let mut body = vec![HirStmt::VarAssignConst {
-                    var: guard,
-                    value: 0,
-                }];
+                let mut body = Vec::new();
                 if let Some(cb) = cb_arg.and_then(|a| a.as_expression()) {
                     self.lower_callback(cb, &mut body)?;
                 }
-                Ok(Some(vec![HirStmt::If {
-                    conditions: conds,
-                    then_body: body,
-                    else_body: Vec::new(),
-                }]))
+                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Once {
+                    cond: conds,
+                    body,
+                })]))
             }
             "when" => {
                 let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
@@ -942,11 +931,10 @@ impl<'a> TsCompiler<'a> {
                 let conds = self.lower_condition(arg0)?;
                 let mut body = Vec::new();
                 self.lower_callback(arg1, &mut body)?;
-                Ok(Some(vec![HirStmt::If {
-                    conditions: conds,
-                    then_body: body,
-                    else_body: Vec::new(),
-                }]))
+                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::When {
+                    cond: conds,
+                    body,
+                })]))
             }
             "until" => {
                 let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
@@ -956,29 +944,12 @@ impl<'a> TsCompiler<'a> {
                     return Ok(None);
                 };
                 let conds = self.lower_condition(arg0)?;
-                let guard = self.hir.add_var("until_guard", 0);
-                let mut cb_body = Vec::new();
-                self.lower_callback(arg1, &mut cb_body)?;
-
-                let guard_cond = StockCondition::VarCmp {
-                    var: guard,
-                    comparison: Comparison::Exactly,
-                    value: 0,
-                    mask: None,
-                };
-                let inner_if = HirStmt::If {
-                    conditions: conds,
-                    then_body: vec![HirStmt::VarAssignConst {
-                        var: guard,
-                        value: 1,
-                    }],
-                    else_body: cb_body,
-                };
-                Ok(Some(vec![HirStmt::If {
-                    conditions: vec![guard_cond],
-                    then_body: vec![inner_if],
-                    else_body: Vec::new(),
-                }]))
+                let mut body = Vec::new();
+                self.lower_callback(arg1, &mut body)?;
+                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Until {
+                    cond: conds,
+                    body,
+                })]))
             }
             "after" => {
                 let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
@@ -988,54 +959,12 @@ impl<'a> TsCompiler<'a> {
                     return Ok(None);
                 };
                 let loops_val = self.eval_const_expr(arg0)?;
-                let timer = self.hir.add_var("after_timer", loops_val);
-                let done = self.hir.add_var("after_done", 0);
-                let mut cb_body = Vec::new();
-                self.lower_callback(arg1, &mut cb_body)?;
-
-                let done_cond = StockCondition::VarCmp {
-                    var: done,
-                    comparison: Comparison::Exactly,
-                    value: 0,
-                    mask: None,
-                };
-                let timer_gt_0 = StockCondition::VarCmp {
-                    var: timer,
-                    comparison: Comparison::AtLeast,
-                    value: 1,
-                    mask: None,
-                };
-                let timer_eq_0 = StockCondition::VarCmp {
-                    var: timer,
-                    comparison: Comparison::Exactly,
-                    value: 0,
-                    mask: None,
-                };
-
-                let decr_stmt = HirStmt::If {
-                    conditions: vec![timer_gt_0],
-                    then_body: vec![HirStmt::VarSubConst {
-                        var: timer,
-                        value: 1,
-                    }],
-                    else_body: Vec::new(),
-                };
-                let mut fire_body = vec![HirStmt::VarAssignConst {
-                    var: done,
-                    value: 1,
-                }];
-                fire_body.extend(cb_body);
-                let fire_stmt = HirStmt::If {
-                    conditions: vec![timer_eq_0],
-                    then_body: fire_body,
-                    else_body: Vec::new(),
-                };
-
-                Ok(Some(vec![HirStmt::If {
-                    conditions: vec![done_cond],
-                    then_body: vec![decr_stmt, fire_stmt],
-                    else_body: Vec::new(),
-                }]))
+                let mut body = Vec::new();
+                self.lower_callback(arg1, &mut body)?;
+                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::After {
+                    delay_ticks: loops_val as u32,
+                    body,
+                })]))
             }
             "every" => {
                 let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
@@ -1045,43 +974,12 @@ impl<'a> TsCompiler<'a> {
                     return Ok(None);
                 };
                 let loops_val = self.eval_const_expr(arg0)?;
-                let timer = self.hir.add_var("every_timer", loops_val);
-                let mut cb_body = Vec::new();
-                self.lower_callback(arg1, &mut cb_body)?;
-
-                let timer_gt_0 = StockCondition::VarCmp {
-                    var: timer,
-                    comparison: Comparison::AtLeast,
-                    value: 1,
-                    mask: None,
-                };
-                let timer_eq_0 = StockCondition::VarCmp {
-                    var: timer,
-                    comparison: Comparison::Exactly,
-                    value: 0,
-                    mask: None,
-                };
-
-                let decr_stmt = HirStmt::If {
-                    conditions: vec![timer_gt_0],
-                    then_body: vec![HirStmt::VarSubConst {
-                        var: timer,
-                        value: 1,
-                    }],
-                    else_body: Vec::new(),
-                };
-                let mut fire_body = vec![HirStmt::VarAssignConst {
-                    var: timer,
-                    value: loops_val,
-                }];
-                fire_body.extend(cb_body);
-                let fire_stmt = HirStmt::If {
-                    conditions: vec![timer_eq_0],
-                    then_body: fire_body,
-                    else_body: Vec::new(),
-                };
-
-                Ok(Some(vec![decr_stmt, fire_stmt]))
+                let mut body = Vec::new();
+                self.lower_callback(arg1, &mut body)?;
+                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Every {
+                    period_ticks: loops_val as u32,
+                    body,
+                })]))
             }
             _ => Ok(None),
         }

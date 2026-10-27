@@ -2363,6 +2363,11 @@ fn lower_and_expand_cfg(
                     }
                     cur_block = exit_block;
                 }
+                HirStmt::Reactive(_) => {
+                    return Err(EudkitError::Ir(
+                        "unexpected HirStmt::Reactive in CFG expansion; reactive rules must be lowered first".into(),
+                    ));
+                }
             }
         }
         Ok(Some(cur_block))
@@ -3327,6 +3332,7 @@ fn vproc_trigger_addr(src_storage: VarStorage) -> ValueExpr {
 
 pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<LirModule> {
     let mut hir = hir_in.clone();
+    hir.lower_reactive_rules()?;
     crate::inlining::inline_functions(&mut hir)?;
     let main_fn_id = hir
         .main_loop

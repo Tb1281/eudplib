@@ -1,7 +1,7 @@
 use crate::error::{EudkitError, Result};
 use crate::hir::{
     ByteBufId, FuncId, FuncPtrId, HirBasicBlock, HirByteBuf, HirExpr, HirFunction,
-    HirModule, HirStmt, HirTerminator, InlineHint, Modifier, StockAction, StockCondition, VarId,
+    HirModule, HirStmt, HirTerminator, InlineHint, Modifier, ReactiveRule, StockAction, StockCondition, VarId,
 };
 
 #[derive(Clone, Debug)]
@@ -27,6 +27,26 @@ pub enum OpenControlFrame {
     },
     While {
         conditions: Vec<StockCondition>,
+        body: Vec<HirStmt>,
+    },
+    ReactiveOnce {
+        cond: Vec<StockCondition>,
+        body: Vec<HirStmt>,
+    },
+    ReactiveWhen {
+        cond: Vec<StockCondition>,
+        body: Vec<HirStmt>,
+    },
+    ReactiveUntil {
+        cond: Vec<StockCondition>,
+        body: Vec<HirStmt>,
+    },
+    ReactiveAfter {
+        delay_ticks: u32,
+        body: Vec<HirStmt>,
+    },
+    ReactiveEvery {
+        period_ticks: u32,
         body: Vec<HirStmt>,
     },
 }
@@ -82,6 +102,11 @@ impl HirBuilder {
                 OpenControlFrame::Elif { then_body, .. } => then_body,
                 OpenControlFrame::Else { else_body } => else_body,
                 OpenControlFrame::While { body, .. } => body,
+                OpenControlFrame::ReactiveOnce { body, .. }
+                | OpenControlFrame::ReactiveWhen { body, .. }
+                | OpenControlFrame::ReactiveUntil { body, .. }
+                | OpenControlFrame::ReactiveAfter { body, .. }
+                | OpenControlFrame::ReactiveEvery { body, .. } => body,
             }
         } else {
             &mut self.root_stmts
@@ -260,6 +285,97 @@ impl HirBuilder {
                 "end_while without matching begin_while".into(),
             )),
         }
+    }
+
+    pub fn begin_once(&mut self, cond: Vec<StockCondition>) {
+        self.last_was_else = false;
+        self.frames.push(OpenControlFrame::ReactiveOnce {
+            cond,
+            body: Vec::new(),
+        });
+    }
+
+    pub fn begin_when(&mut self, cond: Vec<StockCondition>) {
+        self.last_was_else = false;
+        self.frames.push(OpenControlFrame::ReactiveWhen {
+            cond,
+            body: Vec::new(),
+        });
+    }
+
+    pub fn begin_until(&mut self, cond: Vec<StockCondition>) {
+        self.last_was_else = false;
+        self.frames.push(OpenControlFrame::ReactiveUntil {
+            cond,
+            body: Vec::new(),
+        });
+    }
+
+    pub fn begin_after(&mut self, delay_ticks: u32) {
+        self.last_was_else = false;
+        self.frames.push(OpenControlFrame::ReactiveAfter {
+            delay_ticks,
+            body: Vec::new(),
+        });
+    }
+
+    pub fn begin_every(&mut self, period_ticks: u32) {
+        self.last_was_else = false;
+        self.frames.push(OpenControlFrame::ReactiveEvery {
+            period_ticks,
+            body: Vec::new(),
+        });
+    }
+
+    pub fn end_reactive(&mut self) -> Result<()> {
+        self.last_was_else = false;
+        match self.frames.pop() {
+            Some(OpenControlFrame::ReactiveOnce { cond, body }) => {
+                self.active_stmts_mut()
+                    .push(HirStmt::Reactive(ReactiveRule::Once { cond, body }));
+                Ok(())
+            }
+            Some(OpenControlFrame::ReactiveWhen { cond, body }) => {
+                self.active_stmts_mut()
+                    .push(HirStmt::Reactive(ReactiveRule::When { cond, body }));
+                Ok(())
+            }
+            Some(OpenControlFrame::ReactiveUntil { cond, body }) => {
+                self.active_stmts_mut()
+                    .push(HirStmt::Reactive(ReactiveRule::Until { cond, body }));
+                Ok(())
+            }
+            Some(OpenControlFrame::ReactiveAfter { delay_ticks, body }) => {
+                self.active_stmts_mut()
+                    .push(HirStmt::Reactive(ReactiveRule::After {
+                        delay_ticks,
+                        body,
+                    }));
+                Ok(())
+            }
+            Some(OpenControlFrame::ReactiveEvery { period_ticks, body }) => {
+                self.active_stmts_mut()
+                    .push(HirStmt::Reactive(ReactiveRule::Every {
+                        period_ticks,
+                        body,
+                    }));
+                Ok(())
+            }
+            Some(other) => {
+                self.frames.push(other);
+                Err(EudkitError::Ir(
+                    "mismatched end_reactive: active frame is not a reactive rule".into(),
+                ))
+            }
+            None => Err(EudkitError::Ir(
+                "end_reactive without matching begin_reactive frame".into(),
+            )),
+        }
+    }
+
+    pub fn push_reactive_rule(&mut self, rule: ReactiveRule) {
+        self.last_was_else = false;
+        self.active_stmts_mut().push(HirStmt::Reactive(rule));
     }
 
     pub fn push_stmt(&mut self, stmt: HirStmt) {

@@ -258,8 +258,25 @@ export function main() {
 }
 "#;
 
-    let hir = compile_ts_to_hir(ts_source, "ts_reactive_test", map_ctx)
+    let mut hir = compile_ts_to_hir(ts_source, "ts_reactive_test", map_ctx)
         .expect("should compile TS reactive primitives to HIR");
+
+    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
+    let stmts = &main_fn.blocks[0].stmts;
+
+    // Verify presence of first-class reactive statements in HIR
+    let reactive_count = stmts
+        .iter()
+        .filter(|s| matches!(s, HirStmt::Reactive(_)))
+        .count();
+    assert_eq!(
+        reactive_count, 6,
+        "must emit 6 first-class reactive statements into HIR, got {reactive_count}"
+    );
+
+    // Lower reactive rules into 4-byte variables and trigger conditions
+    hir.lower_reactive_rules()
+        .expect("should lower reactive rules");
 
     // Check user vars + reactive guard/timer vars
     let var_names: Vec<&str> = hir.variables().iter().map(|v| v.name.as_str()).collect();
@@ -271,16 +288,6 @@ export function main() {
     assert!(var_names.contains(&"after_timer"));
     assert!(var_names.contains(&"after_done"));
     assert!(var_names.contains(&"every_timer"));
-
-    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
-    let stmts = &main_fn.blocks[0].stmts;
-
-    // Verify presence of reactive statements
-    assert!(
-        stmts.len() >= 6,
-        "must emit at least 6 top-level statements for the 6 reactive primitives, got {}",
-        stmts.len()
-    );
 
     // Test compiling into full session
     let mut comp_session = CompilationSession::from_map(&map_path, CompilationConfig::default())
