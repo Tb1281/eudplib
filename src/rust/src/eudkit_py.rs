@@ -792,6 +792,59 @@ impl PyCompilationSession {
         self.builder.end_while().map_err(to_py_err)
     }
 
+    fn begin_once(&mut self, conditions: Vec<PyCondition>) {
+        self.dirty = true;
+        self.builder
+            .begin_once(conditions.into_iter().map(|c| c.0).collect());
+    }
+
+    fn begin_when(&mut self, conditions: Vec<PyCondition>) {
+        self.dirty = true;
+        self.builder
+            .begin_when(conditions.into_iter().map(|c| c.0).collect());
+    }
+
+    fn begin_until(&mut self, conditions: Vec<PyCondition>) {
+        self.dirty = true;
+        self.builder
+            .begin_until(conditions.into_iter().map(|c| c.0).collect());
+    }
+
+    fn begin_after(&mut self, delay_ticks: u32) {
+        self.dirty = true;
+        self.builder.begin_after(delay_ticks);
+    }
+
+    fn begin_every(&mut self, period_ticks: u32) {
+        self.dirty = true;
+        self.builder.begin_every(period_ticks);
+    }
+
+    fn end_reactive(&mut self) -> PyResult<()> {
+        self.dirty = true;
+        self.builder.end_reactive().map_err(to_py_err)
+    }
+
+    fn end_once(&mut self) -> PyResult<()> {
+        self.end_reactive()
+    }
+
+    fn end_when(&mut self) -> PyResult<()> {
+        self.end_reactive()
+    }
+
+    fn end_until(&mut self) -> PyResult<()> {
+        self.end_reactive()
+    }
+
+    fn end_after(&mut self) -> PyResult<()> {
+        self.end_reactive()
+    }
+
+    fn end_every(&mut self) -> PyResult<()> {
+        self.end_reactive()
+    }
+
     fn push_break(&mut self) {
         self.dirty = true;
         self.builder.push_break();

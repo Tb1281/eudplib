@@ -716,78 +716,43 @@ class AstToHirLowerer:
                     pass
 
             if is_once:
-                guard = self.session.var(1)
-                conds = [guard._cmp(Exactly, 1).to_raw(self.session) if hasattr(guard._cmp(Exactly, 1), "to_raw") else coerce_conditions(guard._cmp(Exactly, 1), self.session)[0]]
+                conds = []
                 if once_cond_ast is not None:
                     evaluated_cond = self.eval_expr(once_cond_ast)
-                    if isinstance(evaluated_cond, (list, tuple)):
-                        for c in coerce_conditions(evaluated_cond, self.session):
-                            conds.append(c)
-                    else:
-                        for c in coerce_conditions([evaluated_cond], self.session):
-                            conds.append(c)
-
-                self.session._raw.begin_if(conds)
-                self.session._raw.push_var_assign(guard.id, 0)
+                    conds = coerce_conditions(evaluated_cond, self.session)
+                self.session._raw.begin_once(conds)
                 self.lower_stmt_list(node.body)
-                self.session._raw.end_if()
+                self.session._raw.end_reactive()
                 return
 
             if is_when:
                 evaluated_cond = self.eval_expr(when_cond_ast)
                 conds = coerce_conditions(evaluated_cond, self.session)
-                self.session._raw.begin_if(conds)
+                self.session._raw.begin_when(conds)
                 self.lower_stmt_list(node.body)
-                self.session._raw.end_if()
+                self.session._raw.end_reactive()
                 return
 
             if is_until:
                 evaluated_cond = self.eval_expr(until_cond_ast)
                 conds = coerce_conditions(evaluated_cond, self.session)
-                guard = self.session.var(0)
-                # if guard == 0:
-                self.session._raw.begin_if(coerce_conditions(guard._cmp(Exactly, 0), self.session))
-                # if condition: guard = 1
-                self.session._raw.begin_if(conds)
-                self.session._raw.push_var_assign(guard.id, 1)
-                self.session._raw.end_if()
-                # if guard == 0: body
-                self.session._raw.begin_if(coerce_conditions(guard._cmp(Exactly, 0), self.session))
+                self.session._raw.begin_until(conds)
                 self.lower_stmt_list(node.body)
-                self.session._raw.end_if()
-                self.session._raw.end_if()
+                self.session._raw.end_reactive()
                 return
 
             if is_after:
                 loops_val = int(self.eval_expr(after_loops_ast))
-                timer = self.session.var(loops_val)
-                done = self.session.var(0)
-                # if done == 0
-                self.session._raw.begin_if(coerce_conditions(done._cmp(Exactly, 0), self.session))
-                # if timer > 0: timer -= 1
-                self.session._raw.begin_if(coerce_conditions(timer._cmp(AtLeast, 1), self.session))
-                timer.sub(1, session=self.session)
-                self.session._raw.end_if()
-                # if timer == 0: done = 1; body
-                self.session._raw.begin_if(coerce_conditions(timer._cmp(Exactly, 0), self.session))
-                self.session._raw.push_var_assign(done.id, 1)
+                self.session._raw.begin_after(loops_val)
                 self.lower_stmt_list(node.body)
-                self.session._raw.end_if()
-                self.session._raw.end_if()
+                self.session._raw.end_reactive()
                 return
 
             if is_every:
                 loops_val = int(self.eval_expr(every_loops_ast))
-                timer = self.session.var(loops_val)
-                # if timer > 0: timer -= 1
-                self.session._raw.begin_if(coerce_conditions(timer._cmp(AtLeast, 1), self.session))
-                timer.sub(1, session=self.session)
-                self.session._raw.end_if()
-                # if timer == 0: timer = loops; body
-                self.session._raw.begin_if(coerce_conditions(timer._cmp(Exactly, 0), self.session))
-                self.session._raw.push_var_assign(timer.id, loops_val)
+                self.session._raw.begin_every(loops_val)
                 self.lower_stmt_list(node.body)
-                self.session._raw.end_if()
+                self.session._raw.end_reactive()
                 return
 
         raise TypeError(f"Unsupported with-statement in @eud.fn: {ast.dump(node)}")
