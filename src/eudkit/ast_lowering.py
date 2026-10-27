@@ -571,6 +571,53 @@ class AstToHirLowerer:
             # Docstring
             return
         if isinstance(expr, ast.Call):
+            func = expr.func
+            func_name = getattr(func, "attr", getattr(func, "id", ""))
+            if func_name in ("once", "when", "until", "after", "every"):
+                cb_ast = None
+                cond_ast = None
+                loops_ast = None
+                if func_name == "once":
+                    if len(expr.args) == 1:
+                        cb_ast = expr.args[0]
+                    elif len(expr.args) >= 2:
+                        cond_ast = expr.args[0]
+                        cb_ast = expr.args[1]
+                elif func_name in ("when", "until"):
+                    if len(expr.args) >= 2:
+                        cond_ast = expr.args[0]
+                        cb_ast = expr.args[1]
+                elif func_name in ("after", "every"):
+                    if len(expr.args) >= 2:
+                        loops_ast = expr.args[0]
+                        cb_ast = expr.args[1]
+
+                if cb_ast is not None and isinstance(cb_ast, ast.Lambda):
+                    if func_name == "once":
+                        conds = coerce_conditions(self.eval_expr(cond_ast), self.session) if cond_ast else []
+                        self.session._raw.begin_once(conds)
+                    elif func_name == "when":
+                        conds = coerce_conditions(self.eval_expr(cond_ast), self.session)
+                        self.session._raw.begin_when(conds)
+                    elif func_name == "until":
+                        conds = coerce_conditions(self.eval_expr(cond_ast), self.session)
+                        self.session._raw.begin_until(conds)
+                    elif func_name == "after":
+                        loops_val = int(self.eval_expr(loops_ast))
+                        self.session._raw.begin_after(loops_val)
+                    elif func_name == "every":
+                        loops_val = int(self.eval_expr(loops_ast))
+                        self.session._raw.begin_every(loops_val)
+
+                    if isinstance(cb_ast.body, (ast.Tuple, ast.List)):
+                        for el in cb_ast.body.elts:
+                            self._lower_expr_stmt(el)
+                    else:
+                        self._lower_expr_stmt(cb_ast.body)
+
+                    self.session._raw.end_reactive()
+                    return
+
             fn = self.eval_expr(expr.func)
             if isinstance(fn, (EudFunction, EudFuncPtr)):
                 if isinstance(fn, EudFunction) and fn.fn_id is None:

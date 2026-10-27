@@ -237,12 +237,14 @@ class Session:
         executes once, and permanently deactivates its guard.
         If `conditions` is None, executes on the very first trigger loop and permanently deactivates.
         """
+        tok = _active_builder_session.set(self)
         raw_conds = coerce_conditions(conditions, self) if conditions is not None else []
         self._raw.begin_once(raw_conds)
         try:
             yield
         finally:
             self._raw.end_reactive()
+            _active_builder_session.reset(tok)
 
     @contextlib.contextmanager
     def when(
@@ -253,12 +255,14 @@ class Session:
         In StarCraft's polling-based trigger VM, `when(cond)` evaluates conditions at the start
         of each trigger loop pass. As long as the conditions remain true, the enclosed actions execute.
         """
+        tok = _active_builder_session.set(self)
         raw_conds = coerce_conditions(conditions, self)
         self._raw.begin_when(raw_conds)
         try:
             yield
         finally:
             self._raw.end_reactive()
+            _active_builder_session.reset(tok)
 
     @contextlib.contextmanager
     def until(
@@ -269,12 +273,14 @@ class Session:
         Evaluated each trigger loop cycle. As soon as `condition` becomes true, the guard flips
         and the block will never execute again in subsequent trigger loops.
         """
+        tok = _active_builder_session.set(self)
         raw_conds = coerce_conditions(condition, self)
         self._raw.begin_until(raw_conds)
         try:
             yield
         finally:
             self._raw.end_reactive()
+            _active_builder_session.reset(tok)
 
     @contextlib.contextmanager
     def after(
@@ -295,11 +301,13 @@ class Session:
         
         :param loops: Number of trigger loop evaluation cycles to wait before executing (e.g. 24 loops = ~1 second under Turbo).
         """
+        tok = _active_builder_session.set(self)
         self._raw.begin_after(int(loops))
         try:
             yield
         finally:
             self._raw.end_reactive()
+            _active_builder_session.reset(tok)
 
     @contextlib.contextmanager
     def every(
@@ -319,11 +327,13 @@ class Session:
         
         :param loops: Interval in trigger loop cycles between successive firings (e.g. 24 loops = every 1s under Turbo).
         """
+        tok = _active_builder_session.set(self)
         self._raw.begin_every(int(loops))
         try:
             yield
         finally:
             self._raw.end_reactive()
+            _active_builder_session.reset(tok)
 
     def break_(self) -> None:
         self._raw.push_break()

@@ -993,6 +993,49 @@ class TestEudkitPythonFrontend(unittest.TestCase):
         self.assertFalse(hasattr(types, "_in_ast_lowering"))
         self.assertFalse(hasattr(ast_lowering, "_in_ast_lowering"))
 
+    def test_reactive_rules_dual_syntax_context_and_callback(self):
+        """Verify reactive rules work with with once(): and callbacks once(lambda: ...)."""
+        import eudkit
+        from eudkit import (
+            Add,
+            DisplayText,
+            Ore,
+            Player1,
+            SetResources,
+            after,
+            every,
+            once,
+            until,
+            when,
+        )
+
+        session = eudkit.Session(TESTMAP_PATH)
+        kills = session.var(0, name="kills")
+
+        @session.fn
+        def game():
+            # 1. Context manager syntax with once():
+            with once():
+                DisplayText("once block")
+
+            # 2. Context manager syntax with condition
+            with once(kills >= 10):
+                DisplayText("once with condition")
+
+            # 3. Callback syntax inside fn
+            once(lambda: DisplayText("once lambda"))
+            every(24, lambda: SetResources(Player1, Add, 50, Ore))
+            when(kills >= 5, lambda: DisplayText("when lambda"))
+            until(kills == 0, lambda: DisplayText("until lambda"))
+            after(120, lambda: DisplayText("after lambda"))
+
+        out_path = Path(tempfile.gettempdir()) / "test_dual_reactive.scx"
+        rep = session.compile(out_path)
+        self.assertGreater(rep.trigger_count, 0)
+        self.assertGreater(rep.payload_size, 0)
+        if out_path.exists():
+            out_path.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()
