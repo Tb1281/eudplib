@@ -9,6 +9,7 @@ pub struct ProjectConfig {
     pub entry: Option<PathBuf>,
     pub input_map: PathBuf,
     pub output_map: PathBuf,
+    pub dts: Option<PathBuf>,
     pub obscurate: bool,
     pub obscurate_seed: Option<u64>,
     pub preserve_classic_triggers: bool,
@@ -21,6 +22,7 @@ impl Default for ProjectConfig {
             entry: None,
             input_map: PathBuf::new(),
             output_map: PathBuf::new(),
+            dts: None,
             obscurate: false,
             obscurate_seed: None,
             preserve_classic_triggers: true,
@@ -49,6 +51,11 @@ impl ProjectConfig {
                         if candidate.exists() {
                             cfg.entry = Some(candidate);
                         }
+                    }
+                }
+                if let Some(dts) = &cfg.dts {
+                    if dts.is_relative() {
+                        cfg.dts = Some(parent.join(dts));
                     }
                 }
             }
@@ -85,6 +92,9 @@ impl ProjectConfig {
                 }
                 ("", "entry") | ("project", "entry") | ("build", "entry") => {
                     cfg.entry = Some(PathBuf::from(parse_toml_string(val, line_no + 1)?));
+                }
+                ("", "dts") | ("project", "dts") | ("build", "dts") => {
+                    cfg.dts = Some(PathBuf::from(parse_toml_string(val, line_no + 1)?));
                 }
                 ("", "input_map")
                 | ("", "input")

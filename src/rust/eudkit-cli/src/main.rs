@@ -58,10 +58,29 @@ fn default_tracer_hir(module_name: &str) -> HirModule {
 }
 
 fn cmd_inspect(args: &[String]) -> Result<(), String> {
-    let map_arg = args
-        .first()
-        .ok_or_else(|| "usage: eudkit inspect <map.scx>".to_string())?;
-    let session = CompilationSession::from_map(map_arg, CompilationConfig::default())
+    let mut map_arg: Option<PathBuf> = None;
+    let mut dts_out: Option<PathBuf> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--dts" => {
+                i += 1;
+                dts_out = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --dts")?,
+                ));
+            }
+            other if !other.starts_with('-') && map_arg.is_none() => {
+                map_arg = Some(PathBuf::from(other));
+            }
+            other => return Err(format!("unknown argument for inspect: {other}")),
+        }
+        i += 1;
+    }
+
+    let map_path = map_arg
+        .ok_or_else(|| "usage: eudkit inspect <map.scx> [--dts <output.d.ts>]".to_string())?;
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .map_err(|e| e.to_string())?;
     let ctx = session.map_context();
 
@@ -75,7 +94,7 @@ fn cmd_inspect(args: &[String]) -> Result<(), String> {
     let named_switches = ctx.switches().iter().filter(|s| s.name.is_some()).count();
     let active_players = ctx.players()[..8].iter().filter(|p| p.owner != 0).count();
 
-    println!("Map Context Inspection: {}", map_arg);
+    println!("Map Context Inspection: {}", map_path.display());
     println!("  Strings:      {}", ctx.strings().len());
     println!(
         "  Locations:    {} total ({} named, Anywhere=64)",
@@ -105,12 +124,28 @@ fn cmd_inspect(args: &[String]) -> Result<(), String> {
     );
     println!("  TRIG Triggers: {}", ctx.triggers().len());
 
+    if let Some(dts_path) = dts_out {
+        let mod_name = map_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("map");
+        let dts = ctx.generate_dts(mod_name);
+        if let Some(parent) = dts_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+        }
+        fs::write(&dts_path, dts).map_err(|e| e.to_string())?;
+        println!("  Generated .d.ts: {}", dts_path.display());
+    }
+
     Ok(())
 }
 
 fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
     let mut map_path: Option<PathBuf> = None;
     let mut config_path: Option<PathBuf> = None;
+    let mut entry_path: Option<PathBuf> = None;
     let mut out_path: Option<PathBuf> = None;
     let mut hir_only = false;
     let mut lir_only = false;
@@ -130,6 +165,12 @@ fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
                     args.get(i).ok_or("missing value for --config")?,
                 ));
             }
+            "--entry" | "-e" => {
+                i += 1;
+                entry_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --entry")?,
+                ));
+            }
             "--output" | "-o" => {
                 i += 1;
                 out_path = Some(PathBuf::from(
@@ -146,12 +187,13 @@ fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
         i += 1;
     }
 
-    let (resolved_map, comp_cfg, mod_name) = if let Some(cfg_file) = config_path {
+    let (resolved_map, comp_cfg, mod_name, resolved_entry) = if let Some(cfg_file) = config_path {
         let pcfg = ProjectConfig::from_file(&cfg_file).map_err(|e| e.to_string())?;
         (
             map_path.unwrap_or(pcfg.input_map.clone()),
             pcfg.to_compilation_config(),
             pcfg.name,
+            entry_path.or(pcfg.entry),
         )
     } else if Path::new("eudkit.toml").exists() && map_path.is_none() {
         let pcfg = ProjectConfig::from_file("eudkit.toml").map_err(|e| e.to_string())?;
@@ -159,15 +201,23 @@ fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
             pcfg.input_map.clone(),
             pcfg.to_compilation_config(),
             pcfg.name,
+            entry_path.or(pcfg.entry),
         )
     } else {
         let mp = map_path.ok_or("usage: eudkit dump-ir --map <map.scx>")?;
-        (mp, CompilationConfig::default(), "tracer_module".to_string())
+        (mp, CompilationConfig::default(), "tracer_module".to_string(), entry_path)
     };
 
     let mut session =
         CompilationSession::from_map(&resolved_map, comp_cfg).map_err(|e| e.to_string())?;
-    session.set_hir_module(default_tracer_hir(&mod_name));
+
+    if let Some(entry) = resolved_entry {
+        let hir = eudkit_ts::compile_ts_file(&entry, &mod_name, session.map_context())
+            .map_err(|e| e.to_string())?;
+        session.set_hir_module(hir);
+    } else {
+        session.set_hir_module(default_tracer_hir(&mod_name));
+    }
 
     let mut combined = String::new();
     if !lir_only {
@@ -193,6 +243,8 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
     let mut config_path: Option<PathBuf> = None;
     let mut input_map: Option<PathBuf> = None;
     let mut output_map: Option<PathBuf> = None;
+    let mut entry_path: Option<PathBuf> = None;
+    let mut dts_out: Option<PathBuf> = None;
     let mut obscurate: Option<bool> = None;
     let mut seed: Option<u64> = None;
 
@@ -216,6 +268,16 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
                 output_map = Some(PathBuf::from(
                     args.get(i).ok_or("missing value for --output")?,
                 ));
+            }
+            "--entry" | "-e" => {
+                i += 1;
+                entry_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --entry")?,
+                ));
+            }
+            "--dts" => {
+                i += 1;
+                dts_out = Some(PathBuf::from(args.get(i).ok_or("missing value for --dts")?));
             }
             "--obscurate" => obscurate = Some(true),
             "--seed" => {
@@ -242,6 +304,12 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
     if let Some(out) = output_map {
         proj_cfg.output_map = out;
     }
+    if let Some(ent) = entry_path {
+        proj_cfg.entry = Some(ent);
+    }
+    if let Some(dts) = dts_out {
+        proj_cfg.dts = Some(dts);
+    }
     if let Some(obs) = obscurate {
         proj_cfg.obscurate = obs;
     }
@@ -251,7 +319,7 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
 
     if proj_cfg.input_map.as_os_str().is_empty() || proj_cfg.output_map.as_os_str().is_empty() {
         return Err(
-            "usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>]"
+            "usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <main.ts>]"
                 .to_string(),
         );
     }
@@ -259,7 +327,25 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
     let mut session =
         CompilationSession::from_map(&proj_cfg.input_map, proj_cfg.to_compilation_config())
             .map_err(|e| e.to_string())?;
-    session.set_hir_module(default_tracer_hir(&proj_cfg.name));
+
+    if let Some(dts_path) = &proj_cfg.dts {
+        let dts = session.map_context().generate_dts(&proj_cfg.name);
+        if let Some(parent) = dts_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+        }
+        fs::write(dts_path, dts).map_err(|e| e.to_string())?;
+    }
+
+    if let Some(entry_path) = &proj_cfg.entry {
+        let hir = eudkit_ts::compile_ts_file(entry_path, &proj_cfg.name, session.map_context())
+            .map_err(|e| e.to_string())?;
+        session.set_hir_module(hir);
+    } else {
+        session.set_hir_module(default_tracer_hir(&proj_cfg.name));
+    }
+
     let report = session
         .compile_map(&proj_cfg.output_map)
         .map_err(|e| e.to_string())?;
