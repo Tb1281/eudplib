@@ -360,10 +360,177 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn cmd_migrate(args: &[String]) -> Result<(), String> {
+    let mut target_path: Option<PathBuf> = None;
+    let mut out_path: Option<PathBuf> = None;
+    let mut toml_out: Option<PathBuf> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--output" | "-o" => {
+                i += 1;
+                out_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --output")?,
+                ));
+            }
+            "--config-out" => {
+                i += 1;
+                toml_out = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --config-out")?,
+                ));
+            }
+            other if !other.starts_with('-') && target_path.is_none() => {
+                target_path = Some(PathBuf::from(other));
+            }
+            other => return Err(format!("unknown argument for migrate: {other}")),
+        }
+        i += 1;
+    }
+
+    let target = if let Some(p) = target_path {
+        p
+    } else {
+        let mut found: Option<PathBuf> = None;
+        if let Ok(entries) = fs::read_dir(".") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if ext.eq_ignore_ascii_case("edd") || ext.eq_ignore_ascii_case("eds") {
+                        found = Some(path);
+                        break;
+                    }
+                    if ext.eq_ignore_ascii_case("eps") && found.is_none() {
+                        found = Some(path);
+                    }
+                }
+            }
+        }
+        found.ok_or_else(|| {
+            "usage: eudkit migrate <project.edd|project.eds|file.eps> [-o output]".to_string()
+        })?
+    };
+
+    let ext = target
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    match ext.as_str() {
+        "edd" | "eds" => {
+            let content = fs::read_to_string(&target)
+                .map_err(|e| format!("failed to read {}: {e}", target.display()))?;
+            let project = eudkit_cli::migrate::ini::parse_edd_or_eds(&content, &target)
+                .map_err(|e| format!("failed to parse {}: {e}", target.display()))?;
+
+            let parent_dir = target.parent().unwrap_or_else(|| Path::new("."));
+
+            // 1. Transpile entry .eps if present
+            if let Some(ref eps_rel) = project.entry_eps {
+                let eps_full = if eps_rel.is_relative() && !parent_dir.as_os_str().is_empty() {
+                    let cand = parent_dir.join(eps_rel);
+                    if cand.exists() {
+                        cand
+                    } else {
+                        eps_rel.clone()
+                    }
+                } else {
+                    eps_rel.clone()
+                };
+
+                if eps_full.exists() {
+                    let eps_src = fs::read_to_string(&eps_full)
+                        .map_err(|e| format!("failed to read {}: {e}", eps_full.display()))?;
+                    let ts_code = eudkit_cli::migrate::transpiler::transpile_eps_to_ts(&eps_src)
+                        .map_err(|e| format!("failed to transpile {}: {e}", eps_full.display()))?;
+
+                    let ts_out_path = if let Some(ref o) = out_path {
+                        if o.is_dir() {
+                            o.join(&project.entry_ts)
+                        } else {
+                            o.clone()
+                        }
+                    } else if parent_dir.as_os_str().is_empty() {
+                        project.entry_ts.clone()
+                    } else {
+                        parent_dir.join(&project.entry_ts)
+                    };
+
+                    if let Some(p) = ts_out_path.parent() {
+                        if !p.as_os_str().is_empty() {
+                            fs::create_dir_all(p).map_err(|e| e.to_string())?;
+                        }
+                    }
+                    fs::write(&ts_out_path, ts_code)
+                        .map_err(|e| format!("failed to write {}: {e}", ts_out_path.display()))?;
+                    println!(
+                        "Migrated {} -> {}",
+                        eps_full.display(),
+                        ts_out_path.display()
+                    );
+                } else {
+                    println!(
+                        "Warning: entry script {} does not exist on disk",
+                        eps_full.display()
+                    );
+                }
+            }
+
+            // 2. Write eudkit.toml
+            let toml_path = toml_out.unwrap_or_else(|| {
+                if parent_dir.as_os_str().is_empty() {
+                    PathBuf::from("eudkit.toml")
+                } else {
+                    parent_dir.join("eudkit.toml")
+                }
+            });
+
+            fs::write(&toml_path, project.to_toml_string())
+                .map_err(|e| format!("failed to write {}: {e}", toml_path.display()))?;
+            println!("Generated {}", toml_path.display());
+            Ok(())
+        }
+        "eps" => {
+            let eps_src = fs::read_to_string(&target)
+                .map_err(|e| format!("failed to read {}: {e}", target.display()))?;
+            let ts_code = eudkit_cli::migrate::transpiler::transpile_eps_to_ts(&eps_src)
+                .map_err(|e| format!("failed to transpile {}: {e}", target.display()))?;
+
+            let ts_out_path = if let Some(o) = out_path {
+                if o.is_dir() {
+                    let mut stem = target.file_stem().unwrap_or_default().to_os_string();
+                    stem.push(".ts");
+                    o.join(stem)
+                } else {
+                    o
+                }
+            } else {
+                let mut ts = target.clone();
+                ts.set_extension("ts");
+                ts
+            };
+
+            if let Some(p) = ts_out_path.parent() {
+                if !p.as_os_str().is_empty() {
+                    fs::create_dir_all(p).map_err(|e| e.to_string())?;
+                }
+            }
+            fs::write(&ts_out_path, ts_code)
+                .map_err(|e| format!("failed to write {}: {e}", ts_out_path.display()))?;
+            println!("Migrated {} -> {}", target.display(), ts_out_path.display());
+            Ok(())
+        }
+        other => Err(format!(
+            "unsupported file extension '.{other}': expected .edd, .eds, or .eps"
+        )),
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let Some((cmd, rest)) = args.split_first() else {
-        eprintln!("usage: eudkit <inspect|dump-ir|build> [options]");
+        eprintln!("usage: eudkit <inspect|dump-ir|build|migrate> [options]");
         process::exit(1);
     };
 
@@ -371,8 +538,9 @@ fn main() {
         "inspect" => cmd_inspect(rest),
         "dump-ir" => cmd_dump_ir(rest),
         "build" => cmd_build(rest),
+        "migrate" => cmd_migrate(rest),
         "--help" | "-h" | "help" => {
-            println!("eudkit <inspect|dump-ir|build>");
+            println!("eudkit <inspect|dump-ir|build|migrate>");
             Ok(())
         }
         other => Err(format!("unknown subcommand '{other}'")),

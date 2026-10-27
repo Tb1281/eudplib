@@ -6,6 +6,10 @@ edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
+[lib]
+name = "eudkit_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "eudkit"
 path = "src/main.rs"

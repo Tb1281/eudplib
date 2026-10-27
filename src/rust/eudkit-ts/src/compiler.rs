@@ -165,7 +165,7 @@ impl<'a> TsCompiler<'a> {
                         let init_val = if let Some(arg0) =
                             call.arguments.first().and_then(|a| a.as_expression())
                         {
-                            self.eval_const_expr(arg0)?
+                            self.eval_const_expr(arg0).unwrap_or(0)
                         } else {
                             0
                         };
