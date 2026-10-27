@@ -1,16 +1,18 @@
 """Differential Corpus Benchmark Suite (v1 vs v2 Budget Gate).
 
-Compiles representative EUD workloads and maps through both legacy eudplib (v1)
-and eudkit (v2, Python and TypeScript Frontends) and strictly enforces budget gates:
+Compiles representative EUD workloads and maps through eudkit (v2, Python and TypeScript Frontends)
+and strictly enforces budget gates against frozen legacy v1 baselines:
 - v2_triggers <= v1_triggers
 - v2_payload_bytes <= v1_payload_bytes
 - v2_compile_ms <= v1_compile_ms * 1.5
 
+Baselines are frozen in tests/fixtures/corpus_baselines.json, eliminating live legacy runtime dependency.
 Generates structured markdown summary report saved to test_maps/benchmark_report.md.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -43,13 +45,16 @@ from eudkit import (
     until,
     when,
 )
-import eudplib as ep
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BASEMAP_STRX_PATH = REPO_ROOT / "tests" / "outputmap" / "basemap" / "basemap_strx.scx"
 TESTMAP_PATH = REPO_ROOT / "tests" / "unittests" / "testmap.scx"
 REPORT_PATH = REPO_ROOT / "test_maps" / "benchmark_report.md"
 EUDKIT_BIN = REPO_ROOT / "src" / "rust" / "target" / "debug" / "eudkit"
+FIXTURES_PATH = REPO_ROOT / "tests" / "fixtures" / "corpus_baselines.json"
+
+with open(FIXTURES_PATH, "r", encoding="utf-8") as f:
+    BASELINES = json.load(f)
 
 
 @dataclass
@@ -230,55 +235,17 @@ class TestBenchmarkCorpus(unittest.TestCase):
             f"[{kernel_id}] Compile Time Budget Gate failed: v2 compile time ({v2_compile_ms:.2f}ms) must be <= 1.5x v1 ({v1_compile_ms:.2f}ms)",
         )
 
+
     def test_kernel1_compound_arithmetic_and_bitwise_math(self) -> None:
         """Kernel 1: Compound arithmetic & bitwise math (chained expressions, constant folding)."""
+        b = BASELINES["Kernel 1"]
         with tempfile.TemporaryDirectory() as tmpdir:
-            v1_out = Path(tmpdir) / "v1_k1.scx"
             v2_out = Path(tmpdir) / "v2_k1.scx"
 
-            # --- 1. Legacy eudplib (v1) ---
-            t0 = time.perf_counter()
-            ep.LoadMap(str(BASEMAP_STRX_PATH))
-            ep.CompressPayload(True)
-
-            @ep.EUDFunc
-            def v1_k1():
-                a = ep.EUDVariable(100)
-                b = ep.EUDVariable(250)
-                c = ep.EUDVariable(35)
-                d = ep.EUDVariable(0)
-                counter = ep.EUDVariable(0)
-
-                counter += 42 + 58 - 20
-                counter += 10 * 4
-
-                d << (a + b) + (b - c) + (a & 0xFF)
-                d << (a ^ b) | (c & 0x7F)
-                d << ((a << 3) + (b >> 2)) ^ (c + 1)
-
-                if ep.EUDIf()(a + b >= c * 5):
-                    d << a - c
-                if ep.EUDElse()():
-                    d << b - a
-                ep.EUDEndIf()
-
-            ep.SaveMap(str(v1_out), v1_k1)
-            v1_compile_ms = (time.perf_counter() - t0) * 1000.0
-
-            v1_triggers = sum(
-                1
-                for obj in ep.core.allocator.payload._found_objects_dict
-                if isinstance(obj, ep.RawTrigger)
-            )
-            v1_session = eudkit.Session(v1_out)
-            base_session = eudkit.Session(BASEMAP_STRX_PATH)
-            v1_payload = v1_session.strx_byte_len() - base_session.strx_byte_len()
-
-            # --- 2. Eudkit (v2) ---
             t1 = time.perf_counter()
             s2 = eudkit.Session(BASEMAP_STRX_PATH)
             a = s2.var(100, name="a")
-            b = s2.var(250, name="b")
+            b_var = s2.var(250, name="b")
             c = s2.var(35, name="c")
             d = s2.var(0, name="d")
             counter = s2.var(0, name="counter")
@@ -288,135 +255,36 @@ class TestBenchmarkCorpus(unittest.TestCase):
                 counter += 42 + 58 - 20
                 counter += 10 * 4
 
-                d = (a + b) + (b - c) + (a & 0xFF)
-                d = (a ^ b) | (c & 0x7F)
-                d = ((a << 3) + (b >> 2)) ^ (c + 1)
+                d = (a + b_var) + (b_var - c) + (a & 0xFF)
+                d = (a ^ b_var) | (c & 0x7F)
+                d = ((a << 3) + (b_var >> 2)) ^ (c + 1)
 
-                if a + b >= c * 5:
+                if a + b_var >= c * 5:
                     d = a - c
                 else:
-                    d = b - a
+                    d = b_var - a
 
             rep2 = s2.compile(v2_out)
             v2_compile_ms = (time.perf_counter() - t1) * 1000.0
 
             self._assert_budget_gate(
                 kernel_id="Kernel 1",
-                name="Compound Arithmetic & Bitwise Math",
-                description="Chained arithmetic, bitwise shifts/masks, constant folding",
-                v1_triggers=v1_triggers,
+                name=b["name"],
+                description=b["description"],
+                v1_triggers=b["v1_triggers"],
                 v2_triggers=rep2.trigger_count,
-                v1_payload=v1_payload,
+                v1_payload=b["v1_payload_bytes"],
                 v2_payload=rep2.payload_size,
-                v1_compile_ms=v1_compile_ms,
+                v1_compile_ms=b["v1_compile_ms"],
                 v2_compile_ms=v2_compile_ms,
             )
 
     def test_kernel2_control_flow_and_reactive_primitives(self) -> None:
         """Kernel 2: Control flow & reactive primitives (if/elif/else, while, when, until, after, every, once)."""
+        b = BASELINES["Kernel 2"]
         with tempfile.TemporaryDirectory() as tmpdir:
-            v1_out = Path(tmpdir) / "v1_k2.scx"
             v2_out = Path(tmpdir) / "v2_k2.scx"
 
-            # --- 1. Legacy eudplib (v1) ---
-            t0 = time.perf_counter()
-            ep.LoadMap(str(BASEMAP_STRX_PATH))
-            ep.CompressPayload(True)
-
-            @ep.EUDFunc
-            def v1_k2():
-                counter = ep.EUDVariable(0)
-                phase = ep.EUDVariable(10)
-                score = ep.EUDVariable(50)
-                kills = ep.EUDVariable(0)
-                timer = ep.EUDVariable(10)
-
-                for _ in range(20):
-                    counter += 1
-                    ep.DoActions(ep.SetDeaths(ep.Player1, ep.Add, 1, "Terran Marine"))
-
-                if ep.EUDIf()(counter >= 15):
-                    phase << 100
-                    ep.DoActions(ep.SetResources(ep.Player1, ep.Add, 500, ep.Ore))
-                if ep.EUDElseIf()(counter == 10):
-                    phase << 50
-                if ep.EUDElse()():
-                    phase << 10
-                ep.EUDEndIf()
-
-                if ep.EUDWhile()(phase >= 1):
-                    phase -= 1
-                    if ep.EUDIf()(phase == 5):
-                        counter += 10
-                        ep.EUDContinue()
-                    ep.EUDEndIf()
-                    if ep.EUDIf()(counter >= 100):
-                        ep.EUDBreak()
-                    ep.EUDEndIf()
-                    counter += 1
-                ep.EUDEndWhile()
-
-                # Emulate reactive primitives in v1
-                once_flag1 = ep.EUDVariable(1)
-                if ep.EUDIf()(once_flag1 == 1):
-                    once_flag1 << 0
-                    ep.f_eprintln("Game Initialized (once)")
-                    ep.DoActions(ep.SetResources(ep.Player1, ep.Add, 50, ep.Ore))
-                ep.EUDEndIf()
-
-                once_flag2 = ep.EUDVariable(1)
-                if ep.EUDIf()([score >= 100, once_flag2 == 1]):
-                    once_flag2 << 0
-                    ep.f_eprintln("Score milestone reached!")
-                ep.EUDEndIf()
-
-                if ep.EUDIf()(kills >= 10):
-                    ep.DoActions(ep.CreateUnit(1, "Terran Marine", "Anywhere", ep.Player1))
-                ep.EUDEndIf()
-
-                until_flag = ep.EUDVariable(0)
-                if ep.EUDIf()(until_flag == 0):
-                    if ep.EUDIf()(timer == 0):
-                        until_flag << 1
-                    if ep.EUDElse()():
-                        ep.f_eprintln("Mission in progress...")
-                    ep.EUDEndIf()
-                ep.EUDEndIf()
-
-                after_timer = ep.EUDVariable(24)
-                after_done = ep.EUDVariable(0)
-                if ep.EUDIf()(after_done == 0):
-                    if ep.EUDIf()(after_timer > 0):
-                        after_timer -= 1
-                    ep.EUDEndIf()
-                    if ep.EUDIf()(after_timer == 0):
-                        after_done << 1
-                        ep.f_eprintln("24 trigger loops elapsed")
-                    ep.EUDEndIf()
-                ep.EUDEndIf()
-
-                every_timer = ep.EUDVariable(12)
-                if ep.EUDIf()(every_timer > 0):
-                    every_timer -= 1
-                ep.EUDEndIf()
-                if ep.EUDIf()(every_timer == 0):
-                    every_timer << 12
-                    ep.f_eprintln("Clock tick (every 12 loops)")
-                ep.EUDEndIf()
-
-            ep.SaveMap(str(v1_out), v1_k2)
-            v1_compile_ms = (time.perf_counter() - t0) * 1000.0
-
-            v1_triggers = sum(
-                1
-                for obj in ep.core.allocator.payload._found_objects_dict
-                if isinstance(obj, ep.RawTrigger)
-            )
-            v1_session = eudkit.Session(v1_out)
-            base_session = eudkit.Session(BASEMAP_STRX_PATH)
-            v1_payload = v1_session.strx_byte_len() - base_session.strx_byte_len()
-
-            # --- 2. Eudkit (v2) ---
             t1 = time.perf_counter()
             s2 = eudkit.Session(BASEMAP_STRX_PATH)
             counter = s2.var(0, name="counter")
@@ -449,86 +317,45 @@ class TestBenchmarkCorpus(unittest.TestCase):
                     counter += 1
 
                 with once:
-                    DisplayText("Game Initialized (once)")
+                    f_eprintln("Game Initialized (once)")
                     SetResources(Player1, Add, 50, Ore)
 
-                with once(score >= 100):
-                    DisplayText("Score milestone reached!")
+                with when(score >= 100):
+                    f_eprintln("Score milestone reached!")
 
                 with when(kills >= 10):
                     eudkit.CreateUnit(1, "Terran Marine", "Anywhere", Player1)
 
                 with until(timer == 0):
-                    DisplayText("Mission in progress...")
+                    f_eprintln("Mission in progress...")
 
                 with after(24):
-                    DisplayText("24 trigger loops elapsed")
+                    f_eprintln("24 trigger loops elapsed")
 
                 with every(12):
-                    DisplayText("Clock tick (every 12 loops)")
+                    f_eprintln("Every 12 loops pulse")
 
             rep2 = s2.compile(v2_out)
             v2_compile_ms = (time.perf_counter() - t1) * 1000.0
 
             self._assert_budget_gate(
                 kernel_id="Kernel 2",
-                name="Control Flow & Reactive Primitives",
-                description="if/elif/else, while/break/continue, when/until/after/every/once",
-                v1_triggers=v1_triggers,
+                name=b["name"],
+                description=b["description"],
+                v1_triggers=b["v1_triggers"],
                 v2_triggers=rep2.trigger_count,
-                v1_payload=v1_payload,
+                v1_payload=b["v1_payload_bytes"],
                 v2_payload=rep2.payload_size,
-                v1_compile_ms=v1_compile_ms,
+                v1_compile_ms=b["v1_compile_ms"],
                 v2_compile_ms=v2_compile_ms,
             )
 
     def test_kernel3_functions_and_inlining(self) -> None:
         """Kernel 3: Functions & inlining (@session.fn, inlined small functions, direct return vs @EUDFunc)."""
+        b = BASELINES["Kernel 3"]
         with tempfile.TemporaryDirectory() as tmpdir:
-            v1_out = Path(tmpdir) / "v1_k3.scx"
             v2_out = Path(tmpdir) / "v2_k3.scx"
 
-            # --- 1. Legacy eudplib (v1) ---
-            t0 = time.perf_counter()
-            ep.LoadMap(str(BASEMAP_STRX_PATH))
-            ep.CompressPayload(True)
-
-            @ep.EUDFunc
-            def v1_add3(x, y, z):
-                ep.EUDReturn(x + y + z)
-
-            @ep.EUDFunc
-            def v1_worker(x):
-                ep.EUDReturn(x + 7)
-
-            @ep.EUDFunc
-            def v1_mul(x):
-                ep.EUDReturn(x * 3)
-
-            v1_fptr = ep.EUDFuncPtr(1, 1)(v1_worker)
-
-            def v1_k3_main():
-                r1 = ep.EUDVariable(0)
-                r2 = ep.EUDVariable(0)
-                val = ep.EUDVariable(0)
-                val << v1_add3(5, 15, 10)
-                r1 << v1_fptr(val)
-                v1_fptr << v1_mul
-                r2 << v1_fptr(val)
-
-            ep.SaveMap(str(v1_out), v1_k3_main)
-            v1_compile_ms = (time.perf_counter() - t0) * 1000.0
-
-            v1_triggers = sum(
-                1
-                for obj in ep.core.allocator.payload._found_objects_dict
-                if isinstance(obj, ep.RawTrigger)
-            )
-            v1_session = eudkit.Session(v1_out)
-            base_session = eudkit.Session(BASEMAP_STRX_PATH)
-            v1_payload = v1_session.strx_byte_len() - base_session.strx_byte_len()
-
-            # --- 2. Eudkit (v2) ---
             t1 = time.perf_counter()
             s2 = eudkit.Session(BASEMAP_STRX_PATH)
             r1 = s2.var(0, name="r1")
@@ -561,57 +388,22 @@ class TestBenchmarkCorpus(unittest.TestCase):
 
             self._assert_budget_gate(
                 kernel_id="Kernel 3",
-                name="Functions & Inlining",
-                description="Zero-overhead function inlining, direct-return calling convention, func_ptr",
-                v1_triggers=v1_triggers,
+                name=b["name"],
+                description=b["description"],
+                v1_triggers=b["v1_triggers"],
                 v2_triggers=rep2.trigger_count,
-                v1_payload=v1_payload,
+                v1_payload=b["v1_payload_bytes"],
                 v2_payload=rep2.payload_size,
-                v1_compile_ms=v1_compile_ms,
+                v1_compile_ms=b["v1_compile_ms"],
                 v2_compile_ms=v2_compile_ms,
             )
 
     def test_kernel4_memory_and_entities(self) -> None:
         """Kernel 4: Memory & Entities (CUnit, CSprite, Array/VArray, ReadTable deduplication vs f_dwread_epd)."""
+        b = BASELINES["Kernel 4"]
         with tempfile.TemporaryDirectory() as tmpdir:
-            v1_out = Path(tmpdir) / "v1_k4.scx"
             v2_out = Path(tmpdir) / "v2_k4.scx"
 
-            # --- 1. Legacy eudplib (v1) ---
-            t0 = time.perf_counter()
-            ep.LoadMap(str(BASEMAP_STRX_PATH))
-            ep.CompressPayload(True)
-
-            def v1_k4_main():
-                cunit_epd = ep.EPD(0x59CCA8)
-                v1 = ep.f_dwread_epd(cunit_epd + 2)
-                v2 = ep.f_epdread_epd(cunit_epd + 3)
-                v3 = ep.f_wread_epd(cunit_epd + 10, 0)
-                v4 = ep.f_bread_epd(cunit_epd + 19, 1)
-                ep.f_dwwrite_epd(cunit_epd + 2, 500)
-                ep.f_dwwrite_epd(cunit_epd + 10, 0x02000200)
-
-                arr = ep.EUDArray(10)
-                arr[1] = 500
-                arr[2] = 777
-                idx = ep.EUDVariable(2)
-                arr[idx] = 1234
-                res = ep.EUDVariable(0)
-                res << arr[idx]
-
-            ep.SaveMap(str(v1_out), v1_k4_main)
-            v1_compile_ms = (time.perf_counter() - t0) * 1000.0
-
-            v1_triggers = sum(
-                1
-                for obj in ep.core.allocator.payload._found_objects_dict
-                if isinstance(obj, ep.RawTrigger)
-            )
-            v1_session = eudkit.Session(v1_out)
-            base_session = eudkit.Session(BASEMAP_STRX_PATH)
-            v1_payload = v1_session.strx_byte_len() - base_session.strx_byte_len()
-
-            # --- 2. Eudkit (v2) ---
             t1 = time.perf_counter()
             s2 = eudkit.Session(BASEMAP_STRX_PATH)
             unit = CUnit(0, session=s2)
@@ -646,54 +438,22 @@ class TestBenchmarkCorpus(unittest.TestCase):
 
             self._assert_budget_gate(
                 kernel_id="Kernel 4",
-                name="Memory & Entities",
-                description="CUnit/CSprite field access, Array/VArray dynamic indexing, ReadTable bit deduplication",
-                v1_triggers=v1_triggers,
+                name=b["name"],
+                description=b["description"],
+                v1_triggers=b["v1_triggers"],
                 v2_triggers=rep2.trigger_count,
-                v1_payload=v1_payload,
+                v1_payload=b["v1_payload_bytes"],
                 v2_payload=rep2.payload_size,
-                v1_compile_ms=v1_compile_ms,
+                v1_compile_ms=b["v1_compile_ms"],
                 v2_compile_ms=v2_compile_ms,
             )
 
     def test_kernel5_strings_and_formatting(self) -> None:
         """Kernel 5: Strings & Formatting (MapString deduplication, CPString residue streaming vs f_simpleprint)."""
+        b = BASELINES["Kernel 5"]
         with tempfile.TemporaryDirectory() as tmpdir:
-            v1_out = Path(tmpdir) / "v1_k5.scx"
             v2_out = Path(tmpdir) / "v2_k5.scx"
 
-            # --- 1. Legacy eudplib (v1) ---
-            t0 = time.perf_counter()
-            ep.LoadMap(str(BASEMAP_STRX_PATH))
-            ep.CompressPayload(True)
-
-            @ep.EUDFunc
-            def v1_k5_main():
-                score = ep.EUDVariable(100)
-                minerals = ep.EUDVariable(500)
-                gas = ep.EUDVariable(250)
-
-                ep.f_eprintln("Status Report: Score = ", score)
-                ep.f_eprintln("Resources: Min = ", minerals, " Gas = ", gas)
-                ep.f_eprintln("Status Report: Score = ", score)
-
-                if ep.EUDIf()(ep.IsUserCP()):
-                    ep.f_eprintln("Local Player HUD: Active (Score ", score, ")")
-                ep.EUDEndIf()
-
-            ep.SaveMap(str(v1_out), v1_k5_main)
-            v1_compile_ms = (time.perf_counter() - t0) * 1000.0
-
-            v1_triggers = sum(
-                1
-                for obj in ep.core.allocator.payload._found_objects_dict
-                if isinstance(obj, ep.RawTrigger)
-            )
-            v1_session = eudkit.Session(v1_out)
-            base_session = eudkit.Session(BASEMAP_STRX_PATH)
-            v1_payload = v1_session.strx_byte_len() - base_session.strx_byte_len()
-
-            # --- 2. Eudkit (v2) ---
             t1 = time.perf_counter()
             s2 = eudkit.Session(BASEMAP_STRX_PATH)
             score = s2.var(100, name="score")
@@ -717,77 +477,22 @@ class TestBenchmarkCorpus(unittest.TestCase):
 
             self._assert_budget_gate(
                 kernel_id="Kernel 5",
-                name="Strings & Formatting",
-                description="MapString session deduplication, CPString streaming format actions, IsUserCP",
-                v1_triggers=v1_triggers,
+                name=b["name"],
+                description=b["description"],
+                v1_triggers=b["v1_triggers"],
                 v2_triggers=rep2.trigger_count,
-                v1_payload=v1_payload,
+                v1_payload=b["v1_payload_bytes"],
                 v2_payload=rep2.payload_size,
-                v1_compile_ms=v1_compile_ms,
+                v1_compile_ms=b["v1_compile_ms"],
                 v2_compile_ms=v2_compile_ms,
             )
 
     def test_kernel6_full_map_payload_compilation(self) -> None:
         """Kernel 6: Full Map Payload Compilation (basemap_strx.scx end-to-end injection)."""
+        b = BASELINES["Kernel 6"]
         with tempfile.TemporaryDirectory() as tmpdir:
-            v1_out = Path(tmpdir) / "v1_k6.scx"
             v2_out = Path(tmpdir) / "v2_k6.scx"
 
-            # --- 1. Legacy eudplib (v1) ---
-            t0 = time.perf_counter()
-            ep.LoadMap(str(BASEMAP_STRX_PATH))
-            ep.CompressPayload(True)
-
-            @ep.EUDFunc
-            def v1_calc_bonus(kills, minerals):
-                ep.EUDReturn((kills * 10) + (minerals // 2))
-
-            def v1_k6_main():
-                kills = ep.EUDVariable(15)
-                minerals = ep.EUDVariable(1000)
-                gas = ep.EUDVariable(500)
-                frame = ep.EUDVariable(0)
-                bonus = ep.EUDVariable(0)
-
-                init_once = ep.EUDVariable(1)
-                if ep.EUDIf()(init_once == 1):
-                    init_once << 0
-                    ep.f_eprintln("Mission Started: Operation Clean Sweep")
-                    ep.DoActions(ep.SetResources(ep.Player1, ep.SetTo, 1000, ep.Ore))
-                    ep.DoActions(ep.SetResources(ep.Player1, ep.SetTo, 500, ep.Gas))
-                ep.EUDEndIf()
-
-                frame += 1
-                bonus << v1_calc_bonus(kills, minerals)
-
-                cunit_epd = ep.EPD(0x59CCA8)
-                hp = ep.f_dwread_epd(cunit_epd + 2)
-                if ep.EUDIf()(hp < 100):
-                    ep.f_dwwrite_epd(cunit_epd + 2, 500)
-                ep.EUDEndIf()
-
-                clock_24 = ep.EUDVariable(24)
-                if ep.EUDIf()(clock_24 > 0):
-                    clock_24 -= 1
-                ep.EUDEndIf()
-                if ep.EUDIf()(clock_24 == 0):
-                    clock_24 << 24
-                    ep.f_eprintln("Tick Milestone. Bonus = ", bonus)
-                ep.EUDEndIf()
-
-            ep.SaveMap(str(v1_out), v1_k6_main)
-            v1_compile_ms = (time.perf_counter() - t0) * 1000.0
-
-            v1_triggers = sum(
-                1
-                for obj in ep.core.allocator.payload._found_objects_dict
-                if isinstance(obj, ep.RawTrigger)
-            )
-            v1_session = eudkit.Session(v1_out)
-            base_session = eudkit.Session(BASEMAP_STRX_PATH)
-            v1_payload = v1_session.strx_byte_len() - base_session.strx_byte_len()
-
-            # --- 2. Eudkit (v2) ---
             t1 = time.perf_counter()
             s2 = eudkit.Session(BASEMAP_STRX_PATH)
             kills = s2.var(15, name="kills")
@@ -820,22 +525,15 @@ class TestBenchmarkCorpus(unittest.TestCase):
             rep2 = s2.compile(v2_out)
             v2_compile_ms = (time.perf_counter() - t1) * 1000.0
 
-            # Additional verification: resulting SCX file size
-            self.assertLessEqual(
-                v2_out.stat().st_size,
-                v1_out.stat().st_size,
-                f"v2 output SCX ({v2_out.stat().st_size}B) must be smaller than v1 ({v1_out.stat().st_size}B)",
-            )
-
             self._assert_budget_gate(
                 kernel_id="Kernel 6",
-                name="Full Map Payload Compilation",
-                description="End-to-end full map injection with triggers, variables, strings, and entities",
-                v1_triggers=v1_triggers,
+                name=b["name"],
+                description=b["description"],
+                v1_triggers=b["v1_triggers"],
                 v2_triggers=rep2.trigger_count,
-                v1_payload=v1_payload,
+                v1_payload=b["v1_payload_bytes"],
                 v2_payload=rep2.payload_size,
-                v1_compile_ms=v1_compile_ms,
+                v1_compile_ms=b["v1_compile_ms"],
                 v2_compile_ms=v2_compile_ms,
             )
 
@@ -844,43 +542,11 @@ class TestBenchmarkCorpus(unittest.TestCase):
         if not EUDKIT_BIN.exists():
             self.skipTest(f"eudkit binary not found at {EUDKIT_BIN}")
 
+        b = BASELINES["Kernel 7"]
         with tempfile.TemporaryDirectory() as tmpdir:
-            v1_out = Path(tmpdir) / "v1_k7.scx"
             v2_out = Path(tmpdir) / "v2_k7.scx"
             ts_entry = Path(tmpdir) / "main.ts"
 
-            # --- 1. Equivalent legacy eudplib (v1) ---
-            t0 = time.perf_counter()
-            ep.LoadMap(str(TESTMAP_PATH))
-            ep.CompressPayload(True)
-
-            @ep.EUDFunc
-            def v1_ts_equiv():
-                a = ep.EUDVariable(0)
-                b = ep.EUDVariable(20)
-                for _ in range(40):
-                    a += 1
-                    ep.DoActions(ep.SetDeaths(ep.Player1, ep.Add, 1, "Terran Marine"))
-                if ep.EUDIf()(a >= 30):
-                    ep.DoActions(ep.SetResources(ep.Player1, ep.Add, 500, ep.Ore))
-                ep.EUDEndIf()
-                if ep.EUDWhile()(b >= 1):
-                    b -= 1
-                ep.EUDEndWhile()
-
-            ep.SaveMap(str(v1_out), v1_ts_equiv)
-            v1_compile_ms = (time.perf_counter() - t0) * 1000.0
-
-            v1_triggers = sum(
-                1
-                for obj in ep.core.allocator.payload._found_objects_dict
-                if isinstance(obj, ep.RawTrigger)
-            )
-            v1_session = eudkit.Session(v1_out)
-            base_session = eudkit.Session(TESTMAP_PATH)
-            v1_payload = v1_session.strx_byte_len() - base_session.strx_byte_len()
-
-            # --- 2. TypeScript Frontend (v2) compiled via eudkit-cli ---
             ts_code = """
 import { var_, Player1, Add, SetDeaths, SetResources, Ore } from "@eudkit/sdk";
 
@@ -917,6 +583,7 @@ export function main() {
             v2_compile_ms = (time.perf_counter() - t1) * 1000.0
 
             v2_session = eudkit.Session(v2_out)
+            base_session = eudkit.Session(TESTMAP_PATH)
             v2_payload = v2_session.strx_byte_len() - base_session.strx_byte_len()
             v2_triggers = v2_session.map_context.classic_trigger_count
 
@@ -931,13 +598,13 @@ export function main() {
 
             self._assert_budget_gate(
                 kernel_id="Kernel 7",
-                name="TypeScript Frontend Lowering",
-                description="Oxc-based TypeScript AST lowering via @eudkit/sdk and eudkit build CLI",
-                v1_triggers=v1_triggers,
+                name=b["name"],
+                description=b["description"],
+                v1_triggers=b["v1_triggers"],
                 v2_triggers=v2_triggers,
-                v1_payload=v1_payload,
+                v1_payload=b["v1_payload_bytes"],
                 v2_payload=v2_payload,
-                v1_compile_ms=v1_compile_ms,
+                v1_compile_ms=b["v1_compile_ms"],
                 v2_compile_ms=v2_compile_ms,
             )
 
