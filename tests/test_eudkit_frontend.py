@@ -980,6 +980,117 @@ class TestEudkitPythonFrontend(unittest.TestCase):
             chk_data = mpq.extract_file("staredit\\scenario.chk")
             self.assertGreater(len(chk_data), 1200)
 
+    def test_reactive_loop_primitives_frontend(self):
+        import eudkit
+        from eudkit import (
+            Add,
+            CreateUnit,
+            DisplayText,
+            Ore,
+            Player1,
+            SetResources,
+            after,
+            every,
+            once,
+            until,
+            when,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_ast = Path(tmpdir) / "out_ast.scx"
+            out_builder = Path(tmpdir) / "out_builder.scx"
+
+            # 1. AST lowering in @session.fn
+            s_ast = eudkit.Session(TESTMAP_PATH)
+            kills = s_ast.var(0, name="kills")
+            timer = s_ast.var(10, name="timer")
+            score = s_ast.var(50, name="score")
+
+            @s_ast.fn
+            def game_loop():
+                with once:
+                    DisplayText("Game Initialized (once)")
+                    SetResources(Player1, Add, 50, Ore)
+
+                with once(score >= 100):
+                    DisplayText("Score milestone reached!")
+
+                with when(kills >= 10):
+                    CreateUnit(1, "Terran Marine", "Anywhere", Player1)
+
+                with until(timer == 0):
+                    DisplayText("Mission in progress...")
+
+                with after(24):
+                    DisplayText("24 trigger loops elapsed")
+                    SetResources(Player1, Add, 500, Ore)
+
+                with every(12):
+                    DisplayText("Clock tick (every 12 loops)")
+
+            rep_ast = s_ast.compile(out_ast)
+            self.assertTrue(out_ast.exists())
+            self.assertGreater(rep_ast.trigger_count, 0)
+            self.assertGreater(rep_ast.payload_size, 0)
+
+            # 2. Builder context managers on session
+            s_bld = eudkit.Session(TESTMAP_PATH)
+            b_kills = s_bld.var(0, name="b_kills")
+            b_timer = s_bld.var(10, name="b_timer")
+
+            with s_bld.main_loop():
+                with s_bld.once():
+                    DisplayText("Builder Init")
+
+                with s_bld.when(b_kills >= 5):
+                    DisplayText("5 kills")
+
+                with s_bld.until(b_timer == 0):
+                    DisplayText("Builder Timer active")
+
+                with s_bld.after(30):
+                    DisplayText("30 loops delayed")
+
+                with s_bld.every(10):
+                    DisplayText("Periodic 10 loops")
+
+            rep_bld = s_bld.compile(out_builder)
+            self.assertTrue(out_builder.exists())
+            self.assertGreater(rep_bld.trigger_count, 0)
+            self.assertGreater(rep_bld.payload_size, 0)
+
+            # 3. Determinism check
+            out_ast_2 = Path(tmpdir) / "out_ast_2.scx"
+            s_ast_2 = eudkit.Session(TESTMAP_PATH)
+            k2 = s_ast_2.var(0, name="kills")
+            t2 = s_ast_2.var(10, name="timer")
+            sc2 = s_ast_2.var(50, name="score")
+
+            @s_ast_2.fn
+            def game_loop_2():
+                with once:
+                    DisplayText("Game Initialized (once)")
+                    SetResources(Player1, Add, 50, Ore)
+
+                with once(sc2 >= 100):
+                    DisplayText("Score milestone reached!")
+
+                with when(k2 >= 10):
+                    CreateUnit(1, "Terran Marine", "Anywhere", Player1)
+
+                with until(t2 == 0):
+                    DisplayText("Mission in progress...")
+
+                with after(24):
+                    DisplayText("24 trigger loops elapsed")
+                    SetResources(Player1, Add, 500, Ore)
+
+                with every(12):
+                    DisplayText("Clock tick (every 12 loops)")
+
+            s_ast_2.compile(out_ast_2)
+            self.assertEqual(out_ast.read_bytes(), out_ast_2.read_bytes(), "reactive loop compilations must be byte-for-byte deterministic")
+
 
 if __name__ == "__main__":
     unittest.main()

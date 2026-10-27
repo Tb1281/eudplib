@@ -51,3 +51,15 @@ _Avoid_: CP trick, curpl global
 **Obscuration (`obscurate`)**:
 An opt-in, seedable Backend transformation pass that protects the emitted `Payload` and `CHK` sections against decompilers (via object-layout shuffling, unit-offset randomization, string encryption, and `MRGN`/section scrambling) without altering runtime semantics.
 _Avoid_: Randomization, hardcoded obfuscation
+
+**Trigger Loop**:
+StarCraft's discrete trigger evaluation pass (roughly every 30-31 game frames in standard maps, or every single frame when an EUD Turbo Trigger is active). The fundamental unit of time for eudkit reactive timing rules (`after`, `every`).
+_Avoid_: Tick, frame, second
+
+**EUD Turbo Trigger**:
+An EUD memory technique that continuously resets StarCraft's trigger loop countdown byte (`0x6509A0`) to 0, forcing trigger evaluation to execute every single game frame (~24 times per second on Fastest speed).
+_Avoid_: Hyper trigger hack, turbo tick
+
+**Reactive Rule**:
+A declarative trigger construct (`once`, `when`, `until`, `after`, `every`) evaluated on each Trigger Loop and lowered to deterministic 4-byte memory counters without using engine `Wait` actions.
+_Avoid_: Event listener, callback hook

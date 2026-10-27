@@ -231,7 +231,12 @@ class Session:
     def once(
         self, conditions: Condition | Sequence[Condition] | None = None
     ) -> Iterator[None]:
-        """Scoped one-time block executed exactly once (optionally guarded by conditions)."""
+        """Scoped one-time rule executed exactly once.
+        
+        If `conditions` is provided, the block waits until the conditions hold,
+        executes once, and permanently deactivates its guard.
+        If `conditions` is None, executes on the very first trigger loop and permanently deactivates.
+        """
         guard = self.var(1)
         if conditions is None:
             with self.if_(guard == 1):
@@ -243,6 +248,89 @@ class Session:
             with self.if_(cond_list):
                 guard.set(0, session=self)
                 yield
+
+    @contextlib.contextmanager
+    def when(
+        self, conditions: Condition | Sequence[Condition]
+    ) -> Iterator[None]:
+        """Standing reactive rule: executes every trigger loop while conditions evaluate to true.
+        
+        In StarCraft's polling-based trigger VM, `when(cond)` evaluates conditions at the start
+        of each trigger loop pass. As long as the conditions remain true, the enclosed actions execute.
+        """
+        with self.if_(conditions):
+            yield
+
+    @contextlib.contextmanager
+    def until(
+        self, condition: Condition
+    ) -> Iterator[None]:
+        """Continuous rule: executes every trigger loop until condition holds, then permanently deactivates.
+        
+        Evaluated each trigger loop cycle. As soon as `condition` becomes true, the guard flips
+        and the block will never execute again in subsequent trigger loops.
+        """
+        guard = self.var(0)
+        # While condition has not happened yet (guard == 0)
+        with self.if_(guard == 0):
+            # Check if terminating condition is reached
+            with self.if_(condition):
+                guard.set(1, session=self)
+            with self.else_():
+                yield
+
+    @contextlib.contextmanager
+    def after(
+        self, loops: int
+    ) -> Iterator[None]:
+        """Delay rule: countdown loop counter and fire once after `loops` trigger cycles have elapsed.
+        
+        StarCraft Trigger Loop Architecture:
+        In Brood War, triggers do NOT run every frame by default; they run in discrete
+        Trigger Loops (roughly every 30-31 game frames in standard maps, or every single
+        frame when an EUD Turbo Trigger / Hyper Trigger continuously resets the trigger loop tick
+        countdown to 0).
+        
+        Native `Wait(ms)` actions freeze the player's trigger evaluation thread and cause multiplayer desyncs.
+        `after(loops)` avoids `Wait` entirely by maintaining a deterministic 4-byte counter variable
+        decremented on each trigger loop pass. Once the specified number of trigger loops has elapsed,
+        the body executes once and deactivates.
+        
+        :param loops: Number of trigger loop evaluation cycles to wait before executing (e.g. 24 loops = ~1 second under Turbo).
+        """
+        timer = self.var(loops)
+        done = self.var(0)
+        with self.if_(done == 0):
+            with self.if_(timer > 0):
+                timer.sub(1, session=self)
+            with self.if_(timer == 0):
+                done.set(1, session=self)
+                yield
+
+    @contextlib.contextmanager
+    def every(
+        self, loops: int
+    ) -> Iterator[None]:
+        """Periodic clock rule: fires repeatedly every `loops` trigger cycles.
+        
+        StarCraft Trigger Loop Architecture:
+        In Brood War, triggers execute in discrete Trigger Loops. In standard maps, 1 loop
+        occurs every ~31 frames (~1.3s on Fastest). When an EUD Turbo Trigger is present,
+        the engine's trigger countdown tick is kept at 0, causing the trigger loop to execute
+        every single game frame (24 times/second on Fastest).
+        
+        `every(loops)` maintains a deterministic countdown variable that decrements on each trigger
+        loop cycle and resets to `loops` upon hitting 0, executing the body without relying on
+        fragile or desync-prone native `Wait()` actions.
+        
+        :param loops: Interval in trigger loop cycles between successive firings (e.g. 24 loops = every 1s under Turbo).
+        """
+        timer = self.var(loops)
+        with self.if_(timer > 0):
+            timer.sub(1, session=self)
+        with self.if_(timer == 0):
+            timer.set(loops, session=self)
+            yield
 
     def break_(self) -> None:
         self._raw.push_break()

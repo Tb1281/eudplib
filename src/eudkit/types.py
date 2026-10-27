@@ -1687,7 +1687,11 @@ class Player:
 
 
 class _OnceContextManager:
-    """Context manager for with once / with once(cond): blocks."""
+    """Context manager for `with once:` and `with once(conditions):` blocks.
+    
+    Guarantees the block executes at most once during the game. If conditions are provided,
+    waits until they are satisfied on a trigger loop pass before executing.
+    """
 
     def __init__(self, conditions: Condition | Sequence[Condition] | None = None) -> None:
         self.conditions = conditions
@@ -1712,5 +1716,125 @@ class _OnceContextManager:
 
 
 once = _OnceContextManager()
+
+
+class _WhenContextManager:
+    """Context manager for `with when(conditions):` blocks.
+    
+    Standing reactive rule that executes every trigger loop while conditions evaluate to true.
+    """
+
+    def __init__(self, conditions: Condition | Sequence[Condition]) -> None:
+        self.conditions = conditions
+
+    def __call__(
+        self, conditions: Condition | Sequence[Condition]
+    ) -> _WhenContextManager:
+        return _WhenContextManager(conditions)
+
+    def __enter__(self) -> None:
+        sess = _active_builder_session.get()
+        if sess is None:
+            raise RuntimeError("with when(...) can only be used inside an active eudkit block")
+        self._cm = sess.when(self.conditions)
+        self._cm.__enter__()
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if hasattr(self, "_cm"):
+            self._cm.__exit__(exc_type, exc_val, exc_tb)
+
+
+when = _WhenContextManager
+
+
+class _UntilContextManager:
+    """Context manager for `with until(condition):` blocks.
+    
+    Executes every trigger loop until `condition` evaluates to true, at which point
+    the block permanently deactivates and never executes again.
+    """
+
+    def __init__(self, condition: Condition) -> None:
+        self.condition = condition
+
+    def __call__(self, condition: Condition) -> _UntilContextManager:
+        return _UntilContextManager(condition)
+
+    def __enter__(self) -> None:
+        sess = _active_builder_session.get()
+        if sess is None:
+            raise RuntimeError("with until(...) can only be used inside an active eudkit block")
+        self._cm = sess.until(self.condition)
+        self._cm.__enter__()
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if hasattr(self, "_cm"):
+            self._cm.__exit__(exc_type, exc_val, exc_tb)
+
+
+until = _UntilContextManager
+
+
+class _AfterContextManager:
+    """Context manager for `with after(loops):` blocks.
+    
+    Counts down the specified number of StarCraft trigger loops and executes once.
+    Avoids native `Wait()` actions which freeze trigger threads and desync multiplayer.
+    
+    In standard maps, 1 loop occurs roughly every ~31 frames (~1.3s on Fastest speed).
+    Under an EUD Turbo Trigger / Hyper Trigger, 1 loop executes every game tick (24 times/second).
+    """
+
+    def __init__(self, loops: int) -> None:
+        self.loops = loops
+
+    def __call__(self, loops: int) -> _AfterContextManager:
+        return _AfterContextManager(loops)
+
+    def __enter__(self) -> None:
+        sess = _active_builder_session.get()
+        if sess is None:
+            raise RuntimeError("with after(loops) can only be used inside an active eudkit block")
+        self._cm = sess.after(self.loops)
+        self._cm.__enter__()
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if hasattr(self, "_cm"):
+            self._cm.__exit__(exc_type, exc_val, exc_tb)
+
+
+after = _AfterContextManager
+
+
+class _EveryContextManager:
+    """Context manager for `with every(loops):` blocks.
+    
+    Periodic clock rule that fires repeatedly every `loops` trigger cycles.
+    Deterministic, multiplayer-safe, and independent of fragile engine `Wait()` calls.
+    
+    In standard maps, 1 loop occurs roughly every ~31 frames (~1.3s on Fastest speed).
+    Under an EUD Turbo Trigger / Hyper Trigger, 1 loop executes every game tick (24 times/second).
+    """
+
+    def __init__(self, loops: int) -> None:
+        self.loops = loops
+
+    def __call__(self, loops: int) -> _EveryContextManager:
+        return _EveryContextManager(loops)
+
+    def __enter__(self) -> None:
+        sess = _active_builder_session.get()
+        if sess is None:
+            raise RuntimeError("with every(loops) can only be used inside an active eudkit block")
+        self._cm = sess.every(self.loops)
+        self._cm.__enter__()
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if hasattr(self, "_cm"):
+            self._cm.__exit__(exc_type, exc_val, exc_tb)
+
+
+every = _EveryContextManager
+
 
 
