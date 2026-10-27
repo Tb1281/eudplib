@@ -412,3 +412,101 @@ fn cli_watch_command_and_build_with_watch_flag() {
     );
     assert!(out_build_watch.exists(), "build --watch --once should produce output map");
 }
+
+#[test]
+fn test_cli_python_build_modes() {
+    let testmap = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tests/outputmap/basemap/basemap_strx.scx");
+    let testmap = testmap.canonicalize().unwrap();
+
+    let temp = tempfile::tempdir().unwrap();
+    let py_script = temp.path().join("logic.py");
+    let adhoc_out = temp.path().join("adhoc_out.scx");
+    let proj_out = temp.path().join("proj_out.scx");
+    let override_out = temp.path().join("override_out.scx");
+    let toml_path = temp.path().join("eudkit.toml");
+
+    fs::write(
+        &py_script,
+        r#"from eudkit import session, Deaths, SetDeaths, Player1, AtLeast, SetTo
+
+counter = session.var(0, name="counter")
+
+@session.fn
+def game_loop():
+    if Deaths(Player1, AtLeast, 1, "Terran Marine"):
+        counter += 1
+        SetDeaths(Player1, SetTo, 0, "Terran Marine")
+"#,
+    )
+    .unwrap();
+
+    // 1. Mode 1: Ad-hoc mode (`eudkit build --input ... --output ... --entry ...`)
+    let adhoc_run = Command::new(eudkit_bin())
+        .arg("build")
+        .arg("--input")
+        .arg(&testmap)
+        .arg("--output")
+        .arg(&adhoc_out)
+        .arg("--entry")
+        .arg(&py_script)
+        .output()
+        .expect("should execute eudkit build ad-hoc with Python entry");
+    assert!(
+        adhoc_run.status.success(),
+        "Ad-hoc build failed: {}",
+        String::from_utf8_lossy(&adhoc_run.stderr)
+    );
+    let adhoc_stdout = String::from_utf8_lossy(&adhoc_run.stdout);
+    assert!(adhoc_stdout.contains("Built"));
+    assert!(adhoc_out.exists(), "adhoc_out.scx should exist");
+
+    // 2. Mode 2: Project mode (`eudkit build` inside directory with eudkit.toml)
+    fs::write(
+        &toml_path,
+        format!(
+            "[project]\nname = \"py_test\"\n\n[build]\nentry = \"logic.py\"\ninput_map = {:?}\noutput_map = {:?}\n",
+            testmap.to_string_lossy(),
+            proj_out.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let proj_run = Command::new(eudkit_bin())
+        .current_dir(temp.path())
+        .arg("build")
+        .output()
+        .expect("should execute eudkit build in project mode with 0 args");
+    assert!(
+        proj_run.status.success(),
+        "Project mode build failed: {}",
+        String::from_utf8_lossy(&proj_run.stderr)
+    );
+    assert!(proj_out.exists(), "proj_out.scx should exist");
+
+    // 3. Project mode with CLI flag override (`eudkit build --output ...`)
+    let override_run = Command::new(eudkit_bin())
+        .current_dir(temp.path())
+        .arg("build")
+        .arg("--output")
+        .arg(&override_out)
+        .output()
+        .expect("should execute eudkit build with override flag");
+    assert!(
+        override_run.status.success(),
+        "Override build failed: {}",
+        String::from_utf8_lossy(&override_run.stderr)
+    );
+    assert!(override_out.exists(), "override_out.scx should exist");
+
+    // 4. Missing configuration/flags error test
+    let empty_temp = tempfile::tempdir().unwrap();
+    let err_run = Command::new(eudkit_bin())
+        .current_dir(empty_temp.path())
+        .arg("build")
+        .output()
+        .expect("should execute eudkit build in empty directory");
+    assert!(!err_run.status.success(), "should fail without config or args");
+    let err_stderr = String::from_utf8_lossy(&err_run.stderr);
+    assert!(err_stderr.contains("usage: eudkit build"));
+}

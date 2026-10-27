@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import Any, overload
 
 from .ast_lowering import EudFuncPtr, EudFunction, LoopRange, loop_range
-from .session import MapContext, Session
+from .session import MapContext, Session, session
 from .types import (
     EPD,
     P1,
@@ -270,6 +270,7 @@ __all__ = [
     "Player12",
     "PreserveTrigger",
     "Session",
+    "session",
     "Set",
     "SetDeaths",
     "SetDeathsX",

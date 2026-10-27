@@ -142,6 +142,61 @@ fn cmd_inspect(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn find_python_bin() -> String {
+    if let Ok(py) = std::env::var("PYTHON") {
+        if !py.is_empty() {
+            return py;
+        }
+    }
+    if let Ok(venv) = std::env::var("VIRTUAL_ENV") {
+        let candidate = PathBuf::from(venv).join("bin").join("python");
+        if candidate.exists() {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+    // Walk up from current working directory
+    let mut cur = std::env::current_dir().ok();
+    while let Some(dir) = cur {
+        let venv_py = dir.join(".venv").join("bin").join("python");
+        if venv_py.exists() {
+            return venv_py.to_string_lossy().to_string();
+        }
+        cur = dir.parent().map(|p| p.to_path_buf());
+    }
+    // Walk up from current exe directory
+    if let Ok(exe) = std::env::current_exe() {
+        let mut cur = exe.parent().map(|p| p.to_path_buf());
+        while let Some(dir) = cur {
+            let venv_py = dir.join(".venv").join("bin").join("python");
+            if venv_py.exists() {
+                return venv_py.to_string_lossy().to_string();
+            }
+            cur = dir.parent().map(|p| p.to_path_buf());
+        }
+    }
+    "python3".to_string()
+}
+
+fn configure_python_cmd(cmd: &mut std::process::Command) {
+    if let Ok(exe) = std::env::current_exe() {
+        let mut cur = exe.parent().map(|p| p.to_path_buf());
+        while let Some(dir) = cur {
+            let src_dir = dir.join("src");
+            if src_dir.join("eudkit").join("__init__.py").exists() {
+                let existing = std::env::var("PYTHONPATH").unwrap_or_default();
+                let new_path = if existing.is_empty() {
+                    src_dir.to_string_lossy().to_string()
+                } else {
+                    format!("{}:{}", src_dir.to_string_lossy(), existing)
+                };
+                cmd.env("PYTHONPATH", new_path);
+                break;
+            }
+            cur = dir.parent().map(|p| p.to_path_buf());
+        }
+    }
+}
+
 fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
     let mut map_path: Option<PathBuf> = None;
     let mut config_path: Option<PathBuf> = None;
@@ -208,6 +263,43 @@ fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
         (mp, CompilationConfig::default(), "tracer_module".to_string(), entry_path)
     };
 
+    if let Some(entry) = &resolved_entry {
+        let ext = entry.extension().and_then(|s| s.to_str()).unwrap_or("");
+        if ext == "py" {
+            let py_bin = find_python_bin();
+            let mut cmd = std::process::Command::new(&py_bin);
+            configure_python_cmd(&mut cmd);
+            cmd.arg("-m")
+                .arg("eudkit.runner")
+                .arg("--input")
+                .arg(&resolved_map)
+                .arg("--entry")
+                .arg(entry);
+            if hir_only {
+                cmd.arg("--dump-hir");
+            } else if lir_only {
+                cmd.arg("--dump-lir");
+            } else {
+                cmd.arg("--dump-hir");
+                cmd.arg("--dump-lir");
+            }
+            let output = cmd
+                .output()
+                .map_err(|e| format!("failed to execute python runner ({py_bin}): {e}"))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("Python dump-ir failed:\n{stderr}"));
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(out) = out_path {
+                fs::write(&out, stdout.as_bytes()).map_err(|e| e.to_string())?;
+            } else {
+                print!("{stdout}");
+            }
+            return Ok(());
+        }
+    }
+
     let mut session =
         CompilationSession::from_map(&resolved_map, comp_cfg).map_err(|e| e.to_string())?;
 
@@ -239,12 +331,69 @@ fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn execute_python_build(
+    proj_cfg: &ProjectConfig,
+    entry_path: &Path,
+) -> Result<eudkit_core::CompilationReport, String> {
+    let py_bin = find_python_bin();
+    let mut cmd = std::process::Command::new(&py_bin);
+    configure_python_cmd(&mut cmd);
+    cmd.arg("-m")
+        .arg("eudkit.runner")
+        .arg("--input")
+        .arg(&proj_cfg.input_map)
+        .arg("--output")
+        .arg(&proj_cfg.output_map)
+        .arg("--entry")
+        .arg(entry_path);
+
+    if proj_cfg.obscurate {
+        cmd.arg("--obscurate");
+    }
+    if let Some(seed) = proj_cfg.obscurate_seed {
+        cmd.arg("--seed").arg(seed.to_string());
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to execute python runner ({py_bin}): {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("Python build failed:\n{stderr}\n{stdout}"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    print!("{stdout}");
+
+    let session = CompilationSession::from_map(&proj_cfg.output_map, proj_cfg.to_compilation_config())
+        .map_err(|e| format!("failed to read generated map {}: {e}", proj_cfg.output_map.display()))?;
+
+    Ok(eudkit_core::CompilationReport {
+        trigger_count: session.map_context().triggers().len(),
+        byte_buf_count: 0,
+        payload_offset: 0,
+        payload_size: 0,
+        payload_entry_addr: 0,
+        prt_offsets: Vec::new(),
+        ort_offsets: Vec::new(),
+    })
+}
+
 fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationReport, String> {
     if proj_cfg.input_map.as_os_str().is_empty() || proj_cfg.output_map.as_os_str().is_empty() {
         return Err(
-            "usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <main.ts>]"
+            "usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <script.(ts|py)>]"
                 .to_string(),
         );
+    }
+
+    if let Some(entry_path) = &proj_cfg.entry {
+        let ext = entry_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        if ext == "py" {
+            return execute_python_build(proj_cfg, entry_path);
+        }
     }
 
     let mut session =
@@ -529,6 +678,10 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
                 seed = Some(s.parse::<u64>().map_err(|e| e.to_string())?);
             }
             "--watch" | "-w" => {}
+            "--help" | "-h" => {
+                println!("usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <script.(ts|py)>]");
+                return Ok(());
+            }
             other => return Err(format!("unknown argument for build: {other}")),
         }
         i += 1;

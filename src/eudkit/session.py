@@ -76,6 +76,15 @@ class Session:
         self._buf_counter = 0
         self._fp_counter = 0
         self._vars_by_name: dict[str, Var] = {}
+        self._compiled_report: _rust_eudkit.CompilationReport | None = None
+
+    def __enter__(self) -> Session:
+        self._ctx_token = _active_builder_session.set(self)
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if hasattr(self, "_ctx_token"):
+            _active_builder_session.reset(self._ctx_token)
 
     def set_obscurate(self, obscurate: bool = True, *, seed: int | None = None) -> None:
         """Enables or disables seeded Obscuration pass on this Compilation Session."""
@@ -377,4 +386,32 @@ class Session:
     def compile(
         self, output_map: str | Path
     ) -> _rust_eudkit.CompilationReport:
-        return self._raw.compile(str(output_map))
+        report = self._raw.compile(str(output_map))
+        self._compiled_report = report
+        return report
+
+
+class AmbientSessionProxy:
+    """Proxy object that dynamically delegates to the active compilation session in the current context."""
+
+    def _get_active(self) -> Session:
+        sess = _active_builder_session.get()
+        if sess is None:
+            raise RuntimeError(
+                "No active eudkit compilation session found in the current context.\n"
+                "Scripts using ambient 'session' must be executed via 'eudkit build' "
+                "or within an active 'with Session(...):' context."
+            )
+        return sess
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get_active(), name)
+
+    def __repr__(self) -> str:
+        sess = _active_builder_session.get()
+        if sess is None:
+            return "<AmbientSessionProxy (no active session)>"
+        return f"<AmbientSessionProxy active={sess!r}>"
+
+
+session = AmbientSessionProxy()
