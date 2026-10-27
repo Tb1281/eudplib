@@ -178,6 +178,16 @@ impl fmt::Display for Comparison {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmpOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SwitchState {
     Set,
     Cleared,
@@ -724,6 +734,178 @@ impl StockCondition {
             | Self::MemoryDynamic { .. }
             | Self::ExprCmp { .. }
             | Self::IsUserCp => None,
+        }
+    }
+
+    pub fn from_cmp(lhs: HirExpr, op: CmpOp, rhs: HirExpr) -> Self {
+        let lhs = lhs.fold_constants();
+        let rhs = rhs.fold_constants();
+
+        // 1. Both are constants
+        if let (HirExpr::Const(lc), HirExpr::Const(rc)) = (&lhs, &rhs) {
+            let lu = *lc as u32;
+            let ru = *rc as u32;
+            let holds = match op {
+                CmpOp::Eq => lu == ru,
+                CmpOp::Ne => lu != ru,
+                CmpOp::Lt => lu < ru,
+                CmpOp::Le => lu <= ru,
+                CmpOp::Gt => lu > ru,
+                CmpOp::Ge => lu >= ru,
+            };
+            return if holds { Self::Always } else { Self::Never };
+        }
+
+        // 2. Normalize so constant is on rhs if op is commutative or invertible
+        match (&lhs, op, &rhs) {
+            (HirExpr::Const(c), CmpOp::Eq, other) => {
+                return Self::from_cmp(other.clone(), CmpOp::Eq, HirExpr::Const(*c));
+            }
+            (HirExpr::Const(c), CmpOp::Ne, other) => {
+                return Self::from_cmp(other.clone(), CmpOp::Ne, HirExpr::Const(*c));
+            }
+            (HirExpr::Const(c), CmpOp::Lt, other) => {
+                return Self::from_cmp(other.clone(), CmpOp::Gt, HirExpr::Const(*c));
+            }
+            (HirExpr::Const(c), CmpOp::Le, other) => {
+                return Self::from_cmp(other.clone(), CmpOp::Ge, HirExpr::Const(*c));
+            }
+            (HirExpr::Const(c), CmpOp::Gt, other) => {
+                return Self::from_cmp(other.clone(), CmpOp::Lt, HirExpr::Const(*c));
+            }
+            (HirExpr::Const(c), CmpOp::Ge, other) => {
+                return Self::from_cmp(other.clone(), CmpOp::Le, HirExpr::Const(*c));
+            }
+            _ => {}
+        }
+
+        // 3. RHS is constant
+        if let HirExpr::Const(rc) = rhs {
+            let ru = rc as u32;
+            match op {
+                CmpOp::Lt => {
+                    if ru == 0 {
+                        return Self::Never;
+                    }
+                    return Self::from_cmp(lhs, CmpOp::Le, HirExpr::Const((ru - 1) as i32));
+                }
+                CmpOp::Le => {
+                    if ru == u32::MAX {
+                        return Self::Always;
+                    }
+                    if let HirExpr::Var(v) = lhs {
+                        return Self::VarCmp {
+                            var: v,
+                            comparison: Comparison::AtMost,
+                            value: ru,
+                            mask: None,
+                        };
+                    }
+                    return Self::ExprCmp {
+                        lhs,
+                        comparison: Comparison::AtMost,
+                        rhs: HirExpr::Const(rc),
+                    };
+                }
+                CmpOp::Gt => {
+                    if ru == u32::MAX {
+                        return Self::Never;
+                    }
+                    return Self::from_cmp(lhs, CmpOp::Ge, HirExpr::Const((ru + 1) as i32));
+                }
+                CmpOp::Ge => {
+                    if ru == 0 {
+                        return Self::Always;
+                    }
+                    if let HirExpr::Var(v) = lhs {
+                        return Self::VarCmp {
+                            var: v,
+                            comparison: Comparison::AtLeast,
+                            value: ru,
+                            mask: None,
+                        };
+                    }
+                    return Self::ExprCmp {
+                        lhs,
+                        comparison: Comparison::AtLeast,
+                        rhs: HirExpr::Const(rc),
+                    };
+                }
+                CmpOp::Eq => {
+                    if let HirExpr::Var(v) = lhs {
+                        return Self::VarCmp {
+                            var: v,
+                            comparison: Comparison::Exactly,
+                            value: ru,
+                            mask: None,
+                        };
+                    }
+                    return Self::ExprCmp {
+                        lhs,
+                        comparison: Comparison::Exactly,
+                        rhs: HirExpr::Const(rc),
+                    };
+                }
+                CmpOp::Ne => {
+                    if ru == 0 {
+                        return Self::from_cmp(lhs, CmpOp::Ge, HirExpr::Const(1));
+                    }
+                    if ru == u32::MAX {
+                        return Self::from_cmp(lhs, CmpOp::Le, HirExpr::Const(-2)); // 0xFFFFFFFE
+                    }
+                    let diff = HirExpr::BinOp {
+                        op: HirBinOp::Sub,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(HirExpr::Const(rc)),
+                    };
+                    return Self::from_cmp(diff, CmpOp::Ge, HirExpr::Const(1));
+                }
+            }
+        }
+
+        // 4. Both sides are dynamic expressions
+        match op {
+            CmpOp::Eq => Self::ExprCmp {
+                lhs,
+                comparison: Comparison::Exactly,
+                rhs,
+            },
+            CmpOp::Ne => {
+                let diff = HirExpr::BinOp {
+                    op: HirBinOp::Sub,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                };
+                Self::from_cmp(diff, CmpOp::Ge, HirExpr::Const(1))
+            }
+            CmpOp::Ge => Self::ExprCmp {
+                lhs,
+                comparison: Comparison::AtLeast,
+                rhs,
+            },
+            CmpOp::Le => Self::ExprCmp {
+                lhs,
+                comparison: Comparison::AtMost,
+                rhs,
+            },
+            CmpOp::Gt => {
+                // a > b -> (a -sat b) >= 1
+                let sat_diff = HirExpr::BinOp {
+                    op: HirBinOp::SubSat,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                };
+                Self::from_cmp(sat_diff, CmpOp::Ge, HirExpr::Const(1))
+            }
+            CmpOp::Lt => {
+                // a < b -> (b -sat a) >= 1
+                let sat_diff = HirExpr::BinOp {
+                    op: HirBinOp::SubSat,
+                    lhs: Box::new(rhs),
+                    rhs: Box::new(lhs),
+                };
+                Self::from_cmp(sat_diff, CmpOp::Ge, HirExpr::Const(1))
+            }
         }
     }
 }
