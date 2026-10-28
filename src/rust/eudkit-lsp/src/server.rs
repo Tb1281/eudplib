@@ -5,8 +5,9 @@ use std::error::Error;
 use std::ops::Range;
 
 use crate::analysis::{
-    python_diagnostics, python_eud_player_diagnostics, ts_diagnostics, ts_eud_player_diagnostics,
-    ParsedDocument, TsLanguage,
+    function_doc, function_hover, identifier_at, python_call_context, python_diagnostics,
+    python_eud_player_diagnostics, symbol_hover, symbol_slot_at, ts_call_context, ts_diagnostics,
+    ts_eud_player_diagnostics, ts_symbol_slot_at, ParsedDocument, TsLanguage,
 };
 use crate::completion::{completions_at_with_context, offset_to_position, ts_completions_at};
 use crate::project::ProjectCache;
@@ -15,8 +16,10 @@ use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response
 use lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, Diagnostic, DiagnosticSeverity,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    InitializeParams, Position, PublishDiagnosticsParams, Range as LspRange, ServerCapabilities,
-    TextDocumentSyncKind, Uri,
+    Documentation, Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams,
+    MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, Position,
+    PublishDiagnosticsParams, Range as LspRange, ServerCapabilities, SignatureHelp,
+    SignatureHelpOptions, SignatureHelpParams, SignatureInformation, TextDocumentSyncKind, Uri,
 };
 use url::Url;
 
@@ -48,6 +51,12 @@ fn run_with_connection(connection: Connection) -> ServerResult<()> {
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some(vec!["\"".to_string(), "'".to_string(), "(".to_string()]),
             ..CompletionOptions::default()
+        }),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+            retrigger_characters: Some(vec![",".to_string()]),
+            work_done_progress_options: Default::default(),
         }),
         ..ServerCapabilities::default()
     };
@@ -101,6 +110,27 @@ fn handle_request(request: &Request, state: &mut ServerState) -> Response {
                 ),
             }
         }
+        "textDocument/hover" => match serde_json::from_value::<HoverParams>(request.params.clone())
+        {
+            Ok(params) => Response::new_ok(request.id.clone(), hover_response(state, &params)),
+            Err(error) => Response::new_err(
+                request.id.clone(),
+                ErrorCode::InvalidParams as i32,
+                error.to_string(),
+            ),
+        },
+        "textDocument/signatureHelp" => {
+            match serde_json::from_value::<SignatureHelpParams>(request.params.clone()) {
+                Ok(params) => {
+                    Response::new_ok(request.id.clone(), signature_help_response(state, &params))
+                }
+                Err(error) => Response::new_err(
+                    request.id.clone(),
+                    ErrorCode::InvalidParams as i32,
+                    error.to_string(),
+                ),
+            }
+        }
         _ => Response::new_err(
             request.id.clone(),
             ErrorCode::MethodNotFound as i32,
@@ -132,6 +162,152 @@ fn completion_response(
         }
     }?;
     Some(CompletionResponse::Array(items))
+}
+
+fn hover_response(state: &mut ServerState, params: &HoverParams) -> Option<Hover> {
+    let position = params.text_document_position_params.position;
+    let uri = params
+        .text_document_position_params
+        .text_document
+        .uri
+        .as_str();
+    let map_context = map_context_for_document(state, uri);
+    let document = state.documents.get(uri)?;
+    let offset = position_to_offset(&document.text, position)?;
+    let (markdown, range) = match document.language_id.as_str() {
+        "python" => python_hover(&document.text, offset, map_context.as_deref())?,
+        language_id => {
+            let language = TsLanguage::from_language_id(language_id)?;
+            ts_hover(&document.text, language, offset, map_context.as_deref())?
+        }
+    };
+    let range = LspRange::new(
+        offset_to_position(&document.text, range.start),
+        offset_to_position(&document.text, range.end),
+    );
+
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: markdown,
+        }),
+        range: Some(range),
+    })
+}
+
+fn python_hover(
+    source: &str,
+    offset: usize,
+    map_context: Option<&MapContext>,
+) -> Option<(String, std::ops::Range<usize>)> {
+    let document = ParsedDocument::parse(source);
+    if let Some(slot) = symbol_slot_at(&document, offset) {
+        let value = &source[slot.content_range()];
+        let markdown = symbol_hover(slot.kind, value, map_context)?;
+        return Some((
+            markdown,
+            slot.literal.literal_start..slot.literal.literal_end,
+        ));
+    }
+
+    function_hover_at(source, offset, "python")
+}
+
+fn ts_hover(
+    source: &str,
+    language: TsLanguage,
+    offset: usize,
+    map_context: Option<&MapContext>,
+) -> Option<(String, std::ops::Range<usize>)> {
+    if let Some(slot) = ts_symbol_slot_at(source, language, offset) {
+        let value = &source[slot.content_range()];
+        let markdown = symbol_hover(slot.kind(), value, map_context)?;
+        return Some((markdown, slot.literal_range()));
+    }
+
+    function_hover_at(source, offset, "typescript")
+}
+
+fn function_hover_at(
+    source: &str,
+    offset: usize,
+    language_id: &str,
+) -> Option<(String, std::ops::Range<usize>)> {
+    let range = identifier_at(source, offset)?;
+    let name = source.get(range.clone())?;
+    let after = source[range.end..].trim_start();
+    if !after.starts_with('(') {
+        return None;
+    }
+
+    let markdown = function_hover(name, language_id)?;
+    Some((markdown, range))
+}
+
+fn signature_help_response(
+    state: &mut ServerState,
+    params: &SignatureHelpParams,
+) -> Option<SignatureHelp> {
+    let position = params.text_document_position_params.position;
+    let uri = params
+        .text_document_position_params
+        .text_document
+        .uri
+        .as_str();
+    let document = state.documents.get(uri)?;
+    let offset = position_to_offset(&document.text, position)?;
+    let context = match document.language_id.as_str() {
+        "python" => python_call_context(&document.text, offset),
+        language_id => {
+            let language = TsLanguage::from_language_id(language_id)?;
+            ts_call_context(&document.text, language, offset)
+        }
+    }?;
+    let doc = function_doc(&context.name)?;
+    let active_parameter = context
+        .keyword
+        .as_deref()
+        .and_then(|keyword| doc.parameters.iter().position(|name| *name == keyword))
+        .unwrap_or(context.active_parameter)
+        .min(doc.parameters.len().saturating_sub(1));
+
+    let signature = SignatureInformation {
+        label: doc.signature(),
+        documentation: Some(Documentation::MarkupContent(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: format!(
+                "{}\n\nReturns `{}`.",
+                doc.summary,
+                doc.result.name_for_language(&document.language_id)
+            ),
+        })),
+        parameters: Some(
+            doc.parameters
+                .iter()
+                .map(|name| ParameterInformation {
+                    label: ParameterLabel::Simple((*name).to_string()),
+                    documentation: None,
+                })
+                .collect(),
+        ),
+        active_parameter: None,
+    };
+
+    Some(SignatureHelp {
+        signatures: vec![signature],
+        active_signature: Some(0),
+        active_parameter: Some(active_parameter as u32),
+    })
+}
+
+fn map_context_for_document(
+    state: &mut ServerState,
+    uri: &str,
+) -> Option<std::sync::Arc<MapContext>> {
+    Url::parse(uri)
+        .ok()
+        .and_then(|url| url.to_file_path().ok())
+        .and_then(|path| state.projects.map_context_for_document(&path))
 }
 
 fn handle_notification(
