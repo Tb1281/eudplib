@@ -1,11 +1,12 @@
 //! Completion items derived from the reusable analysis layer.
 
 use std::collections::HashSet;
+use std::ops::Range;
 
-use crate::analysis::{symbol_slot_at, ParsedDocument, SymbolKind};
+use crate::analysis::{symbol_slot_at, ts_symbol_slot_at, ParsedDocument, SymbolKind, TsLanguage};
 use eudkit_core::map_context::{MapContext, CANONICAL_UNIT_NAMES};
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionTextEdit, Position, Range, TextEdit,
+    CompletionItem, CompletionItemKind, CompletionTextEdit, Position, Range as LspRange, TextEdit,
 };
 
 /// Completion items for `offset` without a Map Context.
@@ -47,6 +48,16 @@ pub fn completions_at_with_context(
             })
             .collect(),
     )
+}
+
+/// Completion items for `offset` in a TypeScript or JavaScript document.
+pub fn ts_completions_at(
+    source: &str,
+    language: TsLanguage,
+    offset: usize,
+) -> Option<Vec<CompletionItem>> {
+    let slot = ts_symbol_slot_at(source, language, offset)?;
+    Some(unit_completions(source, slot.content_range()))
 }
 
 impl SymbolKind {
@@ -107,8 +118,25 @@ fn push_unique(names: &mut Vec<String>, seen: &mut HashSet<String>, name: &str) 
     }
 }
 
-fn byte_range_to_lsp(source: &str, start: usize, end: usize) -> Range {
-    Range::new(
+fn unit_completions(source: &str, content_range: Range<usize>) -> Vec<CompletionItem> {
+    let range = byte_range_to_lsp(source, content_range.start, content_range.end);
+    CANONICAL_UNIT_NAMES
+        .iter()
+        .map(|name| CompletionItem {
+            label: (*name).to_string(),
+            kind: Some(CompletionItemKind::ENUM_MEMBER),
+            detail: Some(SymbolKind::Unit.detail().to_string()),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                range,
+                new_text: (*name).to_string(),
+            })),
+            ..CompletionItem::default()
+        })
+        .collect()
+}
+
+fn byte_range_to_lsp(source: &str, start: usize, end: usize) -> LspRange {
+    LspRange::new(
         offset_to_position(source, start),
         offset_to_position(source, end),
     )

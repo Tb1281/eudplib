@@ -4,7 +4,8 @@ VS Code is not installed in this repository's Linux test environment, so this
 document defines the Extension Development Host smoke test instead of an
 automated VS Code integration test. The Rust language server itself has
 automated protocol tests in `src/rust/eudkit-lsp/tests/protocol.rs`, including
-the assertion that completion returns exactly 228 canonical unit names.
+the assertion that completion returns exactly 228 canonical unit names for
+Python, TypeScript, and JavaScript documents.
 
 ## 1. Build the language server
 
@@ -47,7 +48,8 @@ From `editors/vscode`:
 ```bash
 npm install
 npm run check
-npm test
+npm test           # unit tests and tsc/checkJs type fixtures
+npm run test:types # only the TypeScript and JavaScript fixtures
 npm run build
 ```
 
@@ -73,7 +75,7 @@ npm run build
    committed `.vscode/launch.json` starts an Extension Development Host with
    the extension under development and opens `test/fixtures` as its workspace.
 
-## 4. Confirm canonical unit completion
+## 4. Confirm canonical unit completion in Python
 
 1. In the Extension Development Host, open `kill_unit.py` from the fixture
    folder.
@@ -91,10 +93,22 @@ npm run build
 5. Confirm completion is absent outside the unit string, for example in
    `KillUnit(`, and that Pylance still supplies hovers and type diagnostics.
 
+## 5. Confirm canonical unit completion in TypeScript and JavaScript
+
+1. Open `test/fixtures/typescript/kill_unit.ts` or
+   `test/fixtures/javascript/kill_unit.js` in the Extension Development Host.
+2. Replace a `KillUnit("Terran Marine", ...)` argument with an open
+   `KillUnit("` and trigger completion if needed.
+3. Confirm the same 228 canonical names appear, and that completion is absent
+   in `DisplayText("`, in the player argument, in comments, and in ordinary
+   strings.
+4. Confirm tsserver still supplies hovers and type diagnostics. The eudkit
+   client only contributes completion and never publishes diagnostics.
+
 The `eudkit LSP` output channel should contain lines showing which source was
 used, the server path, and the `running` lifecycle state.
 
-## 5. Check restart and crash handling
+## 6. Check restart and crash handling
 
 - Run **eudkit: Restart Language Server** from the Command Palette. The output
   channel should show a stop/start pair.
@@ -105,7 +119,7 @@ used, the server path, and the `running` lifecycle state.
   `eudkit-lsp` process from a terminal. The extension reports that the server
   stopped unexpectedly and offers **Restart** and **Show Output** actions.
 
-## 6. Package the extension
+## 7. Package the extension
 
 From `editors/vscode`:
 

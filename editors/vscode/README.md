@@ -1,14 +1,18 @@
 # eudkit LSP for VS Code
 
-This extension connects VS Code's Python editor to [`eudkit-lsp`](../../src/rust/eudkit-lsp),
-the eudplib language server. It adds completion for the 228 canonical unit
-names in the `KillUnit` unit argument, for example after typing `KillUnit("`.
+This extension connects VS Code's Python, TypeScript, and JavaScript editors to
+[`eudkit-lsp`](../../src/rust/eudkit-lsp), the eudplib language server. It adds
+completion for the 228 canonical unit names in the `KillUnit` unit argument, for
+example after typing `KillUnit("`.
 
 The extension is intentionally narrow:
 
-- It activates for Python and starts `eudkit-lsp` as a language client.
-- It does not provide or publish type diagnostics. Pylance remains the source
-  of API type checking and type errors.
+- It activates for Python, TypeScript, TSX, JavaScript, and JSX documents and
+  starts `eudkit-lsp` as a language client.
+- It does not provide or publish type diagnostics. Pylance (Python) and
+  tsserver (TypeScript/JavaScript) remain the source of API type checking and
+  type errors; the eudkit client runs alongside them and only contributes
+  completion.
 - It has no map-path setting and never asks for a map. `eudkit-lsp` does not
   need one.
 
@@ -60,15 +64,18 @@ From this directory:
 
 ```bash
 npm install
-npm run check   # strict TypeScript check, no emit
-npm test        # server resolution/path unit tests
-npm run build   # esbuild bundle in dist/extension.js
-npm run package # VSIX under dist/
+npm run check      # strict TypeScript check, no emit
+npm test           # server resolution/path unit tests + type-check fixtures
+npm run test:types # tsc --noEmit for the TypeScript and checkJs fixtures
+npm run build      # esbuild bundle in dist/extension.js
+npm run package    # VSIX under dist/
 ```
 
-The VSIX is bundled with esbuild and does not include `node_modules`. See
-[TESTING.md](TESTING.md) for the Extension Development Host smoke test that
-exercises `KillUnit("` completion.
+The type fixtures import `KillUnit` from `packages/ts-sdk` through a `paths`
+mapping. The TypeScript fixture verifies `tsc --noEmit`; the JavaScript fixture
+uses `checkJs` and JSDoc. The VSIX is bundled with esbuild and does not include
+`node_modules`. See [TESTING.md](TESTING.md) for the Extension Development Host
+smoke test that exercises `KillUnit("` completion.
 
 ## License
 

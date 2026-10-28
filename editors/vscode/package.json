@@ -1,7 +1,7 @@
 {
   "name": "eudkit-vscode",
   "displayName": "eudkit LSP",
-  "description": "Canonical unit completion for eudplib Python Frontend files from eudkit-lsp.",
+  "description": "Canonical unit completion for eudplib Python, TypeScript, and JavaScript Frontend files from eudkit-lsp.",
   "version": "0.1.0",
   "publisher": "eudkit",
   "license": "MIT",
@@ -20,10 +20,16 @@
     "eudplib",
     "starcraft",
     "python",
+    "typescript",
+    "javascript",
     "lsp"
   ],
   "activationEvents": [
-    "onLanguage:python"
+    "onLanguage:python",
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact",
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -48,7 +54,9 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "esbuild test/serverPath.test.ts --bundle --platform=node --format=cjs --outfile=dist-test/serverPath.test.cjs && node --test dist-test/serverPath.test.cjs",
+    "test": "npm run test:unit && npm run test:types",
+    "test:unit": "esbuild test/serverPath.test.ts --bundle --platform=node --format=cjs --outfile=dist-test/serverPath.test.cjs && node --test dist-test/serverPath.test.cjs",
+    "test:types": "tsc --noEmit -p test/fixtures/tsconfig.json",
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "package": "npm run check && npm run build -- --production && vsce package --no-dependencies --out dist/eudkit-vscode-0.1.0.vsix"

@@ -119,17 +119,23 @@ class EudkitLanguageServer implements vscode.Disposable {
     };
 
     const clientOptions: LanguageClientOptions = {
-      documentSelector: [{ language: "python" }],
+      documentSelector: [
+        { language: "python" },
+        { language: "typescript" },
+        { language: "typescriptreact" },
+        { language: "javascript" },
+        { language: "javascriptreact" },
+      ],
       outputChannel: this.output,
       errorHandler: this.createErrorHandler(),
       middleware: {
-        // Pylance owns API and type diagnostics. The eudkit server only
-        // contributes canonical unit completion, so never publish its
-        // diagnostics even if a future server version starts sending them.
+        // Pylance and tsserver own API and type diagnostics. The eudkit
+        // server only contributes canonical unit completion, so never publish
+        // its diagnostics even if a future server version starts sending them.
         handleDiagnostics: (uri, diagnostics) => {
           if (diagnostics.length > 0) {
             this.log(
-              `Ignoring ${diagnostics.length} diagnostic(s) from eudkit LSP for ${uri.toString()}; Pylance owns type checking.`,
+              `Ignoring ${diagnostics.length} diagnostic(s) from eudkit LSP for ${uri.toString()}; Pylance/tsserver own type checking.`,
             );
           }
         },

@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::error::Error;
 
-use crate::analysis::ParsedDocument;
-use crate::completion::completions_at_with_context;
+use crate::analysis::{ParsedDocument, TsLanguage};
+use crate::completion::{completions_at_with_context, ts_completions_at};
 use crate::project::ProjectCache;
 use lsp_server::{Connection, ErrorCode, Message, Request, Response};
 use lsp_types::{
@@ -16,9 +16,15 @@ use url::Url;
 
 type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
+#[derive(Debug, Clone)]
+struct Document {
+    text: String,
+    language_id: String,
+}
+
 #[derive(Default)]
 struct ServerState {
-    documents: HashMap<String, String>,
+    documents: HashMap<String, Document>,
     projects: ProjectCache,
 }
 
@@ -101,16 +107,24 @@ fn completion_response(
     params: &CompletionParams,
 ) -> Option<CompletionResponse> {
     let position = params.text_document_position.position;
-    let uri = &params.text_document_position.text_document.uri;
-    let text = state.documents.get(uri.as_str())?;
-    let offset = position_to_offset(text, position)?;
-    let map_context = Url::parse(uri.as_str())
-        .ok()
-        .and_then(|url| url.to_file_path().ok())
-        .and_then(|path| state.projects.map_context_for_document(&path));
-    let document = ParsedDocument::parse(text);
-    completions_at_with_context(&document, offset, map_context.as_deref())
-        .map(CompletionResponse::Array)
+    let uri = params.text_document_position.text_document.uri.as_str();
+    let document = state.documents.get(uri)?;
+    let offset = position_to_offset(&document.text, position)?;
+    let items = match document.language_id.as_str() {
+        "python" => {
+            let map_context = Url::parse(uri)
+                .ok()
+                .and_then(|url| url.to_file_path().ok())
+                .and_then(|path| state.projects.map_context_for_document(&path));
+            let parsed = ParsedDocument::parse(&document.text);
+            completions_at_with_context(&parsed, offset, map_context.as_deref())
+        }
+        language_id => {
+            let language = TsLanguage::from_language_id(language_id)?;
+            ts_completions_at(&document.text, language, offset)
+        }
+    }?;
+    Some(CompletionResponse::Array(items))
 }
 
 fn handle_notification(method: &str, params: serde_json::Value, state: &mut ServerState) {
@@ -119,16 +133,21 @@ fn handle_notification(method: &str, params: serde_json::Value, state: &mut Serv
             if let Ok(params) = serde_json::from_value::<DidOpenTextDocumentParams>(params) {
                 state.documents.insert(
                     params.text_document.uri.as_str().to_string(),
-                    params.text_document.text,
+                    Document {
+                        text: params.text_document.text,
+                        language_id: params.text_document.language_id,
+                    },
                 );
             }
         }
         "textDocument/didChange" => {
             if let Ok(params) = serde_json::from_value::<DidChangeTextDocumentParams>(params) {
                 if let Some(change) = params.content_changes.into_iter().next_back() {
-                    state
-                        .documents
-                        .insert(params.text_document.uri.as_str().to_string(), change.text);
+                    if let Some(document) =
+                        state.documents.get_mut(params.text_document.uri.as_str())
+                    {
+                        document.text = change.text;
+                    }
                 }
             }
         }

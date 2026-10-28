@@ -7,6 +7,9 @@
 use crate::analysis::call_site::enclosing_call;
 use crate::analysis::document::{ParsedDocument, StringLiteral};
 
+/// Frontend function whose first argument is a unit symbol.
+pub const UNIT_FUNCTION: &str = "KillUnit";
+
 /// A kind of named symbol accepted by a frontend API argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
@@ -53,7 +56,7 @@ pub struct FunctionSymbols {
 /// Python functions that accept Map or Canonical Symbols by name.
 pub const PYTHON_SYMBOLS: &[FunctionSymbols] = &[
     FunctionSymbols {
-        name: "KillUnit",
+        name: UNIT_FUNCTION,
         arguments: &[SymbolArgument::new(SymbolKind::Unit, 0, &["unit"])],
     },
     FunctionSymbols {
