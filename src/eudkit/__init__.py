@@ -158,6 +158,14 @@ class _EudNamespace:
         main_loop: bool | None = None,
         inline: bool | None = None,
     ) -> EudFunction | Callable[[Callable[..., Any]], EudFunction]:
+        """Decorator that compiles a Python function into an eudkit trigger function.
+
+        Use ``@eud.fn`` for the default form, or ``@eud.fn(main_loop=...,
+        inline=...)`` to control lowering. A zero-argument function with no
+        explicit ``inline`` setting becomes a main-loop function; other
+        functions are callable from eudkit code and are lowered into the active
+        compilation session.
+        """
         def _decorator(f: Callable[..., Any]) -> EudFunction:
             return EudFunction(f, main_loop=main_loop, inline=inline)
 
@@ -173,6 +181,12 @@ class _EudNamespace:
         init: EudFunction | None = None,
         name: str | None = None,
     ) -> EudFuncPtr:
+        """Allocates an indirect function pointer in the active session.
+
+        ``param_count`` and ``return_count`` describe the target function's
+        signature. ``init`` optionally binds an initial function, and ``name``
+        labels the pointer in HIR; use ``.set(fn)`` to retarget it later.
+        """
         from .types import _active_builder_session
 
         sess = _active_builder_session.get()
@@ -183,9 +197,20 @@ class _EudNamespace:
     def loop_range(
         self, start: int, stop: int | None = None, step: int = 1
     ) -> LoopRange:
+        """Marks a runtime, trigger-lowered loop range inside ``@eud.fn``.
+
+        A ``for`` over a ``loop_range`` becomes a ``while`` trigger loop instead
+        of being unrolled at compile time. Accepts ``loop_range(stop)`` or
+        ``loop_range(start, stop, step)`` mirroring Python's ``range``.
+        """
         return loop_range(start, stop, step)
 
     def do(self, *actions: Any) -> None:
+        """Emits one or more stock actions into the active session's current block.
+
+        Equivalent to ``session.do(*actions)``. Raises ``RuntimeError`` when no
+        builder session is active.
+        """
         from .types import _active_builder_session
 
         sess = _active_builder_session.get()
