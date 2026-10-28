@@ -2,4 +2,5 @@
 
 pub mod analysis;
 pub mod completion;
+pub mod project;
 pub mod server;

@@ -4,13 +4,15 @@ use std::collections::HashMap;
 use std::error::Error;
 
 use crate::analysis::{ParsedDocument, TsLanguage};
-use crate::completion::{completions_at, ts_completions_at};
+use crate::completion::{completions_at_with_context, ts_completions_at};
+use crate::project::ProjectCache;
 use lsp_server::{Connection, ErrorCode, Message, Request, Response};
 use lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
     DidOpenTextDocumentParams, InitializeParams, Position, ServerCapabilities,
     TextDocumentSyncKind,
 };
+use url::Url;
 
 type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -23,6 +25,7 @@ struct Document {
 #[derive(Default)]
 struct ServerState {
     documents: HashMap<String, Document>,
+    projects: ProjectCache,
 }
 
 /// Run the language server over stdin/stdout.
@@ -58,7 +61,7 @@ fn main_loop(connection: Connection) -> ServerResult<()> {
                 if connection.handle_shutdown(&request)? {
                     break;
                 }
-                let response = handle_request(&request, &state);
+                let response = handle_request(&request, &mut state);
                 if connection.sender.send(response.into()).is_err() {
                     break;
                 }
@@ -77,7 +80,7 @@ fn main_loop(connection: Connection) -> ServerResult<()> {
     Ok(())
 }
 
-fn handle_request(request: &Request, state: &ServerState) -> Response {
+fn handle_request(request: &Request, state: &mut ServerState) -> Response {
     match request.method.as_str() {
         "textDocument/completion" => {
             match serde_json::from_value::<CompletionParams>(request.params.clone()) {
@@ -100,7 +103,7 @@ fn handle_request(request: &Request, state: &ServerState) -> Response {
 }
 
 fn completion_response(
-    state: &ServerState,
+    state: &mut ServerState,
     params: &CompletionParams,
 ) -> Option<CompletionResponse> {
     let position = params.text_document_position.position;
@@ -109,8 +112,12 @@ fn completion_response(
     let offset = position_to_offset(&document.text, position)?;
     let items = match document.language_id.as_str() {
         "python" => {
+            let map_context = Url::parse(uri)
+                .ok()
+                .and_then(|url| url.to_file_path().ok())
+                .and_then(|path| state.projects.map_context_for_document(&path));
             let parsed = ParsedDocument::parse(&document.text);
-            completions_at(&parsed, offset)
+            completions_at_with_context(&parsed, offset, map_context.as_deref())
         }
         language_id => {
             let language = TsLanguage::from_language_id(language_id)?;
