@@ -36,5 +36,6 @@ members = [
     "eudplib-stormlib",
     "eudkit-core",
     "eudkit-cli",
+    "eudkit-lsp",
     "eudkit-ts",
 ]
