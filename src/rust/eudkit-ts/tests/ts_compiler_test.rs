@@ -302,3 +302,47 @@ export function main() {
     assert!(report.trigger_count > 0);
     assert!(report.payload_size > 0);
 }
+
+#[test]
+fn compiles_typescript_with_ambient_session_and_string_buffer() {
+    let map_path = repo_root().join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_ctx = session.map_context();
+
+    let ts_source = r#"
+import { session, DisplayText, display_at, IsUserCP } from "eudkit";
+
+let kills = session.var(42, "kills");
+let hud = session.string("BOSS HP: %d / 1000");
+
+export function main() {
+    if (IsUserCP()) {
+        DisplayText("Welcome to the Boss Arena!");
+        hud.display_at(0, kills);
+        display_at(1, "Fixed Line: %d", kills);
+    }
+}
+"#;
+
+    let hir = compile_ts_to_hir(ts_source, "ts_ambient_session_test", map_ctx)
+        .expect("should compile TS ambient session test");
+
+    assert_eq!(hir.variables().len(), 1);
+    assert_eq!(hir.variables()[0].name, "kills");
+    assert_eq!(hir.variables()[0].init_val, 42);
+
+    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
+    let stmts = &main_fn.blocks[0].stmts;
+
+    let has_if_user_cp = stmts.iter().any(|s| match s {
+        HirStmt::If { conditions, then_body, .. } => {
+            conditions.iter().any(|c| matches!(c, eudkit_core::hir::StockCondition::IsUserCp))
+                && then_body.iter().any(|bs| matches!(bs, HirStmt::Action(StockAction::DisplayText { .. })))
+                && then_body.iter().any(|bs| matches!(bs, HirStmt::Action(StockAction::PrintAt { line: 0, .. })))
+                && then_body.iter().any(|bs| matches!(bs, HirStmt::Action(StockAction::PrintAt { line: 1, .. })))
+        }
+        _ => false,
+    });
+    assert!(has_if_user_cp, "must compile If(IsUserCP()) with DisplayText and PrintAt actions");
+}

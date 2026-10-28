@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "eudkit": ["packages/ts-sdk/src/index.ts"],
+      "@eudkit/sdk": ["packages/ts-sdk/src/index.ts"]
+    }
+  },
+  "include": ["packages/ts-sdk/src/**/*", "examples/**/*"]
+}

@@ -288,7 +288,8 @@ output: {}
         .read_all()
         .unwrap();
     let chk = Chk::parse(&raw_chk).unwrap();
-    assert!(chk.has_isom_footer());
+    assert!(!chk.has_isom_footer(), "plain build must not have fake ISOM footer");
+    assert!(chk.section(b"STR ").is_some(), "plain build must retain STR section for editor compatibility");
     assert!(chk.section(b"STRx").is_some());
     assert!(chk.section(b"TRIG").is_some());
 }
@@ -414,7 +415,8 @@ obscurate = false
         .read_all()
         .unwrap();
     let chk = Chk::parse(&raw_chk).unwrap();
-    assert!(chk.has_isom_footer());
+    assert!(!chk.has_isom_footer(), "plain build must not have fake ISOM footer");
+    assert!(chk.section(b"STR ").is_some(), "plain build must retain STR section for editor compatibility");
     assert!(chk.section(b"STRx").is_some());
     assert!(chk.section(b"TRIG").is_some());
 }

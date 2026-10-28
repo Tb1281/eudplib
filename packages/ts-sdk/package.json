@@ -1,5 +1,5 @@
 {
-  "name": "@eudkit/sdk",
+  "name": "eudkit",
   "version": "0.1.0",
   "description": "First-class TypeScript SDK and compiler interfaces for StarCraft: Remastered EUD mapmaking",
   "main": "src/index.ts",

@@ -32,3 +32,5 @@ uv.lock
 examples/**/output_*.scx
 .agents/
 skills-lock.json
+eud-domain-knowledge/
+

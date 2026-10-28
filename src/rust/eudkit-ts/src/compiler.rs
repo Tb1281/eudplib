@@ -21,6 +21,7 @@ pub struct TsCompiler<'a> {
     current_fn_idx: Option<usize>,
     loop_vars: HashMap<String, i32>, // compile-time loop counters
     struct_vars: HashMap<String, HirExpr>, // e.g. u -> unit_epd
+    string_buffers: HashMap<String, String>, // var name -> template
 }
 
 impl<'a> TsCompiler<'a> {
@@ -89,6 +90,7 @@ impl<'a> TsCompiler<'a> {
             current_fn_idx: None,
             loop_vars: HashMap::new(),
             struct_vars: HashMap::new(),
+            string_buffers: HashMap::new(),
         }
     }
 
@@ -212,6 +214,33 @@ impl<'a> TsCompiler<'a> {
                                 continue;
                             }
                         }
+                    }
+
+                    let is_string_call = match &call.callee {
+                        Expression::Identifier(ident) => {
+                            ident.name.as_str() == "string" || ident.name.as_str() == "stringBuffer"
+                        }
+                        Expression::StaticMemberExpression(mem) => {
+                            mem.property.name.as_str() == "string"
+                                || mem.property.name.as_str() == "stringBuffer"
+                        }
+                        _ => false,
+                    };
+
+                    if is_string_call {
+                        let template = if let Some(arg0) =
+                            call.arguments.first().and_then(|a| a.as_expression())
+                        {
+                            if let Expression::StringLiteral(slit) = arg0 {
+                                slit.value.as_str().unwrap_or("").to_string()
+                            } else {
+                                "".to_string()
+                            }
+                        } else {
+                            "".to_string()
+                        };
+                        self.string_buffers.insert(var_name.to_string(), template);
+                        continue;
                     }
                 }
 
@@ -425,18 +454,30 @@ impl<'a> TsCompiler<'a> {
                                 }
                                 _ => false,
                             },
+                            Expression::NewExpression(new_expr) => match &new_expr.callee {
+                                Expression::Identifier(ident) => {
+                                    ident.name.as_str() == "CUnit"
+                                        || ident.name.as_str() == "CSprite"
+                                }
+                                _ => false,
+                            },
                             _ => false,
                         };
 
                         if is_struct_cast {
-                            if let Expression::CallExpression(call) = init {
-                                if let Some(arg0) =
+                            let arg0_opt = match init {
+                                Expression::CallExpression(call) => {
                                     call.arguments.first().and_then(|a| a.as_expression())
-                                {
-                                    if let Ok(expr) = self.lower_expr(arg0) {
-                                        self.struct_vars.insert(var_name.to_string(), expr);
-                                        continue;
-                                    }
+                                }
+                                Expression::NewExpression(new_expr) => {
+                                    new_expr.arguments.first().and_then(|a| a.as_expression())
+                                }
+                                _ => None,
+                            };
+                            if let Some(arg0) = arg0_opt {
+                                if let Ok(expr) = self.lower_expr(arg0) {
+                                    self.struct_vars.insert(var_name.to_string(), expr);
+                                    continue;
                                 }
                             }
                         }
@@ -654,11 +695,32 @@ impl<'a> TsCompiler<'a> {
                                 }
                                 "setTo" | "set" => {
                                     if let Some(a) = arg {
-                                        if let Ok(c) = self.eval_const_expr(a) {
-                                            out.push(HirStmt::VarAssignConst { var: var_id, value: c });
-                                        } else {
-                                            let rhs = self.lower_expr(a)?;
-                                            out.push(HirStmt::VarAssignExpr { var: var_id, expr: rhs });
+                                        let mut handled_call = false;
+                                        if let Expression::CallExpression(call) = a {
+                                            if let Expression::Identifier(ident) = &call.callee {
+                                                if let Some(&fn_idx) = self.functions.get(ident.name.as_str()) {
+                                                    let mut args = Vec::new();
+                                                    for arg_item in &call.arguments {
+                                                        if let Some(e) = arg_item.as_expression() {
+                                                            args.push(self.lower_expr(e)?);
+                                                        }
+                                                    }
+                                                    out.push(HirStmt::Call {
+                                                        callee: eudkit_core::hir::FuncId(fn_idx as u32),
+                                                        args,
+                                                        rets: vec![var_id],
+                                                    });
+                                                    handled_call = true;
+                                                }
+                                            }
+                                        }
+                                        if !handled_call {
+                                            if let Ok(c) = self.eval_const_expr(a) {
+                                                out.push(HirStmt::VarAssignConst { var: var_id, value: c });
+                                            } else {
+                                                let rhs = self.lower_expr(a)?;
+                                                out.push(HirStmt::VarAssignExpr { var: var_id, expr: rhs });
+                                            }
                                         }
                                     }
                                 }
@@ -692,6 +754,36 @@ impl<'a> TsCompiler<'a> {
         assign: &AssignmentExpression,
         out: &mut Vec<HirStmt>,
     ) -> Result<()> {
+        if let AssignmentTarget::AssignmentTargetIdentifier(ident) = &assign.left {
+            let var_name = ident.name.as_str();
+            let Some(&var_id) = self.vars.get(var_name) else {
+                return Err(EudkitTsError::Compile(format!(
+                    "unknown variable {var_name}"
+                )));
+            };
+
+            if assign.operator == AssignmentOperator::Assign {
+                if let Expression::CallExpression(call) = &assign.right {
+                    if let Expression::Identifier(call_ident) = &call.callee {
+                        if let Some(&fn_idx) = self.functions.get(call_ident.name.as_str()) {
+                            let mut args = Vec::new();
+                            for a in &call.arguments {
+                                if let Some(e) = a.as_expression() {
+                                    args.push(self.lower_expr(e)?);
+                                }
+                            }
+                            out.push(HirStmt::Call {
+                                callee: eudkit_core::hir::FuncId(fn_idx as u32),
+                                args,
+                                rets: vec![var_id],
+                            });
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+
         let rhs_expr = self.lower_expr(&assign.right)?;
 
         match &assign.left {
@@ -1316,7 +1408,53 @@ impl<'a> TsCompiler<'a> {
         };
 
         if let Some(obj) = obj_name {
-            if obj != "eud" {
+            if let Some(template) = self.string_buffers.get(obj).cloned() {
+                match fn_name {
+                    "display" | "displayText" | "display_text" => {
+                        let mut args = Vec::new();
+                        for arg in &call.arguments {
+                            if let Some(expr) = arg.as_expression() {
+                                args.push(self.lower_expr(expr)?);
+                            }
+                        }
+                        if args.is_empty() && !template.contains("%d") && !template.contains("%x") {
+                            return Ok(Some(StockAction::DisplayText {
+                                text: template,
+                                always_display: true,
+                            }));
+                        } else {
+                            let parts = parse_format_template(&template, &args)
+                                .map_err(|e| EudkitTsError::Compile(e))?;
+                            return Ok(Some(StockAction::FormatPrint {
+                                target: PrintTarget::DisplayText,
+                                parts,
+                                always_display: true,
+                            }));
+                        }
+                    }
+                    "display_at" | "displayAt" | "print_at" | "PrintAt" | "DisplayTextAt" => {
+                        let line = if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                            self.eval_const_expr(arg0)? as u8
+                        } else {
+                            0
+                        };
+                        let mut args = Vec::new();
+                        for arg in call.arguments.iter().skip(1) {
+                            if let Some(expr) = arg.as_expression() {
+                                args.push(self.lower_expr(expr)?);
+                            }
+                        }
+                        let parts = parse_format_template(&template, &args)
+                            .map_err(|e| EudkitTsError::Compile(e))?;
+                        return Ok(Some(StockAction::PrintAt {
+                            line,
+                            parts,
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+            if obj != "eud" && obj != "session" {
                 return Ok(None);
             }
         }
@@ -1749,6 +1887,9 @@ impl<'a> TsCompiler<'a> {
                 }
                 if let Some(&var_id) = self.vars.get(name) {
                     return Ok(HirExpr::Var(var_id));
+                }
+                if let Some(sexpr) = self.struct_vars.get(name) {
+                    return Ok(sexpr.clone());
                 }
                 Err(EudkitTsError::Compile(format!(
                     "unresolved identifier {name}"

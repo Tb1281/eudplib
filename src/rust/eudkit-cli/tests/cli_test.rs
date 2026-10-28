@@ -141,7 +141,8 @@ obscurate_seed = 42
         .read_all()
         .unwrap();
     let chk = Chk::parse(&raw_chk).unwrap();
-    assert!(chk.has_isom_footer());
+    assert!(!chk.has_isom_footer(), "plain build must not have fake ISOM footer");
+    assert!(chk.section(b"STR ").is_some(), "plain build must retain STR section for editor compatibility");
     assert!(chk.section(b"STRx").is_some());
     assert!(chk.section(b"TRIG").is_some());
 }
@@ -263,7 +264,8 @@ obscurate = false
         .read_all()
         .unwrap();
     let chk = Chk::parse(&raw_chk).unwrap();
-    assert!(chk.has_isom_footer());
+    assert!(!chk.has_isom_footer(), "plain build must not have fake ISOM footer");
+    assert!(chk.section(b"STR ").is_some(), "plain build must retain STR section for editor compatibility");
     assert!(chk.section(b"STRx").is_some());
     assert!(chk.section(b"TRIG").is_some());
 }
@@ -360,7 +362,7 @@ fn cli_build_with_obscurate_flag_and_seed_produces_deterministic_scx() {
         .read_all()
         .unwrap();
     let chk = Chk::parse(&raw_chk).unwrap();
-    assert!(chk.has_isom_footer());
+    assert!(chk.has_isom_footer(), "obscured build must have fake ISOM footer");
     assert!(chk.section(b"STRx").is_some());
     assert!(chk.section(b"TRIG").is_some());
     assert!(chk.section(b"MRGN").is_some());
@@ -509,4 +511,71 @@ def game_loop():
     assert!(!err_run.status.success(), "should fail without config or args");
     let err_stderr = String::from_utf8_lossy(&err_run.stderr);
     assert!(err_stderr.contains("usage: eudkit build"));
+}
+
+#[test]
+fn cli_builds_all_typescript_showcase_examples_cleanly() {
+    let root = repo_root();
+    let basemap = root.join("tests/outputmap/basemap/basemap_strx.scx");
+    let temp = tempfile::tempdir().unwrap();
+
+    let example_entries = [
+        "examples/01_variables_and_math/eudkit_v2.ts",
+        "examples/02_control_flow/eudkit_v2.ts",
+        "examples/03_functions_and_inlining/eudkit_v2.ts",
+        "examples/04_memory_and_cunit/eudkit_v2.ts",
+        "examples/05_strings_and_display/eudkit_v2.ts",
+        "examples/06_reactive_rules/eudkit_v2.ts",
+    ];
+
+    for (idx, rel_path) in example_entries.iter().enumerate() {
+        let entry = root.join(rel_path);
+        assert!(entry.exists(), "showcase entry must exist: {}", entry.display());
+
+        let out_scx = temp.path().join(format!("showcase_0{}.scx", idx + 1));
+        let build = Command::new(eudkit_bin())
+            .arg("build")
+            .arg("--input")
+            .arg(&basemap)
+            .arg("--entry")
+            .arg(&entry)
+            .arg("--output")
+            .arg(&out_scx)
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run eudkit build for {rel_path}: {e}"));
+
+        assert!(
+            build.status.success(),
+            "eudkit build failed for {rel_path}:\nSTDOUT: {}\nSTDERR: {}",
+            String::from_utf8_lossy(&build.stdout),
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        assert!(out_scx.exists(), "output scx must exist for {rel_path}");
+
+        // Validate scenario.chk sections and editor compatibility
+        let mut archive = Archive::open(&out_scx, OpenArchiveFlags::empty()).unwrap();
+        let raw_chk = archive
+            .open_file("staredit\\scenario.chk")
+            .unwrap()
+            .read_all()
+            .unwrap();
+        let chk = Chk::parse(&raw_chk).unwrap();
+        assert!(
+            !chk.has_isom_footer(),
+            "editor-compatible build for {rel_path} must not contain fake ISOM footer"
+        );
+        assert!(
+            chk.section(b"STR ").is_some(),
+            "build for {rel_path} must retain valid STR section for SCMDraft 2 compatibility"
+        );
+        assert!(
+            chk.section(b"STRx").is_some(),
+            "build for {rel_path} must contain STRx section"
+        );
+        assert!(
+            chk.section(b"TRIG").is_some(),
+            "build for {rel_path} must contain TRIG section"
+        );
+    }
 }

@@ -551,11 +551,28 @@ export function string(content: number | string = 1024): StringBuffer {
 }
 
 /**
- * @deprecated Use `string()` instead.
+ * Creates or registers an immutable static string in the map's STR section.
  */
-export function stringBuffer(content: number | string = 1024): StringBuffer {
-  return string(content);
+export function map_string(text: string): MapString {
+  return new MapString(text);
 }
+
+/**
+ * Ambient compilation session proxy for TypeScript scripts.
+ */
+export const session = {
+  var: var_,
+  string: string,
+  string_buffer: stringBuffer,
+  stringBuffer: stringBuffer,
+  map_string: map_string,
+  mapString: map_string,
+  display_at: display_at,
+  displayAt: displayAt,
+  DisplayTextAt: DisplayTextAt,
+  displayText: DisplayText,
+  DisplayText: DisplayText,
+};
 
 /**
  * Execute a block of logic exactly once during the game.
