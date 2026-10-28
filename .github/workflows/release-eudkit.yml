@@ -83,14 +83,10 @@ jobs:
           $binPath = "src/rust/target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
           New-Item -ItemType Directory -Force -Path "to-release"
           Copy-Item $binPath -Destination "to-release/${{ matrix.raw_binary_name }}"
-          Copy-Item $binPath -Destination "to-release/eudkit.exe"
 
           Push-Location to-release
           $hRaw = (Get-FileHash -Algorithm SHA256 "${{ matrix.raw_binary_name }}").Hash.ToLower()
           "$hRaw  ${{ matrix.raw_binary_name }}" | Out-File -Encoding ascii "${{ matrix.raw_binary_name }}.sha256"
-
-          $hExe = (Get-FileHash -Algorithm SHA256 "eudkit.exe").Hash.ToLower()
-          "$hExe  eudkit.exe" | Out-File -Encoding ascii "eudkit.exe.sha256"
           Pop-Location
 
       - name: Upload artifact
