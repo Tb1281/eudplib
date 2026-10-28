@@ -237,17 +237,10 @@ pub fn build_trig_section(
             EUDX_SIGNATURE,
         );
         let act = pack_chk_action(
-            0,
-            0,
-            0,
-            0,
-            11, // Player 12 (0-based 11)
-            bit as i32,
-            0,
-            45, // SetDeaths
+            0, 0, 0, 0, 11, // Player 12 (0-based 11)
+            bit as i32, 0, 45, // SetDeaths
             8,  // Add
-            20,
-            0,
+            20, 0,
         );
         let trig = pack_chk_trigger(&[17], &[cond], &[act], 0);
         out.extend_from_slice(&trig);

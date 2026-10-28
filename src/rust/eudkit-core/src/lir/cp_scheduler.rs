@@ -147,5 +147,3 @@ pub fn schedule_cp_cursor(blocks: &mut [ExpandedBlock]) {
         block.ops = new_ops;
     }
 }
-
-

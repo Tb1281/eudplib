@@ -1,6 +1,5 @@
 use eudkit_core::hir::{
-    FormatPart, HirBasicBlock, HirExpr, HirFunction, HirModule, HirStmt,
-    PrintTarget, StockAction,
+    FormatPart, HirBasicBlock, HirExpr, HirFunction, HirModule, HirStmt, PrintTarget, StockAction,
 };
 use eudkit_core::{CompilationConfig, CompilationSession};
 use std::path::PathBuf;
@@ -50,7 +49,9 @@ fn format_print_lowers_to_cpstring_residue_stream_and_compiles_scx() {
     let mut session =
         CompilationSession::from_map(&map_path, CompilationConfig::default()).unwrap();
 
-    let str_buf = session.register_map_string("Initial static text buffer placeholder with plenty of length").unwrap();
+    let str_buf = session
+        .register_map_string("Initial static text buffer placeholder with plenty of length")
+        .unwrap();
 
     let mut hir = HirModule::new("test_format_print");
     let score_var = hir.add_var("score", 12345);
@@ -67,19 +68,21 @@ fn format_print_lowers_to_cpstring_residue_stream_and_compiles_scx() {
         FormatPart::Text(")\0".to_string()),
     ];
 
-    main_fn.block_mut(bb0).push_stmt(HirStmt::Action(StockAction::FormatPrint {
-        target: PrintTarget::MapString(str_buf.id),
-        parts,
-        always_display: true,
-    }));
+    main_fn
+        .block_mut(bb0)
+        .push_stmt(HirStmt::Action(StockAction::FormatPrint {
+            target: PrintTarget::MapString(str_buf.id),
+            parts,
+            always_display: true,
+        }));
 
     // Also test print_at line 0
-    main_fn.block_mut(bb0).push_stmt(HirStmt::Action(StockAction::PrintAt {
-        line: 0,
-        parts: vec![
-            FormatPart::Text("Line 0 status: OK\0".to_string()),
-        ],
-    }));
+    main_fn
+        .block_mut(bb0)
+        .push_stmt(HirStmt::Action(StockAction::PrintAt {
+            line: 0,
+            parts: vec![FormatPart::Text("Line 0 status: OK\0".to_string())],
+        }));
 
     hir.add_function(main_fn);
     session.set_hir_module(hir);

@@ -1,7 +1,5 @@
 use crate::error::Result;
-use crate::hir::{
-    Comparison, HirModule, HirStmt, ReactiveRule, StockCondition,
-};
+use crate::hir::{Comparison, HirModule, HirStmt, ReactiveRule, StockCondition};
 
 /// Lowers all `HirStmt::Reactive` rules recursively across all functions and basic blocks
 /// in the given `HirModule` into canonical 4-byte counter/guard variables and trigger conditions.

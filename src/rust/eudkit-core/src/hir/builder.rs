@@ -1,7 +1,7 @@
 use crate::error::{EudkitError, Result};
 use crate::hir::{
-    ByteBufId, FuncId, FuncPtrId, HirBasicBlock, HirByteBuf, HirExpr, HirFunction,
-    HirModule, HirStmt, HirTerminator, InlineHint, Modifier, ReactiveRule, StockAction, StockCondition, VarId,
+    ByteBufId, FuncId, FuncPtrId, HirBasicBlock, HirByteBuf, HirExpr, HirFunction, HirModule,
+    HirStmt, HirTerminator, InlineHint, Modifier, ReactiveRule, StockAction, StockCondition, VarId,
 };
 
 #[derive(Clone, Debug)]
@@ -237,7 +237,9 @@ impl HirBuilder {
                 self.last_was_else = false;
                 Ok(())
             }
-            _ => Err(EudkitError::Ir("end_elif without matching begin_elif".into())),
+            _ => Err(EudkitError::Ir(
+                "end_elif without matching begin_elif".into(),
+            )),
         }
     }
 
@@ -261,7 +263,9 @@ impl HirBuilder {
                 self.last_was_else = true;
                 Ok(())
             }
-            _ => Err(EudkitError::Ir("end_else without matching begin_else".into())),
+            _ => Err(EudkitError::Ir(
+                "end_else without matching begin_else".into(),
+            )),
         }
     }
 
@@ -347,10 +351,7 @@ impl HirBuilder {
             }
             Some(OpenControlFrame::ReactiveAfter { delay_ticks, body }) => {
                 self.active_stmts_mut()
-                    .push(HirStmt::Reactive(ReactiveRule::After {
-                        delay_ticks,
-                        body,
-                    }));
+                    .push(HirStmt::Reactive(ReactiveRule::After { delay_ticks, body }));
                 Ok(())
             }
             Some(OpenControlFrame::ReactiveEvery { period_ticks, body }) => {

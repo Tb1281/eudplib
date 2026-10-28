@@ -13,14 +13,8 @@ use crate::lir::{LirAction, ValueExpr};
 ///
 /// The total number of emitted actions is at most `N + 11`, requiring zero runtime
 /// XOR decryption loops or runtime trigger branches.
-pub fn emit_cpstring_residue_stream(
-    dest_epd: ValueExpr,
-    dwords: &[u32],
-) -> Vec<LirAction> {
-    let exprs: Vec<ValueExpr> = dwords
-        .iter()
-        .map(|&d| ValueExpr::Const(d as i32))
-        .collect();
+pub fn emit_cpstring_residue_stream(dest_epd: ValueExpr, dwords: &[u32]) -> Vec<LirAction> {
+    let exprs: Vec<ValueExpr> = dwords.iter().map(|&d| ValueExpr::Const(d as i32)).collect();
     emit_cpstring_residue_stream_exprs(dest_epd, &exprs)
 }
 
@@ -43,7 +37,9 @@ pub fn emit_cpstring_residue_stream_exprs(
     }
 
     // Find non-empty residue classes in ascending order
-    let non_empty: Vec<usize> = (0..12).filter(|&m| !residue_classes[m].is_empty()).collect();
+    let non_empty: Vec<usize> = (0..12)
+        .filter(|&m| !residue_classes[m].is_empty())
+        .collect();
     if non_empty.is_empty() {
         return Vec::new();
     }
@@ -63,7 +59,7 @@ pub fn emit_cpstring_residue_stream_exprs(
                 player2: ValueExpr::Const(delta),
                 unitid: 0,
                 acttype: 45, // SetDeaths
-                amount: 8,  // Add
+                amount: 8,   // Add
                 flags: 20,
                 eudx: 0,
             });
@@ -81,7 +77,7 @@ pub fn emit_cpstring_residue_stream_exprs(
                 player2: val,
                 unitid: k,
                 acttype: 45, // SetDeaths
-                amount: 7,  // SetTo
+                amount: 7,   // SetTo
                 flags: 20,
                 eudx: 0,
             });
@@ -116,7 +112,7 @@ pub fn emit_cpstring_write_block(
         player2: dest_epd,
         unitid: 0,
         acttype: 45, // SetDeaths
-        amount: 7,  // SetTo
+        amount: 7,   // SetTo
         flags: 20,
         eudx: 0,
     });

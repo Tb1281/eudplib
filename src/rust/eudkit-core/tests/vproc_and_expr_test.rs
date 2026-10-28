@@ -60,11 +60,7 @@ fn allocates_unified_72_byte_stride_vproc_buffer_and_stacks_objects_into_gaps() 
         id: eudkit_core::lir::ObjectId(0),
         label: Some("entry".to_string()),
         prev_ptr: ValueExpr::Const(0),
-        next_ptr: ValueExpr::FieldAddress(FieldRef::vproc_slot(
-            1,
-            0,
-            VProcSlotField::TriggerBase,
-        )),
+        next_ptr: ValueExpr::FieldAddress(FieldRef::vproc_slot(1, 0, VProcSlotField::TriggerBase)),
         conditions: Vec::new(),
         actions: Vec::new(),
         flags: 4,
@@ -116,7 +112,10 @@ fn allocates_unified_72_byte_stride_vproc_buffer_and_stacks_objects_into_gaps() 
     assert_eq!(v1_val, 222);
 
     // Slot 1 modifier is Add (8) at vbuf_base + 324 + 72 + 27
-    assert_eq!(allocated.data[vbuf_base + 324 + 72 + 27], Modifier::Add.encode());
+    assert_eq!(
+        allocated.data[vbuf_base + 324 + 72 + 27],
+        Modifier::Add.encode()
+    );
     // Slot 1 next_ptr is at vbuf_base + 72 * 1 = vbuf_base + 72
     let v1_nptr = u32::from_le_bytes(
         allocated.data[vbuf_base + 72..vbuf_base + 76]
@@ -332,7 +331,9 @@ fn lowers_dynamic_mul_div_rem_and_variable_shifts() {
     hir.add_function(main_fn);
     session.set_hir_module(hir);
 
-    let lir = session.lower_to_lir().expect("should lower dynamic mul/div/rem/shl/shr");
+    let lir = session
+        .lower_to_lir()
+        .expect("should lower dynamic mul/div/rem/shl/shr");
     let alloc = allocate_lir_module(lir).expect("should allocate payload");
     assert!(alloc.data.len() > 2400);
 }

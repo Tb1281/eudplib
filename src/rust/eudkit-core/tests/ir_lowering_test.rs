@@ -73,23 +73,27 @@ fn lowers_hir_module_with_field_refs_and_dumps_deterministic_eudir_snapshots() {
         ],
         preserved: true,
     });
-    main_fn.block_mut(entry_block).set_terminator(HirTerminator::Branch {
-        conditions: vec![StockCondition::Deaths {
-            player: PlayerId::Player1,
-            comparison: Comparison::Exactly,
-            amount: 1,
-            unit: 0,
-        }],
-        then_block,
-        else_block: exit_block,
-    });
+    main_fn
+        .block_mut(entry_block)
+        .set_terminator(HirTerminator::Branch {
+            conditions: vec![StockCondition::Deaths {
+                player: PlayerId::Player1,
+                comparison: Comparison::Exactly,
+                amount: 1,
+                unit: 0,
+            }],
+            then_block,
+            else_block: exit_block,
+        });
 
-    main_fn.block_mut(then_block).push_stmt(HirStmt::Action(StockAction::SetDeaths {
-        player: PlayerId::Player1,
-        modifier: Modifier::Add,
-        value: HirValue::Const(10),
-        unit: 0,
-    }));
+    main_fn
+        .block_mut(then_block)
+        .push_stmt(HirStmt::Action(StockAction::SetDeaths {
+            player: PlayerId::Player1,
+            modifier: Modifier::Add,
+            value: HirValue::Const(10),
+            unit: 0,
+        }));
     main_fn
         .block_mut(then_block)
         .set_terminator(HirTerminator::Jump(exit_block));
@@ -108,20 +112,30 @@ fn lowers_hir_module_with_field_refs_and_dumps_deterministic_eudir_snapshots() {
     assert!(hir_dump.contains("DisplayText(\"Hello from eudkit tracer bullet!\")"));
     assert!(hir_dump.contains("SetField(@obj0.Action[0].Player2"));
 
-    let lir = session.lower_to_lir().expect("should lower HIR to LIR").clone();
+    let lir = session
+        .lower_to_lir()
+        .expect("should lower HIR to LIR")
+        .clone();
     let lir_dump = session.dump_lir().expect("should dump LIR");
 
     assert!(lir_dump.contains("lir_module @tracer_bullet"));
     assert!(lir_dump.contains("object @obj"));
     assert!(lir_dump.contains("NextPtr"));
-    assert_eq!(lir_dump, session.dump_lir().unwrap(), "LIR dump must be deterministic");
+    assert_eq!(
+        lir_dump,
+        session.dump_lir().unwrap(),
+        "LIR dump must be deterministic"
+    );
 
     // Verify LIR contains both ByteBuf and Trigger objects and preserves FieldRef expressions
     let has_byte_buf = lir
         .objects()
         .iter()
         .any(|o| matches!(o, LirObject::ByteBuf(b) if b.data.len() == 4));
-    assert!(has_byte_buf, "LIR should contain 4-byte counter_cell ByteBuf");
+    assert!(
+        has_byte_buf,
+        "LIR should contain 4-byte counter_cell ByteBuf"
+    );
 
     let has_field_epd = lir.objects().iter().any(|o| {
         if let LirObject::Trigger(t) = o {
@@ -139,5 +153,8 @@ fn lowers_hir_module_with_field_refs_and_dumps_deterministic_eudir_snapshots() {
             false
         }
     });
-    assert!(has_field_epd, "LIR should use symbolic FieldRef for self-modifying actions");
+    assert!(
+        has_field_epd,
+        "LIR should use symbolic FieldRef for self-modifying actions"
+    );
 }

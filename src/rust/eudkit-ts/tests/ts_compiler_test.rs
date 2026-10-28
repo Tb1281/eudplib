@@ -69,8 +69,8 @@ export function main() {
 }
 "#;
 
-    let hir = compile_ts_to_hir(ts_source, "ts_test_module", map_ctx)
-        .expect("should compile TS to HIR");
+    let hir =
+        compile_ts_to_hir(ts_source, "ts_test_module", map_ctx).expect("should compile TS to HIR");
 
     assert_eq!(hir.name, "ts_test_module");
     assert_eq!(hir.variables().len(), 3);
@@ -101,7 +101,12 @@ export function main() {
     }
 
     match &stmts[1] {
-        HirStmt::Action(StockAction::SetDeaths { player, modifier, unit, .. }) => {
+        HirStmt::Action(StockAction::SetDeaths {
+            player,
+            modifier,
+            unit,
+            ..
+        }) => {
             assert_eq!(player, &PlayerId::Player1);
             assert_eq!(modifier, &Modifier::Add);
             assert_eq!(unit, &0); // "Terran Marine" ID is 0
@@ -155,7 +160,11 @@ export function main() {
     assert_eq!(hir.variables()[1].name, "unit_epd");
     assert_eq!(hir.functions().len(), 2);
 
-    let clamp_fn = hir.functions().iter().find(|f| f.name == "clampHp").unwrap();
+    let clamp_fn = hir
+        .functions()
+        .iter()
+        .find(|f| f.name == "clampHp")
+        .unwrap();
     assert!(!clamp_fn.is_main_loop);
 
     let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
@@ -169,7 +178,10 @@ export function main() {
         }
         _ => false,
     });
-    assert!(has_hp_set, "must have SetDeathsDynamic for CUnit hitPoints = 1000");
+    assert!(
+        has_hp_set,
+        "must have SetDeathsDynamic for CUnit hitPoints = 1000"
+    );
 
     // Verify helper function call
     let has_call = stmts.iter().any(|s| matches!(s, HirStmt::Call { .. }));
@@ -208,14 +220,27 @@ export function main() {
     let stmts = &main_fn.blocks[0].stmts;
 
     let has_if_user_cp = stmts.iter().any(|s| match s {
-        HirStmt::If { conditions, then_body, .. } => {
-            conditions.iter().any(|c| matches!(c, eudkit_core::hir::StockCondition::IsUserCp))
-                && then_body.iter().any(|bs| matches!(bs, HirStmt::Action(StockAction::FormatPrint { .. })))
-                && then_body.iter().any(|bs| matches!(bs, HirStmt::Action(StockAction::PrintAt { .. })))
+        HirStmt::If {
+            conditions,
+            then_body,
+            ..
+        } => {
+            conditions
+                .iter()
+                .any(|c| matches!(c, eudkit_core::hir::StockCondition::IsUserCp))
+                && then_body
+                    .iter()
+                    .any(|bs| matches!(bs, HirStmt::Action(StockAction::FormatPrint { .. })))
+                && then_body
+                    .iter()
+                    .any(|bs| matches!(bs, HirStmt::Action(StockAction::PrintAt { .. })))
         }
         _ => false,
     });
-    assert!(has_if_user_cp, "must compile If(IsUserCP()) with FormatPrint and PrintAt actions");
+    assert!(
+        has_if_user_cp,
+        "must compile If(IsUserCP()) with FormatPrint and PrintAt actions"
+    );
 }
 
 #[test]
@@ -297,7 +322,9 @@ export function main() {
     comp_session.set_hir_module(hir);
     let tmp = tempfile::tempdir().unwrap();
     let out_map = tmp.path().join("ts_reactive_out.scx");
-    let report = comp_session.compile_map(&out_map).expect("should compile to .scx");
+    let report = comp_session
+        .compile_map(&out_map)
+        .expect("should compile to .scx");
     assert!(out_map.exists());
     assert!(report.trigger_count > 0);
     assert!(report.payload_size > 0);
@@ -336,13 +363,28 @@ export function main() {
     let stmts = &main_fn.blocks[0].stmts;
 
     let has_if_user_cp = stmts.iter().any(|s| match s {
-        HirStmt::If { conditions, then_body, .. } => {
-            conditions.iter().any(|c| matches!(c, eudkit_core::hir::StockCondition::IsUserCp))
-                && then_body.iter().any(|bs| matches!(bs, HirStmt::Action(StockAction::DisplayText { .. })))
-                && then_body.iter().any(|bs| matches!(bs, HirStmt::Action(StockAction::PrintAt { line: 0, .. })))
-                && then_body.iter().any(|bs| matches!(bs, HirStmt::Action(StockAction::PrintAt { line: 1, .. })))
+        HirStmt::If {
+            conditions,
+            then_body,
+            ..
+        } => {
+            conditions
+                .iter()
+                .any(|c| matches!(c, eudkit_core::hir::StockCondition::IsUserCp))
+                && then_body
+                    .iter()
+                    .any(|bs| matches!(bs, HirStmt::Action(StockAction::DisplayText { .. })))
+                && then_body
+                    .iter()
+                    .any(|bs| matches!(bs, HirStmt::Action(StockAction::PrintAt { line: 0, .. })))
+                && then_body
+                    .iter()
+                    .any(|bs| matches!(bs, HirStmt::Action(StockAction::PrintAt { line: 1, .. })))
         }
         _ => false,
     });
-    assert!(has_if_user_cp, "must compile If(IsUserCP()) with DisplayText and PrintAt actions");
+    assert!(
+        has_if_user_cp,
+        "must compile If(IsUserCP()) with DisplayText and PrintAt actions"
+    );
 }

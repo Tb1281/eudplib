@@ -13,8 +13,7 @@ fn main() {
 
   #[cfg(target_os = "windows")]
   {
-    cfg.cxxflag("-D UNICODE")
-    .cxxflag("-D _UNICODE");
+    cfg.cxxflag("-D UNICODE").cxxflag("-D _UNICODE");
   }
 
   #[cfg(target_os = "macos")]
@@ -38,14 +37,14 @@ fn main() {
   {
     println!("cargo::rustc-link-lib=static=StormLib");
     println!("cargo:rustc-link-lib=user32");
-  } 
+  }
 
   #[cfg(target_os = "macos")]
   {
     println!("cargo:rustc-link-lib=static=storm");
     println!("cargo:rustc-link-lib=dylib=c++");
-  } 
-  
+  }
+
   #[cfg(target_os = "linux")]
   {
     println!("cargo:rustc-link-lib=static=storm");

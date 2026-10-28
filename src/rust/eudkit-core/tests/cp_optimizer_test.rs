@@ -35,33 +35,41 @@ fn cp_optimizer_groups_sequential_accesses_by_unit_stride_and_restores_cpcache()
     // Field A: offset 0x008 (EPD + 2) -> 12 * 0 + 2 (unit 0, r = 2)
     // Field B: offset 0x038 (EPD + 14) -> 12 * 1 + 2 (unit 1, r = 2)
     // Field C: offset 0x068 (EPD + 26) -> 12 * 2 + 2 (unit 2, r = 2)
-    main_fn.block_mut(entry).push_stmt(HirStmt::Action(StockAction::SetDeaths {
-        player: PlayerId::Epd(cunit_epd + 2),
-        modifier: Modifier::SetTo,
-        value: eudkit_core::hir::HirValue::Const(100),
-        unit: 0,
-    }));
-    main_fn.block_mut(entry).push_stmt(HirStmt::Action(StockAction::SetDeaths {
-        player: PlayerId::Epd(cunit_epd + 14),
-        modifier: Modifier::SetTo,
-        value: eudkit_core::hir::HirValue::Const(200),
-        unit: 0,
-    }));
-    main_fn.block_mut(entry).push_stmt(HirStmt::Action(StockAction::SetDeaths {
-        player: PlayerId::Epd(cunit_epd + 26),
-        modifier: Modifier::SetTo,
-        value: eudkit_core::hir::HirValue::Const(300),
-        unit: 0,
-    }));
+    main_fn
+        .block_mut(entry)
+        .push_stmt(HirStmt::Action(StockAction::SetDeaths {
+            player: PlayerId::Epd(cunit_epd + 2),
+            modifier: Modifier::SetTo,
+            value: eudkit_core::hir::HirValue::Const(100),
+            unit: 0,
+        }));
+    main_fn
+        .block_mut(entry)
+        .push_stmt(HirStmt::Action(StockAction::SetDeaths {
+            player: PlayerId::Epd(cunit_epd + 14),
+            modifier: Modifier::SetTo,
+            value: eudkit_core::hir::HirValue::Const(200),
+            unit: 0,
+        }));
+    main_fn
+        .block_mut(entry)
+        .push_stmt(HirStmt::Action(StockAction::SetDeaths {
+            player: PlayerId::Epd(cunit_epd + 26),
+            modifier: Modifier::SetTo,
+            value: eudkit_core::hir::HirValue::Const(300),
+            unit: 0,
+        }));
 
     // Field D with residue r = 5:
     // Field D: offset 0x014 (EPD + 5) -> 12 * 0 + 5 (unit 0, r = 5)
-    main_fn.block_mut(entry).push_stmt(HirStmt::Action(StockAction::SetDeaths {
-        player: PlayerId::Epd(cunit_epd + 5),
-        modifier: Modifier::SetTo,
-        value: eudkit_core::hir::HirValue::Const(500),
-        unit: 0,
-    }));
+    main_fn
+        .block_mut(entry)
+        .push_stmt(HirStmt::Action(StockAction::SetDeaths {
+            player: PlayerId::Epd(cunit_epd + 5),
+            modifier: Modifier::SetTo,
+            value: eudkit_core::hir::HirValue::Const(500),
+            unit: 0,
+        }));
 
     main_fn
         .block_mut(entry)

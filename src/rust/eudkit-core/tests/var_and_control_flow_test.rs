@@ -33,13 +33,15 @@ fn lowers_constant_only_variables_to_4b_bytebuf_cells_with_zero_vprocs_and_coale
 
     // 70 consecutive unconditional variable/action updates -> should coalesce into 64 + 6 = 2 triggers
     for i in 0..68 {
-        main_fn
-            .block_mut(entry)
-            .push_stmt(HirStmt::VarAddConst { var: counter, value: i + 1 });
+        main_fn.block_mut(entry).push_stmt(HirStmt::VarAddConst {
+            var: counter,
+            value: i + 1,
+        });
     }
-    main_fn
-        .block_mut(entry)
-        .push_stmt(HirStmt::VarSubConst { var: phase, value: 2 });
+    main_fn.block_mut(entry).push_stmt(HirStmt::VarSubConst {
+        var: phase,
+        value: 2,
+    });
     main_fn
         .block_mut(entry)
         .push_stmt(HirStmt::VarSetMaskConst {
@@ -135,7 +137,11 @@ fn lowers_constant_only_variables_to_4b_bytebuf_cells_with_zero_vprocs_and_coale
         .clone();
 
     // 1. Verify 0 VProc triggers allocated
-    assert_eq!(lir.vproc_count(), 0, "constant-only variables must allocate 0 VProc triggers");
+    assert_eq!(
+        lir.vproc_count(),
+        0,
+        "constant-only variables must allocate 0 VProc triggers"
+    );
 
     // 2. Verify all 3 variables lowered into 4-byte ByteBuf cells with initial values
     let byte_bufs: Vec<_> = lir
@@ -146,7 +152,11 @@ fn lowers_constant_only_variables_to_4b_bytebuf_cells_with_zero_vprocs_and_coale
             _ => None,
         })
         .collect();
-    assert_eq!(byte_bufs.len(), 3, "3 variables should lower to 3 4-byte ByteBuf objects");
+    assert_eq!(
+        byte_bufs.len(),
+        3,
+        "3 variables should lower to 3 4-byte ByteBuf objects"
+    );
     assert_eq!(byte_bufs[0].data, 0i32.to_le_bytes());
     assert_eq!(byte_bufs[1].data, 42i32.to_le_bytes());
     assert_eq!(byte_bufs[2].data, 0x00FFi32.to_le_bytes());
@@ -174,7 +184,9 @@ fn lowers_constant_only_variables_to_4b_bytebuf_cells_with_zero_vprocs_and_coale
     // 4. Verify end-to-end map compilation succeeds and is deterministic
     let temp_dir = tempfile::tempdir().unwrap();
     let out_map = temp_dir.path().join("var_cf_out.scx");
-    let report = session.compile_map(&out_map).expect("should compile .scx map");
+    let report = session
+        .compile_map(&out_map)
+        .expect("should compile .scx map");
     assert_eq!(report.byte_buf_count, 3);
     assert!(out_map.exists());
 }
@@ -232,7 +244,12 @@ fn inverts_simple_if_else_branch_conditions_in_place_to_minimize_triggers() {
         2,
         "invertible leaf if/else must lower to 2 triggers in-place"
     );
-    assert_eq!(triggers[0].conditions[0].comparison, Comparison::AtLeast.encode());
-    assert_eq!(triggers[1].conditions[0].comparison, Comparison::AtMost.encode());
+    assert_eq!(
+        triggers[0].conditions[0].comparison,
+        Comparison::AtLeast.encode()
+    );
+    assert_eq!(
+        triggers[1].conditions[0].comparison,
+        Comparison::AtMost.encode()
+    );
 }
-

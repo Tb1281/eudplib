@@ -1,6 +1,4 @@
-use eudkit_core::hir::{
-    Comparison, HirBuilder, HirStmt, StockCondition,
-};
+use eudkit_core::hir::{Comparison, HirBuilder, HirStmt, StockCondition};
 
 #[test]
 fn test_reactive_rules_builder_and_lowering() {
@@ -54,7 +52,11 @@ fn test_reactive_rules_builder_and_lowering() {
     builder.end_reactive().expect("end_reactive every");
 
     let mut module = builder.finish().expect("finish HIR");
-    let main_fn = module.functions().iter().find(|f| f.name == "main").unwrap();
+    let main_fn = module
+        .functions()
+        .iter()
+        .find(|f| f.name == "main")
+        .unwrap();
     let stmts = &main_fn.blocks[0].stmts;
 
     // Check that HirModule contains 5 first-class HirStmt::Reactive before lowering
@@ -67,12 +69,18 @@ fn test_reactive_rules_builder_and_lowering() {
     // Run core lowering pass
     module.lower_reactive_rules().expect("lower reactive rules");
 
-    let lowered_main_fn = module.functions().iter().find(|f| f.name == "main").unwrap();
+    let lowered_main_fn = module
+        .functions()
+        .iter()
+        .find(|f| f.name == "main")
+        .unwrap();
     let lowered_stmts = &lowered_main_fn.blocks[0].stmts;
 
     // Verify zero HirStmt::Reactive left after lowering
     assert!(
-        lowered_stmts.iter().all(|s| !matches!(s, HirStmt::Reactive(_))),
+        lowered_stmts
+            .iter()
+            .all(|s| !matches!(s, HirStmt::Reactive(_))),
         "all reactive rules must be lowered to standard HirStmt"
     );
 
@@ -91,7 +99,8 @@ fn test_unclosed_reactive_rule_fails_finish() {
     builder.begin_after(48);
     let err = builder.finish().unwrap_err();
     assert!(
-        err.to_string().contains("cannot finish HIR while a function or control-flow block is still open"),
+        err.to_string()
+            .contains("cannot finish HIR while a function or control-flow block is still open"),
         "expected unclosed error, got {err}"
     );
 }

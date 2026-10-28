@@ -84,10 +84,16 @@ fn inlines_nested_functions_and_rewrites_multi_return_branches() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let output_map = temp_dir.path().join("nested_inlined_output.scx");
 
-    let mut session = CompilationSession::from_map(&basemap_path(), eudkit_core::CompilationConfig::default()).expect("open session");
+    let mut session =
+        CompilationSession::from_map(&basemap_path(), eudkit_core::CompilationConfig::default())
+            .expect("open session");
     session.set_hir_module(module);
     let lir = session.lower_to_lir().expect("lower to lir");
-    assert_eq!(lir.vproc_count(), 0, "all nested constant operations must fold with 0 VProcs");
+    assert_eq!(
+        lir.vproc_count(),
+        0,
+        "all nested constant operations must fold with 0 VProcs"
+    );
 
     let _report = session.compile_map(&output_map).expect("compile map");
     assert!(output_map.exists());
@@ -138,10 +144,16 @@ fn inlines_small_helper_function_with_zero_call_overhead_and_folds_constants() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let output_map = temp_dir.path().join("inlined_output.scx");
 
-    let mut session = CompilationSession::from_map(&basemap_path(), eudkit_core::CompilationConfig::default()).expect("open session");
+    let mut session =
+        CompilationSession::from_map(&basemap_path(), eudkit_core::CompilationConfig::default())
+            .expect("open session");
     session.set_hir_module(module);
     let lir = session.lower_to_lir().expect("lower to lir");
-    assert_eq!(lir.vproc_count(), 0, "inlined constant function must allocate 0 VProcs");
+    assert_eq!(
+        lir.vproc_count(),
+        0,
+        "inlined constant function must allocate 0 VProcs"
+    );
 
     let _report = session.compile_map(&output_map).expect("compile map");
     assert!(output_map.exists());

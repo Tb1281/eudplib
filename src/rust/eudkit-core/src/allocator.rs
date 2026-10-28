@@ -407,18 +407,18 @@ pub fn evaluate_value_expr(expr: ValueExpr, object_offsets: &[u32]) -> Result<(i
             object,
             byte_offset,
         } => {
-            let base = *object_offsets.get(object.0 as usize).ok_or_else(|| {
-                EudkitError::Allocation(format!("invalid ObjectId {}", object.0))
-            })?;
+            let base = *object_offsets
+                .get(object.0 as usize)
+                .ok_or_else(|| EudkitError::Allocation(format!("invalid ObjectId {}", object.0)))?;
             Ok(((base as i32).wrapping_add(byte_offset), 4))
         }
         ValueExpr::ObjectEpd {
             object,
             dword_offset,
         } => {
-            let base = *object_offsets.get(object.0 as usize).ok_or_else(|| {
-                EudkitError::Allocation(format!("invalid ObjectId {}", object.0))
-            })?;
+            let base = *object_offsets
+                .get(object.0 as usize)
+                .ok_or_else(|| EudkitError::Allocation(format!("invalid ObjectId {}", object.0)))?;
             Ok((epd(base).wrapping_add(dword_offset), 1))
         }
         ValueExpr::FieldAddress(fr) => {

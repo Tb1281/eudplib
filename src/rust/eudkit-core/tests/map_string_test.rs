@@ -21,7 +21,8 @@ fn map_string_registers_deduplicates_and_resolves_addresses_in_session() {
         .join("basemap")
         .join("basemap_strx.scx");
 
-    let mut session = CompilationSession::from_map(&map_path, CompilationConfig::default()).unwrap();
+    let mut session =
+        CompilationSession::from_map(&map_path, CompilationConfig::default()).unwrap();
 
     let s1: MapString = session.register_map_string("Hello World").unwrap();
     let s2 = session.register_map_string("Hello World").unwrap();

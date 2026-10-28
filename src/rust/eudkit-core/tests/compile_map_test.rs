@@ -64,16 +64,18 @@ fn build_sample_hir() -> HirModule {
         ],
         preserved: true,
     });
-    main_fn.block_mut(bb0).set_terminator(HirTerminator::Branch {
-        conditions: vec![StockCondition::Deaths {
-            player: PlayerId::Player1,
-            comparison: Comparison::AtLeast,
-            amount: 10,
-            unit: 0,
-        }],
-        then_block: bb1,
-        else_block: bb2,
-    });
+    main_fn
+        .block_mut(bb0)
+        .set_terminator(HirTerminator::Branch {
+            conditions: vec![StockCondition::Deaths {
+                player: PlayerId::Player1,
+                comparison: Comparison::AtLeast,
+                amount: 10,
+                unit: 0,
+            }],
+            then_block: bb1,
+            else_block: bb2,
+        });
 
     main_fn
         .block_mut(bb1)
@@ -83,7 +85,9 @@ fn build_sample_hir() -> HirModule {
             amount: 500,
             resource: ResourceType::Gas,
         }));
-    main_fn.block_mut(bb1).set_terminator(HirTerminator::Jump(bb2));
+    main_fn
+        .block_mut(bb1)
+        .set_terminator(HirTerminator::Jump(bb2));
     main_fn.block_mut(bb2).set_terminator(HirTerminator::Return);
 
     hir.add_function(main_fn);
@@ -130,7 +134,11 @@ fn compiles_scx_map_with_object_stacking_static_strx_relocation_and_byte_determi
         report1.payload_size,
         report1.trigger_count * 2408
     );
-    assert_eq!(report1.payload_offset % 4, 0, "payload offset in STRx must be 4-byte aligned");
+    assert_eq!(
+        report1.payload_offset % 4,
+        0,
+        "payload offset in STRx must be 4-byte aligned"
+    );
 
     // 3. Open output .scx in StormLib and verify scenario.chk integrity
     let mut archive = Archive::open(&out_map_1, OpenArchiveFlags::empty())
@@ -143,7 +151,10 @@ fn compiles_scx_map_with_object_stacking_static_strx_relocation_and_byte_determi
 
     // Standard non-obscurated builds must NOT emit fake negative ISOM footers so map editors can open the map
     let out_chk = Chk::parse(&raw_chk).expect("output scenario.chk must parse cleanly");
-    assert!(!out_chk.has_isom_footer(), "standard builds must not append fake negative ISOM footers");
+    assert!(
+        !out_chk.has_isom_footer(),
+        "standard builds must not append fake negative ISOM footers"
+    );
     assert!(
         out_chk.section(b"STR ").is_some(),
         "classic STR section must be preserved alongside STRx for map editor compatibility"
@@ -161,26 +172,34 @@ fn compiles_scx_map_with_object_stacking_static_strx_relocation_and_byte_determi
     let payload_end_addr = payload_base_addr + report1.payload_size as u32;
     let payload_slice = &strx[report1.payload_offset..];
 
-    assert!(!report1.ort_offsets.is_empty(), "should have byte-pointer relocations");
-    assert!(!report1.prt_offsets.is_empty(), "should have EPD relocations");
+    assert!(
+        !report1.ort_offsets.is_empty(),
+        "should have byte-pointer relocations"
+    );
+    assert!(
+        !report1.prt_offsets.is_empty(),
+        "should have EPD relocations"
+    );
 
     for &ort in &report1.ort_offsets {
         assert_eq!(ort % 4, 0, "orttable offset must be 4-byte aligned");
-        let relocated_ptr =
-            u32::from_le_bytes(payload_slice[ort..ort + 4].try_into().unwrap());
+        let relocated_ptr = u32::from_le_bytes(payload_slice[ort..ort + 4].try_into().unwrap());
         assert!(
             relocated_ptr >= payload_base_addr && relocated_ptr < payload_end_addr,
             "relocated byte pointer {relocated_ptr:#010X} must lie within [{payload_base_addr:#010X}, {payload_end_addr:#010X})"
         );
-        assert_eq!(relocated_ptr % 4, 0, "relocated object/field pointer must be 4-byte aligned");
+        assert_eq!(
+            relocated_ptr % 4,
+            0,
+            "relocated object/field pointer must be 4-byte aligned"
+        );
     }
 
     let min_epd = epd(payload_base_addr);
     let max_epd = epd(payload_end_addr);
     for &prt in &report1.prt_offsets {
         assert_eq!(prt % 4, 0, "prttable offset must be 4-byte aligned");
-        let relocated_epd =
-            i32::from_le_bytes(payload_slice[prt..prt + 4].try_into().unwrap());
+        let relocated_epd = i32::from_le_bytes(payload_slice[prt..prt + 4].try_into().unwrap());
         assert!(
             relocated_epd >= min_epd && relocated_epd < max_epd,
             "relocated EPD {relocated_epd} must lie within [{min_epd}, {max_epd})"
@@ -222,7 +241,10 @@ fn preserves_classic_trig_triggers_and_upgrades_legacy_str_to_strx() {
         .read_all()
         .unwrap();
     let chk_legacy = Chk::parse(&chk_legacy_bytes).unwrap();
-    assert!(chk_legacy.section(b"STR ").is_some(), "STR section must be emitted alongside STRx for map editor compatibility");
+    assert!(
+        chk_legacy.section(b"STR ").is_some(),
+        "STR section must be emitted alongside STRx for map editor compatibility"
+    );
     let strx_legacy = chk_legacy.section(b"STRx").unwrap();
     assert_eq!(
         strx_legacy.len(),
@@ -258,4 +280,3 @@ fn preserves_classic_trig_triggers_and_upgrades_legacy_str_to_strx() {
         );
     }
 }
-
