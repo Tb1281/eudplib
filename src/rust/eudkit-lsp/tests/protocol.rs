@@ -1286,3 +1286,124 @@ fn accepts_known_custom_units_in_typescript_with_a_map_context() {
         client.shutdown();
     }
 }
+
+#[test]
+fn warns_when_group_players_use_eud_offsets_in_python() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    let source = concat!(
+        "Deaths(Foes, Exactly, 15, 300)\n",
+        "DeathsX(AllPlayers, Exactly, 15, 300)\n",
+        "SetDeaths(c.Foes, Exactly, 15, 0x12C)\n",
+        "SetDeathsX(eud.AllPlayers, Exactly, 15, +300)\n",
+    );
+    client.open(source);
+    let diagnostics = client.diagnostics();
+    assert_eq!(diagnostics.len(), 4);
+
+    for (diagnostic, player) in
+        diagnostics
+            .iter()
+            .zip(["Foes", "AllPlayers", "c.Foes", "eud.AllPlayers"])
+    {
+        assert_warning(diagnostic, "ambiguous");
+        assert_warning(diagnostic, player.rsplit('.').next().unwrap());
+        assert_warning(diagnostic, "Player1");
+
+        let start = source.find(player).unwrap();
+        assert_range(diagnostic, source, start, start + player.len());
+    }
+
+    let valid = concat!(
+        "Deaths(Foes, Exactly, 15, \"Any unit\")\n",
+        "Deaths(Foes, Exactly, 15, 229)\n",
+        "Deaths(Foes, Exactly, 15, 0)\n",
+        "Deaths(Foes, Exactly, 15, 232)\n",
+        "Deaths(Player1, Exactly, 15, 300)\n",
+        "Deaths(CurrentPlayer, Exactly, 15, 300)\n",
+        "Deaths(player, Exactly, 15, 300)\n",
+        "Deaths(Foe, Exactly, 15, 300)\n",
+        "Deaths(Foes + 1, Exactly, 15, 300)\n",
+        "Deaths(Foes, Exactly, 15, 232 + 1)\n",
+        "Bring(AllPlayers, AtLeast, 1, \"Terran Marine\", \"Anywhere\")\n",
+    );
+    client.change(valid, 2);
+    assert!(
+        client.diagnostics().is_empty(),
+        "stock players, filters, variables, and arithmetic must not warn"
+    );
+
+    client.change("Deaths(Foes, Exactly, 15, 300)", 3);
+    assert_eq!(
+        client.diagnostics().len(),
+        1,
+        "the warning should return after the ambiguity is reintroduced"
+    );
+
+    client.shutdown();
+}
+
+#[test]
+fn warns_when_group_players_use_eud_offsets_in_typescript_and_javascript() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    let source = concat!(
+        "Deaths(Foes, Exactly, 15, 300);\n",
+        "DeathsX(AllPlayers, Exactly, 15, 300);\n",
+        "SetDeaths(c.Foes, Exactly, 15, 0x12C);\n",
+        "SetDeathsX(eud.AllPlayers, Exactly, 15, +300);\n",
+    );
+    let valid = concat!(
+        "Deaths(Foes, Exactly, 15, \"Any unit\");\n",
+        "Deaths(Foes, Exactly, 15, 229);\n",
+        "Deaths(Foes, Exactly, 15, 0);\n",
+        "Deaths(Foes, Exactly, 15, 232);\n",
+        "Deaths(Player1, Exactly, 15, 300);\n",
+        "Deaths(CurrentPlayer, Exactly, 15, 300);\n",
+        "Deaths(player, Exactly, 15, 300);\n",
+        "Deaths(Foe, Exactly, 15, 300);\n",
+        "Deaths(Foes + 1, Exactly, 15, 300);\n",
+        "Deaths(Foes, Exactly, 15, 232 + 1);\n",
+        "Bring(AllPlayers, AtLeast, 1, \"Terran Marine\", \"Anywhere\");\n",
+    );
+
+    for (uri, language_id) in [
+        (TYPESCRIPT_URI, "typescript"),
+        (TSX_URI, "typescriptreact"),
+        (JAVASCRIPT_URI, "javascript"),
+        (JSX_URI, "javascriptreact"),
+    ] {
+        client.open_document(uri, language_id, source);
+        let diagnostics = client.diagnostics_for(uri);
+        assert_eq!(diagnostics.len(), 4, "{language_id}");
+
+        for (diagnostic, player) in
+            diagnostics
+                .iter()
+                .zip(["Foes", "AllPlayers", "c.Foes", "eud.AllPlayers"])
+        {
+            assert_warning(diagnostic, "ambiguous");
+            assert_warning(diagnostic, player.rsplit('.').next().unwrap());
+            assert_warning(diagnostic, "Player1");
+
+            let start = source.find(player).unwrap();
+            assert_range(diagnostic, source, start, start + player.len());
+        }
+
+        client.change_document(uri, valid, 2);
+        assert!(
+            client.diagnostics_for(uri).is_empty(),
+            "{language_id} must not warn about stock or ambiguous arguments"
+        );
+
+        client.close_document(uri);
+        assert!(
+            client.diagnostics_for(uri).is_empty(),
+            "{language_id} should clear warnings on close"
+        );
+    }
+
+    client.shutdown();
+}
