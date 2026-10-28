@@ -573,6 +573,150 @@ fn completes_map_switches_from_eudkit_toml() {
 }
 
 #[test]
+fn completes_map_locations_and_switches_in_typescript_and_javascript() {
+    let temp = tempfile::tempdir().unwrap();
+    let map_path = temp.path().join("map.scx");
+    copy_fixture_to("test_maps/v2/verify_v2.scx", &map_path);
+    let (switch_name, string_id) = reusable_switch_name(&map_path);
+    name_first_switch(&map_path, string_id);
+    write_project(temp.path(), "map.scx");
+
+    for (file_name, language_id) in [("main.ts", "typescript"), ("main.js", "javascript")] {
+        let document = temp.path().join(file_name);
+        let uri = path_to_uri(&document);
+        let mut client = LspClient::spawn_for(&document);
+        client.initialize();
+
+        client.open_document(&uri, language_id, LOCATION_CALL);
+        let locations = client.completion_for(&uri, LOCATION_CALL, LOCATION_CALL.len());
+        assert_eq!(
+            locations,
+            [
+                "Anywhere".to_string(),
+                "=== [EUDKIT V2 TEST MAP] ===".to_string(),
+            ],
+            "{language_id} should complete Map Context locations"
+        );
+
+        let closed_location = "Bring(AllPlayers, AtLeast, 1, \"Terran Marine\", \"Nowhere\")";
+        client.change_document(&uri, closed_location, 2);
+        let closed_labels = client.completion_for(
+            &uri,
+            closed_location,
+            closed_location.find("Nowhere").unwrap(),
+        );
+        assert_eq!(
+            closed_labels, locations,
+            "{language_id} should complete a closed location string"
+        );
+
+        client.change_document(&uri, SWITCH_CALL, 3);
+        let switches = client.completion_for(&uri, SWITCH_CALL, SWITCH_CALL.len());
+        assert_eq!(
+            switches.len(),
+            257,
+            "{language_id} should suggest one named switch plus 256 canonical switches"
+        );
+        assert_eq!(
+            switches
+                .iter()
+                .filter(|label| label.as_str() == switch_name.as_str())
+                .count(),
+            1,
+            "named switch should be suggested exactly once"
+        );
+        assert_eq!(
+            switches
+                .iter()
+                .filter(|label| label.as_str() == "Switch 1")
+                .count(),
+            1,
+            "canonical switch should be deduplicated"
+        );
+        assert_switch_canonical(&switches[1..]);
+
+        client.change_document(&uri, "KillUnit(\"", 4);
+        assert_canonical_units(&client.completion_for(&uri, "KillUnit(\"", "KillUnit(\"".len()));
+
+        client.shutdown();
+    }
+}
+
+#[test]
+fn typescript_unit_slot_stays_canonical_with_a_map_context() {
+    let temp = tempfile::tempdir().unwrap();
+    copy_fixture_to(
+        "tests/outputmap/basemap/사이비2.scx",
+        &temp.path().join("map.scx"),
+    );
+    write_project(temp.path(), "map.scx");
+    let document = temp.path().join("main.ts");
+    let uri = path_to_uri(&document);
+
+    let mut client = LspClient::spawn_for(&document);
+    client.initialize();
+    client.open_document(&uri, "typescript", "KillUnit(\"");
+    assert_canonical_units(&client.completion_for(&uri, "KillUnit(\"", "KillUnit(\"".len()));
+
+    client.shutdown();
+}
+
+#[test]
+fn falls_back_to_canonical_symbols_without_eudkit_toml_in_typescript_and_javascript() {
+    let temp = tempfile::tempdir().unwrap();
+
+    for (file_name, language_id) in [("main.ts", "typescript"), ("main.js", "javascript")] {
+        let document = temp.path().join(file_name);
+        let uri = path_to_uri(&document);
+        let mut client = LspClient::spawn_for(&document);
+        client.initialize();
+
+        client.open_document(&uri, language_id, LOCATION_CALL);
+        assert_location_fallback(&client.completion_for(&uri, LOCATION_CALL, LOCATION_CALL.len()));
+
+        client.change_document(&uri, SWITCH_CALL, 2);
+        assert_switch_canonical(&client.completion_for(&uri, SWITCH_CALL, SWITCH_CALL.len()));
+
+        client.shutdown();
+    }
+}
+
+#[test]
+fn reloads_typescript_map_context_after_eudkit_toml_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    copy_fixture_to("test_maps/v2/verify_v2.scx", &root.join("a.scx"));
+    copy_fixture_to(
+        "tests/outputmap/basemap/basemap_wireframe.scx",
+        &root.join("b.scx"),
+    );
+    write_project(root, "a.scx");
+    let document = root.join("main.ts");
+    let uri = path_to_uri(&document);
+
+    let mut client = LspClient::spawn_for(&document);
+    client.initialize();
+    client.open_document(&uri, "typescript", LOCATION_CALL);
+    let initial = client.completion_for(&uri, LOCATION_CALL, LOCATION_CALL.len());
+    assert!(initial.contains(&"=== [EUDKIT V2 TEST MAP] ===".to_string()));
+
+    thread::sleep(Duration::from_millis(20));
+    write_project(root, "b.scx");
+
+    let reloaded = client.completion_for(&uri, LOCATION_CALL, LOCATION_CALL.len());
+    assert!(
+        reloaded.contains(&"Nowhere".to_string()),
+        "TypeScript completion should use the updated project: {reloaded:?}"
+    );
+    assert!(
+        !reloaded.contains(&"=== [EUDKIT V2 TEST MAP] ===".to_string()),
+        "TypeScript completion should drop the old map context"
+    );
+
+    client.shutdown();
+}
+
+#[test]
 fn completes_single_quotes_partial_values_and_closed_strings_in_typescript_and_javascript() {
     let mut client = LspClient::spawn();
     client.initialize();

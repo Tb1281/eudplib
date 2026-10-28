@@ -22,32 +22,12 @@ pub fn completions_at_with_context(
     map_context: Option<&MapContext>,
 ) -> Option<Vec<CompletionItem>> {
     let slot = symbol_slot_at(document, offset)?;
-    let range = byte_range_to_lsp(
+    Some(completion_items(
         document.source(),
-        slot.content_range().start,
-        slot.content_range().end,
-    );
-    let names = match slot.kind {
-        SymbolKind::Unit => canonical_unit_names(),
-        SymbolKind::Location => location_names(map_context),
-        SymbolKind::Switch => switch_names(map_context),
-    };
-
-    Some(
-        names
-            .into_iter()
-            .map(|name| CompletionItem {
-                label: name.clone(),
-                kind: Some(CompletionItemKind::ENUM_MEMBER),
-                detail: Some(slot.kind.detail().to_string()),
-                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                    range,
-                    new_text: name,
-                })),
-                ..CompletionItem::default()
-            })
-            .collect(),
-    )
+        slot.content_range(),
+        slot.kind,
+        map_context,
+    ))
 }
 
 /// Completion items for `offset` in a TypeScript or JavaScript document.
@@ -55,9 +35,45 @@ pub fn ts_completions_at(
     source: &str,
     language: TsLanguage,
     offset: usize,
+    map_context: Option<&MapContext>,
 ) -> Option<Vec<CompletionItem>> {
     let slot = ts_symbol_slot_at(source, language, offset)?;
-    Some(unit_completions(source, slot.content_range()))
+    Some(completion_items(
+        source,
+        slot.content_range(),
+        slot.kind(),
+        map_context,
+    ))
+}
+
+fn completion_items(
+    source: &str,
+    content_range: Range<usize>,
+    kind: SymbolKind,
+    map_context: Option<&MapContext>,
+) -> Vec<CompletionItem> {
+    let range = byte_range_to_lsp(source, content_range.start, content_range.end);
+    symbol_names(kind, map_context)
+        .into_iter()
+        .map(|name| CompletionItem {
+            label: name.clone(),
+            kind: Some(CompletionItemKind::ENUM_MEMBER),
+            detail: Some(kind.detail().to_string()),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                range,
+                new_text: name,
+            })),
+            ..CompletionItem::default()
+        })
+        .collect()
+}
+
+fn symbol_names(kind: SymbolKind, map_context: Option<&MapContext>) -> Vec<String> {
+    match kind {
+        SymbolKind::Unit => canonical_unit_names(),
+        SymbolKind::Location => location_names(map_context),
+        SymbolKind::Switch => switch_names(map_context),
+    }
 }
 
 impl SymbolKind {
@@ -116,23 +132,6 @@ fn push_unique(names: &mut Vec<String>, seen: &mut HashSet<String>, name: &str) 
     if seen.insert(name.to_string()) {
         names.push(name.to_string());
     }
-}
-
-fn unit_completions(source: &str, content_range: Range<usize>) -> Vec<CompletionItem> {
-    let range = byte_range_to_lsp(source, content_range.start, content_range.end);
-    CANONICAL_UNIT_NAMES
-        .iter()
-        .map(|name| CompletionItem {
-            label: (*name).to_string(),
-            kind: Some(CompletionItemKind::ENUM_MEMBER),
-            detail: Some(SymbolKind::Unit.detail().to_string()),
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                range,
-                new_text: (*name).to_string(),
-            })),
-            ..CompletionItem::default()
-        })
-        .collect()
 }
 
 fn byte_range_to_lsp(source: &str, start: usize, end: usize) -> LspRange {

@@ -1,18 +1,19 @@
 //! TypeScript and JavaScript analysis built on the oxc parser.
 //!
-//! Only the `KillUnit` unit-name slot is implemented, mirroring the Python
-//! frontend. The parser's token stream is used instead of the AST because it is
-//! available for complete documents and comments are not part of the token
-//! sequence. While the user is typing an unterminated string, oxc reports a
-//! fatal error and does not retain the literal, so a narrow fallback locates
-//! the in-progress literal from the parser diagnostic.
+//! The shared symbol table decides which call arguments accept Unit, Location,
+//! and Switch names. The parser's token stream is used instead of the AST
+//! because it is available for complete documents and comments are not part of
+//! the token sequence. While the user is typing an unterminated string, oxc
+//! reports a fatal error and does not retain any tokens, so a narrow fallback
+//! locates the in-progress literal from the parser diagnostic and scans the
+//! preceding call arguments.
 
 use oxc_allocator::Allocator;
 use oxc_parser::config::TokensParserConfig;
 use oxc_parser::{Kind, Parser, Token};
 use oxc_span::SourceType;
 
-use crate::analysis::symbol_slot::UNIT_FUNCTION;
+use crate::analysis::symbol_slot::{function_symbols, SymbolKind};
 
 /// A TypeScript or JavaScript source language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,26 +46,32 @@ impl TsLanguage {
     }
 }
 
-/// The unit argument of a `KillUnit` call in a TypeScript or JavaScript file.
+/// A symbol-typed string argument in a TypeScript or JavaScript file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TsUnitNameSlot {
+pub struct TsSymbolSlot {
+    kind: SymbolKind,
     content_start: usize,
     content_end: usize,
 }
 
-impl TsUnitNameSlot {
+impl TsSymbolSlot {
     /// Byte range of the existing literal content to replace on insertion.
     pub fn content_range(&self) -> std::ops::Range<usize> {
         self.content_start..self.content_end
     }
+
+    /// Kind of symbol accepted by this argument.
+    pub fn kind(&self) -> SymbolKind {
+        self.kind
+    }
 }
 
-/// Find the `KillUnit` unit-name slot containing `offset`, if any.
+/// Find the symbol slot containing `offset`, if any.
 pub fn ts_symbol_slot_at(
     source: &str,
     language: TsLanguage,
     offset: usize,
-) -> Option<TsUnitNameSlot> {
+) -> Option<TsSymbolSlot> {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, language.source_type())
         .with_config(TokensParserConfig)
@@ -77,103 +84,130 @@ pub fn ts_symbol_slot_at(
     symbol_slot_from_tokens(source, &parsed.tokens, offset)
 }
 
-fn symbol_slot_from_tokens(
-    source: &str,
-    tokens: &[Token],
-    offset: usize,
-) -> Option<TsUnitNameSlot> {
-    let (string_index, slot) = tokens.iter().enumerate().find_map(|(index, token)| {
-        if token.kind() != Kind::Str {
-            return None;
-        }
+fn symbol_slot_from_tokens(source: &str, tokens: &[Token], offset: usize) -> Option<TsSymbolSlot> {
+    let (string_index, content_start, content_end) =
+        tokens.iter().enumerate().find_map(|(index, token)| {
+            if token.kind() != Kind::Str {
+                return None;
+            }
 
-        let span = token.span();
-        let content_start = (span.start as usize).checked_add(1)?;
-        let content_end = (span.end as usize).checked_sub(1)?;
-        if offset < content_start || offset > content_end {
-            return None;
-        }
+            let span = token.span();
+            let content_start = (span.start as usize).checked_add(1)?;
+            let content_end = (span.end as usize).checked_sub(1)?;
+            if offset < content_start || offset > content_end {
+                return None;
+            }
 
-        Some((
-            index,
-            TsUnitNameSlot {
-                content_start,
-                content_end,
-            },
-        ))
-    })?;
+            Some((index, content_start, content_end))
+        })?;
 
-    is_kill_unit_first_argument(source, tokens, string_index).then_some(slot)
+    let kind = symbol_kind_for_string(source, tokens, string_index)?;
+    Some(TsSymbolSlot {
+        kind,
+        content_start,
+        content_end,
+    })
 }
 
-/// Whether `string_index` is the direct first argument of a `KillUnit` call.
-fn is_kill_unit_first_argument(source: &str, tokens: &[Token], string_index: usize) -> bool {
+/// Resolve the symbol kind of the string token at `string_index`.
+fn symbol_kind_for_string(
+    source: &str,
+    tokens: &[Token],
+    string_index: usize,
+) -> Option<SymbolKind> {
+    let open_index = enclosing_paren(tokens, string_index)?;
+    let argument_index = argument_index(tokens, open_index, string_index)?;
+    let function = function_symbols(call_name(source, tokens, open_index)?)?;
+    let argument = function
+        .arguments
+        .iter()
+        .find(|argument| argument.index == argument_index)?;
+
+    Some(argument.kind)
+}
+
+/// Index of the innermost open `(` containing `token_index`.
+fn enclosing_paren(tokens: &[Token], token_index: usize) -> Option<usize> {
     let mut openers: Vec<(Kind, usize)> = Vec::new();
 
-    for (index, token) in tokens[..string_index].iter().enumerate() {
+    for (index, token) in tokens[..token_index].iter().enumerate() {
         match token.kind() {
             Kind::LParen | Kind::LBrack | Kind::LCurly => openers.push((token.kind(), index)),
-            Kind::RParen => pop_if_matches(&mut openers, Kind::LParen),
-            Kind::RBrack => pop_if_matches(&mut openers, Kind::LBrack),
-            Kind::RCurly => pop_if_matches(&mut openers, Kind::LCurly),
+            Kind::RParen if !pop_if_matches(&mut openers, Kind::LParen) => return None,
+            Kind::RBrack if !pop_if_matches(&mut openers, Kind::LBrack) => return None,
+            Kind::RCurly if !pop_if_matches(&mut openers, Kind::LCurly) => return None,
             _ => {}
         }
     }
 
-    let Some((kind, open_index)) = openers.last().copied() else {
-        return false;
-    };
-    if kind != Kind::LParen || open_index == 0 {
-        return false;
+    let (kind, open_index) = openers.last().copied()?;
+    (kind == Kind::LParen && open_index > 0).then_some(open_index)
+}
+
+/// Zero-based argument index of a direct string argument, if it is direct.
+fn argument_index(tokens: &[Token], open_index: usize, string_index: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut index = 0usize;
+
+    for token in &tokens[open_index + 1..string_index] {
+        match token.kind() {
+            Kind::LParen | Kind::LBrack | Kind::LCurly => depth += 1,
+            Kind::RParen | Kind::RBrack | Kind::RCurly => depth = depth.checked_sub(1)?,
+            Kind::Comma if depth == 0 => index += 1,
+            _ => {}
+        }
     }
 
-    // The first argument must be the string literal itself; `KillUnit(foo("..."))`
-    // and later arguments must not complete.
-    if string_index != open_index + 1 {
-        return false;
+    if depth != 0 {
+        return None;
     }
 
-    let name_token = &tokens[open_index - 1];
+    let previous = tokens.get(string_index.checked_sub(1)?)?.kind();
+    matches!(previous, Kind::LParen | Kind::Comma).then_some(index)
+}
+
+/// Function name immediately before an open parenthesis.
+fn call_name<'a>(source: &'a str, tokens: &[Token], open_index: usize) -> Option<&'a str> {
+    let name_token = tokens.get(open_index.checked_sub(1)?)?;
     if name_token.kind() != Kind::Ident {
-        return false;
+        return None;
     }
 
-    let name_span = name_token.span();
-    if &source[name_span.start as usize..name_span.end as usize] != UNIT_FUNCTION {
-        return false;
-    }
-
-    // Reject member calls and declarations such as `eud.KillUnit(...)` or
-    // `function KillUnit(...)`.
     if open_index >= 2
         && matches!(
             tokens[open_index - 2].kind(),
             Kind::Dot | Kind::QuestionDot | Kind::Function | Kind::New | Kind::Class
         )
     {
-        return false;
+        return None;
     }
 
-    true
+    let span = name_token.span();
+    source.get(span.start as usize..span.end as usize)
 }
 
-fn pop_if_matches(openers: &mut Vec<(Kind, usize)>, expected: Kind) {
+fn pop_if_matches(openers: &mut Vec<(Kind, usize)>, expected: Kind) -> bool {
     if openers.last().is_some_and(|(kind, _)| *kind == expected) {
         openers.pop();
+        true
+    } else {
+        false
     }
 }
 
-/// Recover an in-progress `KillUnit("` from oxc's fatal unterminated-string error.
+/// Recover an in-progress string argument from oxc's fatal unterminated-string
+/// error.
 ///
 /// The parser reports the opening quote and the extent of the unterminated
-/// literal. Scanning backwards from that quote only accepts a literal that is
-/// directly after a `KillUnit(` call opener, so comments, unrelated strings, and
-/// later arguments cannot match.
+/// literal but returns no tokens. A small forward scan over the preceding
+/// source finds the innermost call, its argument index, and whether the
+/// literal is a direct argument. Comments and complete strings are skipped, so
+/// the fallback cannot match unrelated text.
 fn unterminated_string_slot(
     source: &str,
     diagnostics: &oxc_diagnostics::Diagnostics,
     offset: usize,
-) -> Option<TsUnitNameSlot> {
+) -> Option<TsSymbolSlot> {
     diagnostics.iter().find_map(|diagnostic| {
         if diagnostic.message != "Unterminated string" {
             return None;
@@ -192,11 +226,16 @@ fn unterminated_string_slot(
             if quote != "\"" && quote != "'" {
                 return None;
             }
-            if !starts_kill_unit_call(source, start) {
-                return None;
-            }
 
-            Some(TsUnitNameSlot {
+            let (open_index, argument_index) = enclosing_call_before(source, start)?;
+            let function = function_symbols(call_name_at(source, open_index)?)?;
+            let argument = function
+                .arguments
+                .iter()
+                .find(|argument| argument.index == argument_index)?;
+
+            Some(TsSymbolSlot {
+                kind: argument.kind,
                 content_start: start + 1,
                 content_end: end,
             })
@@ -204,44 +243,144 @@ fn unterminated_string_slot(
     })
 }
 
-/// Whether the string starting at `literal_start` directly follows `KillUnit(`.
-fn starts_kill_unit_call(source: &str, literal_start: usize) -> bool {
-    let Some(paren_end) = trim_trivia_end(source, literal_start) else {
-        return false;
-    };
-    if !source[..paren_end].ends_with('(') {
-        return false;
-    }
+#[derive(Debug, Clone, Copy)]
+struct OpenDelimiter {
+    kind: char,
+    open: usize,
+    commas: usize,
+}
 
-    let Some(name_end) = trim_trivia_end(source, paren_end - 1) else {
-        return false;
-    };
-    let name_start = identifier_start(source, name_end);
-    if name_start == name_end || &source[name_start..name_end] != UNIT_FUNCTION {
-        return false;
-    }
+/// Find the innermost open call and argument index before `end`.
+///
+/// Only `(`, `[`, `{`, complete strings, and comments are significant. The
+/// literal at `end` must be directly preceded by the call's `(` or by a
+/// top-level comma.
+fn enclosing_call_before(source: &str, end: usize) -> Option<(usize, usize)> {
+    let mut stack: Vec<OpenDelimiter> = Vec::new();
+    let mut last_significant = None;
+    let mut index = 0;
 
-    let Some(before_name_end) = trim_trivia_end(source, name_start) else {
-        return true;
-    };
-    if before_name_end > 0 {
-        let before_name = source[..before_name_end]
-            .chars()
-            .next_back()
-            .expect("non-empty prefix has a character");
-        if before_name == '.' {
-            return false;
+    while index < end {
+        let rest = &source[index..end];
+        let character = rest.chars().next()?;
+
+        match character {
+            '/' if rest.starts_with("//") => {
+                index += rest.find('\n').unwrap_or(rest.len());
+            }
+            '/' if rest.starts_with("/*") => {
+                index += rest[2..].find("*/").map_or(rest.len(), |end| end + 4);
+            }
+            '"' | '\'' | '`' => {
+                index = skip_string(source, index, character, end)?;
+                last_significant = Some(character);
+            }
+            '(' | '[' | '{' => {
+                stack.push(OpenDelimiter {
+                    kind: character,
+                    open: index,
+                    commas: 0,
+                });
+                last_significant = Some(character);
+                index += character.len_utf8();
+            }
+            ')' | ']' | '}' => {
+                let expected = match character {
+                    ')' => '(',
+                    ']' => '[',
+                    '}' => '{',
+                    _ => unreachable!(),
+                };
+                if !stack.last().is_some_and(|open| open.kind == expected) {
+                    return None;
+                }
+                stack.pop();
+                last_significant = Some(character);
+                index += character.len_utf8();
+            }
+            ',' => {
+                if let Some(open) = stack.last_mut() {
+                    if open.kind == '(' {
+                        open.commas += 1;
+                    }
+                }
+                last_significant = Some(character);
+                index += character.len_utf8();
+            }
+            _ => {
+                if !character.is_whitespace() {
+                    last_significant = Some(character);
+                }
+                index += character.len_utf8();
+            }
         }
     }
 
-    let previous_start = identifier_start(source, before_name_end);
-    !matches!(
-        &source[previous_start..before_name_end],
+    if !matches!(last_significant, Some('(' | ',')) {
+        return None;
+    }
+
+    let open = stack.last()?;
+    (open.kind == '(').then_some((open.open, open.commas))
+}
+
+/// Skip a complete string literal starting at `start`.
+fn skip_string(source: &str, start: usize, quote: char, limit: usize) -> Option<usize> {
+    let mut index = start + quote.len_utf8();
+    let mut escaped = false;
+
+    while index < limit {
+        let character = source[index..].chars().next()?;
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == quote {
+            return Some(index + character.len_utf8());
+        }
+        index += character.len_utf8();
+    }
+
+    None
+}
+
+/// Function name immediately before `open_index`, using source trivia rules.
+fn call_name_at(source: &str, open_index: usize) -> Option<&str> {
+    let name_end = trim_trivia_end(source, open_index)?;
+    let name_start = identifier_start(source, name_end);
+    if name_start == name_end {
+        return None;
+    }
+
+    if is_member_or_declaration(source, name_start) {
+        return None;
+    }
+
+    source.get(name_start..name_end)
+}
+
+fn is_member_or_declaration(source: &str, name_start: usize) -> bool {
+    let Some(before_end) = trim_trivia_end(source, name_start) else {
+        return false;
+    };
+
+    if before_end > 0
+        && source[..before_end]
+            .chars()
+            .next_back()
+            .is_some_and(|character| character == '.')
+    {
+        return true;
+    }
+
+    let previous_start = identifier_start(source, before_end);
+    matches!(
+        &source[previous_start..before_end],
         "function" | "new" | "class"
     )
 }
 
-/// End offset after trimming trailing whitespace and block comments.
+/// End offset after trimming trailing whitespace and comments.
 fn trim_trivia_end(source: &str, mut end: usize) -> Option<usize> {
     loop {
         while end > 0 {
@@ -258,8 +397,42 @@ fn trim_trivia_end(source: &str, mut end: usize) -> Option<usize> {
             continue;
         }
 
+        let line_start = source[..end].rfind('\n').map_or(0, |newline| newline + 1);
+        if let Some(comment) = line_comment_start(source, line_start, end) {
+            end = comment;
+            continue;
+        }
+
         return Some(end);
     }
+}
+
+/// Start of a `//` comment in `source[line_start..end]`, ignoring strings.
+fn line_comment_start(source: &str, line_start: usize, end: usize) -> Option<usize> {
+    let line = &source[line_start..end];
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (offset, character) in line.char_indices() {
+        if let Some(current) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == current {
+                quote = None;
+            }
+            continue;
+        }
+
+        if matches!(character, '"' | '\'' | '`') {
+            quote = Some(character);
+        } else if character == '/' && line[offset..].starts_with("//") {
+            return Some(line_start + offset);
+        }
+    }
+
+    None
 }
 
 /// Start offset of the identifier ending at `end`.
@@ -284,6 +457,10 @@ mod tests {
 
     fn slot(source: &str, language: TsLanguage, offset: usize) -> Option<Range<usize>> {
         ts_symbol_slot_at(source, language, offset).map(|slot| slot.content_range())
+    }
+
+    fn kind(source: &str, language: TsLanguage, offset: usize) -> Option<SymbolKind> {
+        ts_symbol_slot_at(source, language, offset).map(|slot| slot.kind)
     }
 
     #[test]
@@ -351,10 +528,104 @@ mod tests {
             slot(unterminated, TsLanguage::TypeScript, unterminated.len()),
             Some(10..unterminated.len())
         );
+
+        let location = "Bring(AllPlayers, AtLeast, 1, \"Terran Marine\", \"Nowhere\")";
+        assert_eq!(
+            slot(
+                location,
+                TsLanguage::TypeScript,
+                location.find("Nowhere").unwrap()
+            ),
+            Some(location.find("Nowhere").unwrap()..location.find("Nowhere").unwrap() + 7)
+        );
     }
 
     #[test]
-    fn does_not_complete_outside_the_unit_argument() {
+    fn maps_unit_location_and_switch_arguments() {
+        for (source, expected) in [
+            ("KillUnit(\"", SymbolKind::Unit),
+            ("Deaths(0, 0, 0, \"", SymbolKind::Unit),
+            ("DeathsX(0, 0, 0, \"", SymbolKind::Unit),
+            ("SetDeaths(0, 0, 0, \"", SymbolKind::Unit),
+            ("SetDeathsX(0, 0, 0, \"", SymbolKind::Unit),
+            ("Bring(AllPlayers, AtLeast, 1, \"", SymbolKind::Unit),
+            (
+                "Bring(AllPlayers, AtLeast, 1, \"Terran Marine\", \"",
+                SymbolKind::Location,
+            ),
+            ("CreateUnit(1, \"", SymbolKind::Unit),
+            ("CreateUnit(1, \"Terran Marine\", \"", SymbolKind::Location),
+            ("KillUnitAt(1, \"", SymbolKind::Unit),
+            ("KillUnitAt(1, \"Terran Marine\", \"", SymbolKind::Location),
+            ("RemoveUnitAt(1, \"", SymbolKind::Unit),
+            (
+                "RemoveUnitAt(1, \"Terran Marine\", \"",
+                SymbolKind::Location,
+            ),
+            ("MinimapPing(\"", SymbolKind::Location),
+            ("MoveLocation(\"", SymbolKind::Location),
+            ("MoveLocation(\"Anywhere\", \"", SymbolKind::Unit),
+            ("MoveLocation(\"Anywhere\", 0, 0, \"", SymbolKind::Location),
+            ("MoveUnit(1, \"", SymbolKind::Unit),
+            ("MoveUnit(1, \"Terran Marine\", 0, \"", SymbolKind::Location),
+            (
+                "MoveUnit(1, \"Terran Marine\", 0, \"Anywhere\", \"",
+                SymbolKind::Location,
+            ),
+            ("GiveUnits(1, \"", SymbolKind::Unit),
+            (
+                "GiveUnits(1, \"Terran Marine\", 0, \"",
+                SymbolKind::Location,
+            ),
+            ("Order(\"", SymbolKind::Unit),
+            ("Order(\"Terran Marine\", 0, \"", SymbolKind::Location),
+            (
+                "Order(\"Terran Marine\", 0, \"Anywhere\", 0, \"",
+                SymbolKind::Location,
+            ),
+            ("Switch(\"", SymbolKind::Switch),
+            ("SetSwitch(\"", SymbolKind::Switch),
+        ] {
+            assert_eq!(
+                kind(source, TsLanguage::TypeScript, source.len()),
+                Some(expected),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn skips_nested_arguments_and_comments_before_a_symbol() {
+        for (source, expected) in [
+            (
+                "Bring(AllPlayers, AtLeast, 1, foo(\"x\"), \"",
+                SymbolKind::Location,
+            ),
+            (
+                "Bring(AllPlayers, AtLeast, 1, /* unit */ \"",
+                SymbolKind::Unit,
+            ),
+            (
+                "Bring(AllPlayers, AtLeast, 1, \"Terran Marine\", /* location */ \"",
+                SymbolKind::Location,
+            ),
+            ("KillUnit(// unit\n\"", SymbolKind::Unit),
+            (
+                "const url = \"http://x\"; Bring(AllPlayers, AtLeast, 1, \"",
+                SymbolKind::Unit,
+            ),
+            ("KillUnit // unit\n(\"", SymbolKind::Unit),
+        ] {
+            assert_eq!(
+                kind(source, TsLanguage::TypeScript, source.len()),
+                Some(expected),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_complete_outside_a_symbol_argument() {
         let cases = [
             ("DisplayText(\"", "DisplayText(\"".len()),
             (
@@ -366,6 +637,15 @@ mod tests {
                 "KillUnit(\"Terran Marine\", 1, \"",
                 "KillUnit(\"Terran Marine\", 1, \"".len(),
             ),
+            (
+                "Bring(AllPlayers, AtLeast, 1, 0, 0, \"",
+                "Bring(AllPlayers, AtLeast, 1, 0, 0, \"".len(),
+            ),
+            (
+                "Bring(AllPlayers, AtLeast, 1, (\"Terran Marine\"), 0)",
+                "Bring(AllPlayers, AtLeast, 1, (\"Terran".len(),
+            ),
+            ("KillUnit(DisplayText(\"", "KillUnit(DisplayText(\"".len()),
             ("// KillUnit(\"\nconst x = 1;", "// KillUnit(\"".len()),
             (
                 "const message = \"KillUnit(\";",
