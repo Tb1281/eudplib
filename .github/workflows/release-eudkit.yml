@@ -7,19 +7,110 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Tag name for release (e.g. v0.2.0)'
+        description: 'Tag name for release (e.g. v0.1.1); defaults to the pushed tag'
         required: false
         default: ''
 
 permissions:
   contents: write
 
-env:
-  EUDKIT_VERSION: 0.1.0
-
 jobs:
+  version:
+    name: Resolve and verify release version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag_name || github.ref }}
+          persist-credentials: false
+
+      - name: Derive version from the release tag
+        id: resolve
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          if [[ "$tag" != v* ]]; then
+            echo "::error::Release tag must look like v<version> (got '${tag}'). For workflow_dispatch, pass tag_name=v0.1.1." >&2
+            exit 1
+          fi
+          version="${tag#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Cannot derive a version from tag '${tag}'." >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify package versions match the release tag
+        env:
+          EUDKIT_VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          expected = os.environ["EUDKIT_VERSION"]
+
+
+          def load_toml(path: str) -> dict:
+              return tomllib.loads(Path(path).read_text(encoding="utf-8"))
+
+
+          checks = {
+              "src/rust/Cargo.toml [workspace.package].version":
+                  load_toml("src/rust/Cargo.toml")["workspace"]["package"]["version"],
+              "editors/zed/Cargo.toml [package].version":
+                  load_toml("editors/zed/Cargo.toml")["package"]["version"],
+              "editors/zed/extension.toml version":
+                  load_toml("editors/zed/extension.toml")["version"],
+              "editors/vscode/package.json version":
+                  json.loads(Path("editors/vscode/package.json").read_text(encoding="utf-8"))["version"],
+              "editors/vscode/package-lock.json version":
+                  json.loads(Path("editors/vscode/package-lock.json").read_text(encoding="utf-8"))["version"],
+          }
+
+          def lock_versions(path: str) -> dict[str, str]:
+              lock = load_toml(path)
+              return {
+                  package["name"]: package["version"]
+                  for package in lock["package"]
+                  if package["name"].startswith("eudkit-")
+                  or package["name"] == "eudplib-stormlib"
+              }
+
+          for name, version in lock_versions("src/rust/Cargo.lock").items():
+              checks[f"src/rust/Cargo.lock {name}"] = version
+          for name, version in lock_versions("editors/zed/Cargo.lock").items():
+              checks[f"editors/zed/Cargo.lock {name}"] = version
+
+          mismatched = {
+              name: version for name, version in checks.items() if version != expected
+          }
+          if mismatched:
+              print(
+                  f"Package versions do not match release tag v{expected}:",
+                  file=sys.stderr,
+              )
+              for name, version in sorted(mismatched.items()):
+                  print(f"  {name}: {version}", file=sys.stderr)
+              raise SystemExit(1)
+          print(f"All {len(checks)} package and lockfile versions match v{expected}")
+          PY
+
   build:
     name: Build eudkit (${{ matrix.target }})
+    needs: version
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -49,6 +140,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag_name || github.ref }}
           submodules: recursive
 
       - name: Install system dependencies (Linux)
@@ -102,10 +194,12 @@ jobs:
 
   build-lsp:
     name: Build eudkit-lsp (${{ matrix.target }})
+    needs: version
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
       CMAKE_GENERATOR: Ninja
+      EUDKIT_VERSION: ${{ needs.version.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -131,6 +225,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag_name || github.ref }}
           submodules: recursive
 
       - name: Install system dependencies (Linux)
@@ -200,11 +295,14 @@ jobs:
 
   build-editors:
     name: Package editor extensions
+    needs: version
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag_name || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -284,9 +382,11 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build, build-lsp, build-editors]
+    needs: [version, build, build-lsp, build-editors]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      EUDKIT_VERSION: ${{ needs.version.outputs.version }}
     if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.tag_name != ''
     steps:
       - name: Download all build artifacts
@@ -340,18 +440,9 @@ jobs:
           PY
           (cd release-assets && sha256sum -c *.sha256)
 
-      - name: Determine tag name
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag_name }}" ]; then
-            echo "name=${{ github.event.inputs.tag_name }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Record binary and package sizes
         env:
-          RELEASE_TAG: ${{ steps.tag.outputs.name }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
           python3 - <<'PY'
           import os
@@ -409,7 +500,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: ${{ steps.tag.outputs.name }}
+          tag_name: ${{ needs.version.outputs.tag }}
           files: |
             release-assets/*
           generate_release_notes: true

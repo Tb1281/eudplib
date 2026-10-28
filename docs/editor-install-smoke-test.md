@@ -1,22 +1,26 @@
 # Clean-machine editor install smoke test
 
-This is the no-Rust-toolchain check for the published editor artifacts. Use a
-clean Windows x64 machine (or VM) for the primary run; the same VSIX works on
-Linux x64, macOS arm64, and macOS x86_64 with the matching native server
-download.
+This is the no-Rust-toolchain check for the published editor artifacts. Run the
+primary pass on any supported platform with VS Code and Zed installed: Windows
+x64, Linux x64, macOS arm64, or macOS x86_64. The matching native server is
+downloaded for whichever platform runs the test; Windows PowerShell examples are
+kept below for the reference Windows x64 run.
 
 The goal is to prove that a user can install the extension, let it obtain and
 verify `eudkit-lsp`, and get the first canonical-unit completion without a Rust
-toolchain.
+toolchain. The VS Code half of this document is the no-Rust check. The Zed
+artifact is a source package that Zed compiles locally, so the Zed half needs a
+Rust toolchain (section 7); run it on a separate machine if the primary machine
+must stay Rust-free.
 
 ## Artifacts
 
-From <https://github.com/Tb1281/eudplib/releases/tag/v0.1.0>:
+From <https://github.com/Tb1281/eudplib/releases/tag/v0.1.1>:
 
-- `eudkit-vscode-0.1.0.vsix`
-- `eudkit-vscode-0.1.0.vsix.sha256`
-- `eudkit-zed-0.1.0.tar.gz` (Zed dev-extension source package)
-- `eudkit-zed-0.1.0.tar.gz.sha256`
+- `eudkit-vscode-0.1.1.vsix`
+- `eudkit-vscode-0.1.1.vsix.sha256`
+- `eudkit-zed-0.1.1.tar.gz` (Zed dev-extension source package)
+- `eudkit-zed-0.1.1.tar.gz.sha256`
 - `eudkit-lsp-windows-x86_64.exe` + `.sha256`
 - `eudkit-lsp-linux-x86_64` + `.sha256`
 - `eudkit-lsp-macos-aarch64` + `.sha256`
@@ -29,15 +33,15 @@ From <https://github.com/Tb1281/eudplib/releases/tag/v0.1.0>:
 Windows PowerShell:
 
 ```powershell
-Get-FileHash .\eudkit-vscode-0.1.0.vsix -Algorithm SHA256
-Get-Content .\eudkit-vscode-0.1.0.vsix.sha256
+Get-FileHash .\eudkit-vscode-0.1.1.vsix -Algorithm SHA256
+Get-Content .\eudkit-vscode-0.1.1.vsix.sha256
 ```
 
 Linux/macOS:
 
 ```sh
-sha256sum -c eudkit-vscode-0.1.0.vsix.sha256
-shasum -a 256 -c eudkit-zed-0.1.0.tar.gz.sha256   # macOS
+sha256sum -c eudkit-vscode-0.1.1.vsix.sha256
+shasum -a 256 -c eudkit-zed-0.1.1.tar.gz.sha256   # macOS
 ```
 
 The two hashes must match.
@@ -74,13 +78,13 @@ download and any `eudkit.lsp.path` override:
 Windows PowerShell:
 
 ```powershell
-code --install-extension .\eudkit-vscode-0.1.0.vsix
+code --install-extension .\eudkit-vscode-0.1.1.vsix
 ```
 
 Linux/macOS:
 
 ```sh
-code --install-extension ./eudkit-vscode-0.1.0.vsix
+code --install-extension ./eudkit-vscode-0.1.1.vsix
 ```
 
 Restart VS Code or reload the window. The extensions list should show
@@ -103,13 +107,15 @@ Restart VS Code or reload the window. The extensions list should show
    `Protoss Zealot`, and does not contain `Any unit`, `Men`, or custom `UNI`
    filters.
 
-The output channel should show a sequence like:
+The output channel should show a sequence like the following. On Linux or
+macOS the asset name is `eudkit-lsp-linux-x86_64`, `eudkit-lsp-macos-aarch64`,
+or `eudkit-lsp-macos-x86_64` instead of the Windows `.exe` shown here:
 
 ```text
-Downloading required checksum https://github.com/Tb1281/eudplib/releases/download/v0.1.0/eudkit-lsp-windows-x86_64.exe.sha256
-Downloading https://github.com/Tb1281/eudplib/releases/download/v0.1.0/eudkit-lsp-windows-x86_64.exe
+Downloading required checksum https://github.com/Tb1281/eudplib/releases/download/v0.1.1/eudkit-lsp-windows-x86_64.exe.sha256
+Downloading https://github.com/Tb1281/eudplib/releases/download/v0.1.1/eudkit-lsp-windows-x86_64.exe
 Verified SHA-256 checksum for eudkit-lsp-windows-x86_64.exe.
-Installed eudkit-lsp 0.1.0 at ...\globalStorage\eudkit.eudkit-vscode\eudkit-lsp\0.1.0\eudkit-lsp-windows-x86_64.exe
+Installed eudkit-lsp 0.1.1 at ...\globalStorage\eudkit.eudkit-vscode\eudkit-lsp\0.1.1\eudkit-lsp-windows-x86_64.exe
 Starting eudkit-lsp from GitHub release download: ...
 Language server started.
 ```
@@ -128,16 +134,19 @@ present and separate, and that no eudkit type errors are invented.
 ## 6. Optional: verify the downloaded server directly
 
 This step needs Python but not Rust. Take the cached `eudkit-lsp` path from the
-output channel and run the repository smoke script:
+output channel and run the repository smoke script. Windows uses `python` where
+Linux/macOS use `python3`:
 
 ```sh
-python scripts/smoke_eudkit_lsp.py \
-  /path/to/globalStorage/eudkit.eudkit-vscode/eudkit-lsp/0.1.0/eudkit-lsp-linux-x86_64 \
-  --expected-version 0.1.0
+python3 scripts/smoke_eudkit_lsp.py \
+  /path/to/globalStorage/eudkit.eudkit-vscode/eudkit-lsp/0.1.1/eudkit-lsp-linux-x86_64 \
+  --expected-version 0.1.1
 ```
 
-It checks `eudkit-lsp --version` and a real stdio LSP completion returning all
-228 canonical units.
+It checks `eudkit-lsp --version`, then a real stdio LSP completion returning all
+228 canonical units for both the bare invocation and the `--stdio` invocation
+that VS Code uses. Run the equivalent command with `python` and the cached
+`.exe` path on Windows.
 
 ## 7. Zed dev extension (Rust required for the dev build)
 
@@ -149,17 +158,17 @@ Zed registry package removes that step.
 
 On a machine with Rust:
 
-1. Extract `eudkit-zed-0.1.0.tar.gz`.
+1. Extract `eudkit-zed-0.1.1.tar.gz`.
 2. In Zed: `zed: extensions` → **Install Dev Extension** → select the extracted
-   `eudkit-zed-0.1.0` directory.
+   `eudkit-zed-0.1.1` directory.
 3. Make sure `EUDKIT_LSP_PATH` is unset and `eudkit-lsp` is not on `PATH`.
 4. Open a Python file and type `KillUnit("`.
-5. Check `zed: open log` for the pinned `v0.1.0` download, `verified SHA-256
+5. Check `zed: open log` for the pinned `v0.1.1` download, `verified SHA-256
    checksum`, and `installed` lines.
 
 The Zed extension cannot execute `eudkit-lsp --version` through
 `zed_extension_api` 0.7. Its version compatibility is enforced by pinning the
-download URL and cache to `CARGO_PKG_VERSION` (`0.1.0` → tag `v0.1.0`) and by
+download URL and cache to `CARGO_PKG_VERSION` (`0.1.1` → tag `v0.1.1`) and by
 requiring the published checksum. See
 [`editors/zed/README.md`](../editors/zed/README.md) and
 [`editors/zed/TESTING.md`](../editors/zed/TESTING.md).
@@ -179,5 +188,5 @@ requiring the published checksum. See
 - **Unsupported platform**: on a platform with no asset, the extension must
   name the supported platforms and list the local override options.
 
-Record the machine, OS, VS Code version, release tag, result, and any output
-channel excerpts when running this for a release.
+Record the platform, OS version, VS Code version, Zed version (if run), release
+tag, result, and any output channel excerpts when running this for a release.

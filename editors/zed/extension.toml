@@ -1,6 +1,6 @@
 id = "eudkit-lsp"
 name = "EUDKIT LSP"
-version = "0.1.0"
+version = "0.1.1"
 schema_version = 1
 authors = ["Armoha <kein0011@naver.com>"]
 description = "Canonical StarCraft unit-name completion for EUD Python, TypeScript, TSX, and JavaScript via the shared eudkit-lsp server."
