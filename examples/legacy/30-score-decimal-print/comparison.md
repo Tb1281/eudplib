@@ -39,7 +39,7 @@ EUDEndIf()
 ### Modern eudkit v2 (`v2.py`)
 ```python
 # Declarative reactive timing, native Python // division, and unified StringBuffer
-board_buf = session.string_buffer(128)
+board_buf = session.string(128)
 ...
 with every(PRINT_PERIOD):
     total_events = kills_total + deaths_total

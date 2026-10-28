@@ -13,12 +13,12 @@ Each directory contains:
 
 | Directory | Domain | Legacy `eudplib` (v1) | Modern `eudkit` (v2) | Architecture Benefit |
 | :--- | :--- | :--- | :--- | :--- |
-| [`01_variables_and_math/`](file:///home/dong/eudplib/examples/01_variables_and_math/README.md) | Variables & Math | `EUDVariable`, `<<`, temporary trigger ladders | `session.var(...)`, native arithmetic, constant folding | **-80% payload**: 4-byte cell storage vs 72-byte VProcs |
-| [`02_control_flow/`](file:///home/dong/eudplib/examples/02_control_flow/README.md) | Control Flow | `EUDIf()()`, `EUDElse()()`, `EUDWhile()()`, `EUDBreak()` | Native Python `if/elif/else`, `while`, `break`, `continue` | **-91% payload**: Action coalescing (up to 64/block) |
-| [`03_functions_and_inlining/`](file:///home/dong/eudplib/examples/03_functions_and_inlining/README.md) | Functions & Inlining | `@ep.EUDFunc`, double-copy parameter passing | `@session.fn(inline=True)`, direct-return convention | **-91% payload**: Zero-overhead AST inlining |
-| [`04_memory_and_cunit/`](file:///home/dong/eudplib/examples/04_memory_and_cunit/README.md) | Memory & CUnit | Raw pointer arithmetic (`0x59CCA8`), repetitive bit ladders | Typed `CUnit(0)`, named fields, `ReadTable` sharing | **-62% payload**: Deduplicated bit-read triggers |
-| [`05_strings_and_display/`](file:///home/dong/eudplib/examples/05_strings_and_display/README.md) | Strings & Display | `f_eprintln`, runtime XOR decryption, 150KB+ string bloat | `session.map_string()`, residue-stride CPString (`mod 12`) | **-97% payload**: Static STRx relocation & direct streaming |
-| [`06_reactive_rules/`](file:///home/dong/eudplib/examples/06_reactive_rules/README.md) | Reactive Rules | Manual tick decrements (`timer -= 1`), fragile `Wait()` | Declarative `with once():`, `with every(24):`, `with when(...)` | **Multiplayer safety**: Zero desyncs, clean event model |
+| [`01_variables_and_math/`](file:///home/com/eudplib/examples/01_variables_and_math/README.md) | Variables & Math | `EUDVariable`, `<<`, temporary trigger ladders | `session.var(...)`, native arithmetic, constant folding | **-80% payload**: 4-byte cell storage vs 72-byte VProcs |
+| [`02_control_flow/`](file:///home/com/eudplib/examples/02_control_flow/README.md) | Control Flow | `EUDIf()()`, `EUDElse()()`, `EUDWhile()()`, `EUDBreak()` | Native Python `if/elif/else`, `while`, `break`, `continue` | **-91% payload**: Action coalescing (up to 64/block) |
+| [`03_functions_and_inlining/`](file:///home/com/eudplib/examples/03_functions_and_inlining/README.md) | Functions & Inlining | `@ep.EUDFunc`, double-copy parameter passing | `@session.fn(inline=True)`, direct-return convention | **-91% payload**: Zero-overhead AST inlining |
+| [`04_memory_and_cunit/`](file:///home/com/eudplib/examples/04_memory_and_cunit/README.md) | Memory & CUnit | Raw pointer arithmetic (`0x59CCA8`), repetitive bit ladders | Typed `CUnit(0)`, named fields, `ReadTable` sharing | **-62% payload**: Deduplicated bit-read triggers |
+| [`05_strings_and_display/`](file:///home/com/eudplib/examples/05_strings_and_display/README.md) | Strings & Display | `f_eprintln`, runtime XOR decryption, 150KB+ string bloat | `session.string()`, residue-stride CPString (`mod 12`) | **-97% payload**: Static STRx relocation & direct streaming |
+| [`06_reactive_rules/`](file:///home/com/eudplib/examples/06_reactive_rules/README.md) | Reactive Rules | Manual tick decrements (`timer -= 1`), fragile `Wait()` | Declarative `with once():`, `with every(24):`, `with when(...)` | **Multiplayer safety**: Zero desyncs, clean event model |
 
 ---
 
@@ -28,10 +28,17 @@ Each directory contains:
 
 ### Python: Context Manager Syntax
 ```python
-import eudkit
-from eudkit import once, every, when, DisplayText, SetResources, Player1, Add, Ore
-
-session = eudkit.Session("input.scx")
+from eudkit import (
+    session,
+    once,
+    every,
+    when,
+    DisplayText,
+    SetResources,
+    Player1,
+    Add,
+    Ore,
+)
 
 @session.fn
 def game_loop():
@@ -65,26 +72,17 @@ every(24, () => {
 
 ## Running the Examples
 
-Each modern v2 example can be run directly using `uv`:
+Each modern v2 example is a standalone module compiled via the unified `eudkit build` CLI:
 
 ```bash
-# Example 01: Variables & Arithmetic
-uv run python examples/01_variables_and_math/eudkit_v2.py
+# Ad-hoc Mode: Build directly against an input basemap
+eudkit build --input tests/outputmap/basemap/basemap_strx.scx --output output_v2.scx --entry examples/01_variables_and_math/eudkit_v2.py
 
-# Example 02: Control Flow
-uv run python examples/02_control_flow/eudkit_v2.py
+# Or via the Python runner module
+python -m eudkit.runner --input tests/outputmap/basemap/basemap_strx.scx --output output_v2.scx --entry examples/01_variables_and_math/eudkit_v2.py
 
-# Example 03: Functions & Inlining
-uv run python examples/03_functions_and_inlining/eudkit_v2.py
-
-# Example 04: Memory & CUnit Entities
-uv run python examples/04_memory_and_cunit/eudkit_v2.py
-
-# Example 05: Strings & Display
-uv run python examples/05_strings_and_display/eudkit_v2.py
-
-# Example 06: Reactive Rules & Events
-uv run python examples/06_reactive_rules/eudkit_v2.py
+# Project Mode (in a directory containing eudkit.toml):
+eudkit build
 ```
 
 Each run compiles the workload against `tests/outputmap/basemap/basemap_strx.scx` and outputs a compiled map `output_v2.scx` along with trigger counts and payload statistics.

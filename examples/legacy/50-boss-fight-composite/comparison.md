@@ -14,7 +14,7 @@ In legacy eudplib (`legacy.py`), orchestrating a multi-phase boss encounter (add
 
 ### Deepening with Consolidated `StringBuffer` & Scoped `with once():`
 In modern eudkit (`v2.py`), the boss fight is structured as a cohesive composite system:
-- **Single Dynamic String Architecture**: `bar = session.string_buffer(96)` leverages static STRx relocation (ADR 0004), emitting residue-stride CPString updates with zero runtime decryption overhead.
+- **Single Dynamic String Architecture**: `bar = session.string(96)` leverages static STRx relocation (ADR 0004), emitting residue-stride CPString updates with zero runtime decryption overhead.
 - **Self-Unlinking Enrage Seam**: Wrapping the 25% HP enrage trigger inside `with once():` eliminates the `prev_enrage` variable and removes ongoing evaluation overhead once triggered.
 - **Native Stock Action Integration**: Payouts (`SetResources`), spawns (`CreateUnit`), and conditions (`Deaths`) lower directly into native engine triggers with **only 5 VProcs** across the entire encounter.
 

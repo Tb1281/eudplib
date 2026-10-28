@@ -24,5 +24,5 @@ Rather than calculating manual byte offsets (`cunit_epd + 0x4C // 4`), developer
 ## Running the Examples
 
 ```bash
-uv run python examples/04_memory_and_cunit/eudkit_v2.py
+eudkit build --input tests/outputmap/basemap/basemap_strx.scx --output output_v2.scx --entry examples/04_memory_and_cunit/eudkit_v2.py
 ```

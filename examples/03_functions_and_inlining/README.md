@@ -30,5 +30,5 @@ For larger functions that cannot be inlined, v1 required a double-copy:
 ## Running the Examples
 
 ```bash
-uv run python examples/03_functions_and_inlining/eudkit_v2.py
+eudkit build --input tests/outputmap/basemap/basemap_strx.scx --output output_v2.scx --entry examples/03_functions_and_inlining/eudkit_v2.py
 ```

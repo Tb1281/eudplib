@@ -55,9 +55,14 @@ In StarCraft: Brood War, the native `Wait()` action freezes trigger thread execu
 
 `eudkit` v2 replaces manual delays with deterministic frame-tick reactive rules (`with after(loops):` / `after(loops, () => ...)`), compiling them into safe, non-blocking condition/action sets that never stall trigger execution.
 
+### 3. Procedural Branching (`if`) vs Declarative Rules (`when`)
+Inside game loop routines (`@session.fn` in Python, or `export function main()` in TypeScript), native `if / else if / else` is the preferred, idiomatic way to write conditional branch logic. Both frontends compile native `if` statements directly into StarCraft trigger conditions via AST lowering.
+
+Declarative rules (`with when(cond):` / `when(cond, () => ...)`) are retained as part of the complete 5-primitive reactive suite (`once`, `every`, `after`, `until`, `when`). They provide clean semantic symmetry with `until` and allow declaring standing polling constraints without managing procedural loop state.
+
 ## Running the Examples
 
 ```bash
-# Run the modern v2 example:
-uv run python examples/06_reactive_rules/eudkit_v2.py
+# Build using eudkit build:
+eudkit build --input tests/outputmap/basemap/basemap_strx.scx --output output_v2.scx --entry examples/06_reactive_rules/eudkit_v2.py
 ```

@@ -13,9 +13,9 @@ Relabel 7 rank titles and customize the command card attack button at game start
 Executes once on map startup using packed dwords into `stat_txt.tbl` (`0x6D5A30`).
 """
 
-from pathlib import Path
 import eudkit
 from eudkit import (
+    session,
     EPD,
     dwwrite_epd,
     epdread_epd,
@@ -23,8 +23,6 @@ from eudkit import (
     wread_epd,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-BASEMAP_PATH = REPO_ROOT / "tests" / "outputmap" / "basemap" / "basemap_strx.scx"
 
 # (tbl_id, byte_offset, new_text)
 BUTTON_RENAMES = [
@@ -46,44 +44,22 @@ for tid, off, name in BUTTON_RENAMES:
     dwords = [int.from_bytes(b[i : i + 4], "little") for i in range(0, len(b), 4)]
     PACKED_BUTTONS.append((tid, off, dwords))
 
+tbl_epd = session.var(0, name="tbl_epd")
+str_offset = session.var(0, name="str_offset")
+dst_epd = session.var(0, name="dst_epd")
+relabeled = session.var(0, name="relabeled")
 
-def build(session: eudkit.Session):
-    tbl_epd = session.var(0, name="tbl_epd")
-    str_offset = session.var(0, name="str_offset")
-    dst_epd = session.var(0, name="dst_epd")
-    relabeled = session.var(0, name="relabeled")
+@session.fn
+def game_loop():
+    with once():
+        tbl_epd = epdread_epd(EPD(0x6D5A30))
 
-    @session.fn
-    def game_loop():
-        with once():
-            tbl_epd = epdread_epd(EPD(0x6D5A30))
+        for i in range(len(PACKED_BUTTONS)):
+            entry = PACKED_BUTTONS[i]
+            str_offset = wread_epd(tbl_epd + (entry[0] // 2), (entry[0] % 2))
+            dst_epd = tbl_epd + ((str_offset + entry[1]) // 4)
 
-            for i in range(len(PACKED_BUTTONS)):
-                entry = PACKED_BUTTONS[i]
-                str_offset = wread_epd(tbl_epd + (entry[0] // 2), (entry[0] % 2))
-                dst_epd = tbl_epd + ((str_offset + entry[1]) // 4)
+            for j in range(len(entry[2])):
+                dwwrite_epd(dst_epd + j, entry[2][j])
 
-                for j in range(len(entry[2])):
-                    dwwrite_epd(dst_epd + j, entry[2][j])
-
-            relabeled = 1
-
-    return {
-        "relabeled": relabeled,
-    }
-
-
-def main():
-    session = eudkit.Session(BASEMAP_PATH)
-    build(session)
-    out_path = Path(__file__).parent / "output_v2.scx"
-    report = session.compile(out_path)
-    print("Scenario 23 (v2) compiled successfully:")
-    print(f"  Triggers: {report.trigger_count}")
-    print(f"  Payload:  {report.payload_size} bytes")
-    print(f"  VProcs:   {report.vproc_count}")
-    return report
-
-
-if __name__ == "__main__":
-    main()
+        relabeled = 1

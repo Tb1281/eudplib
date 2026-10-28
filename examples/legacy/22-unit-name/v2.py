@@ -13,9 +13,9 @@ Rename 8 core combat units at game start via StarCraft's TBL string table:
 Pack strings into 4-byte little-endian dwords and emit writes once on map initialization.
 """
 
-from pathlib import Path
 import eudkit
 from eudkit import (
+    session,
     EPD,
     dwwrite_epd,
     epdread_epd,
@@ -23,8 +23,6 @@ from eudkit import (
     wread_epd,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-BASEMAP_PATH = REPO_ROOT / "tests" / "outputmap" / "basemap" / "basemap_strx.scx"
 
 # Core unit renaming roster: (tbl_id, display_name)
 ROSTER_RENAMES = [
@@ -47,49 +45,26 @@ for tid, name in ROSTER_RENAMES:
     dwords = [int.from_bytes(b[i : i + 4], "little") for i in range(0, len(b), 4)]
     PACKED_RENAMES.append((tid, dwords))
 
+tbl_epd = session.var(0, name="tbl_epd")
+str_offset = session.var(0, name="str_offset")
+dst_epd = session.var(0, name="dst_epd")
+renamed = session.var(0, name="renamed")
 
-def build(session: eudkit.Session):
-    tbl_epd = session.var(0, name="tbl_epd")
-    str_offset = session.var(0, name="str_offset")
-    dst_epd = session.var(0, name="dst_epd")
-    renamed = session.var(0, name="renamed")
+@session.fn
+def game_loop():
+    # Executes exactly once on map startup
+    with once():
+        # Resolve stat_txt.tbl base pointer at 0x6D5A30
+        tbl_epd = epdread_epd(EPD(0x6D5A30))
 
-    @session.fn
-    def game_loop():
-        # Executes exactly once on map startup
-        with once():
-            # Resolve stat_txt.tbl base pointer at 0x6D5A30
-            tbl_epd = epdread_epd(EPD(0x6D5A30))
+        for i in range(len(PACKED_RENAMES)):
+            entry = PACKED_RENAMES[i]
+            # Read 16-bit offset from table header
+            str_offset = wread_epd(tbl_epd + (entry[0] // 2), (entry[0] % 2))
+            dst_epd = tbl_epd + (str_offset // 4)
 
-            for i in range(len(PACKED_RENAMES)):
-                entry = PACKED_RENAMES[i]
-                # Read 16-bit offset from table header
-                str_offset = wread_epd(tbl_epd + (entry[0] // 2), (entry[0] % 2))
-                dst_epd = tbl_epd + (str_offset // 4)
+            # Write packed 4-byte character blocks
+            for j in range(len(entry[1])):
+                dwwrite_epd(dst_epd + j, entry[1][j])
 
-                # Write packed 4-byte character blocks
-                for j in range(len(entry[1])):
-                    dwwrite_epd(dst_epd + j, entry[1][j])
-
-            renamed = 1
-
-    return {
-        "tbl_epd": tbl_epd,
-        "renamed": renamed,
-    }
-
-
-def main():
-    session = eudkit.Session(BASEMAP_PATH)
-    build(session)
-    out_path = Path(__file__).parent / "output_v2.scx"
-    report = session.compile(out_path)
-    print("Scenario 22 (v2) compiled successfully:")
-    print(f"  Triggers: {report.trigger_count}")
-    print(f"  Payload:  {report.payload_size} bytes")
-    print(f"  VProcs:   {report.vproc_count}")
-    return report
-
-
-if __name__ == "__main__":
-    main()
+        renamed = 1

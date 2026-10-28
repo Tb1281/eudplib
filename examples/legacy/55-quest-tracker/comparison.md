@@ -14,7 +14,7 @@ In legacy eudplib (`legacy.py`), managing a 3-quest campaign progression chain w
 
 ### Deepening with Consolidated `StringBuffer` & Reactive Clocks
 In modern eudkit (`v2.py`), the campaign tracker captures the exact game developer intent:
-- **Single Dynamic String Architecture**: `quest_log = session.string_buffer(96)` replaces legacy DBString with static STRx relocation (ADR 0004), emitting residue-stride CPString updates with zero runtime decryption overhead.
+- **Single Dynamic String Architecture**: `quest_log = session.string(96)` replaces legacy DBString with static STRx relocation (ADR 0004), emitting residue-stride CPString updates with zero runtime decryption overhead.
 - **Reactive Seam (`with every(48):`)**: The 48-frame refresh interval is handled by the reactive timing rule, eliminating the manual tick counter.
 - **Direct Payout & Progress Reset**: Completion payouts (`SetResources`), base pings (`MinimapPing`), and quest transitions occur in clean, sequential `if/elif` branches.
 

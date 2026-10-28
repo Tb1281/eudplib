@@ -25,6 +25,6 @@ In v2, the compiler builds an expression AST, folds constants at compile time, a
 ## Running the Examples
 
 ```bash
-# Run the modern v2 example:
-uv run python examples/01_variables_and_math/eudkit_v2.py
+# Build using eudkit build:
+eudkit build --input tests/outputmap/basemap/basemap_strx.scx --output output_v2.scx --entry examples/01_variables_and_math/eudkit_v2.py
 ```

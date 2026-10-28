@@ -22,8 +22,11 @@ Legacy v1 compiled complex runtime loops that decrypted strings byte by byte, ad
 ### 2. Static STRx Relocation
 In SC:R (StarCraft: Remastered), STRx section strings are mapped into memory at a fixed address `0x191943C8`. `eudkit` precomputes all string offsets at compile time, completely eliminating 1.16.1 legacy heap search triggers.
 
+### 3. Canonical `session.string()`
+Dynamic formatted in-game strings are instantiated via the canonical `session.string(content)` factory (accepting either integer byte capacity or initial text). Format calls (`hud.printf("Score: %d", score)`) stream directly into the allocated STRx buffer without decryption loops.
+
 ## Running the Examples
 
 ```bash
-uv run python examples/05_strings_and_display/eudkit_v2.py
+eudkit build --input tests/outputmap/basemap/basemap_strx.scx --output output_v2.scx --entry examples/05_strings_and_display/eudkit_v2.py
 ```

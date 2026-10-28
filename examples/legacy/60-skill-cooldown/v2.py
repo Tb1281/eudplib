@@ -4,10 +4,8 @@
 # 1. State machine managing mana recharge rates (ready vs cooling).
 # 2. Native python conditionals for casting conditions and failed cast accounting.
 # 3. Clean local session variables and declarative action lists.
-from pathlib import Path
 import eudkit
 
-BASEMAP_PATH = Path(__file__).resolve().parents[3] / "tests" / "outputmap" / "basemap" / "basemap_strx.scx"
 
 P8 = 7
 ZERGLING = 37
@@ -23,73 +21,46 @@ NOVA_ZERGLINGS = 4
 NOVA_HYDRALISKS = 2
 SW_NOVA = 8
 
+from eudkit import session
 
-def build(session: eudkit.Session):
-    mana = session.var(0)
-    cooldown = session.var(0)
-    ready_flag = session.var(0)
-    casts = session.var(0)
-    failed_casts = session.var(0)
-    total_mana_spent = session.var(0)
+mana = session.var(0)
+cooldown = session.var(0)
+ready_flag = session.var(0)
+casts = session.var(0)
+failed_casts = session.var(0)
+total_mana_spent = session.var(0)
 
-    @session.fn(main_loop=True)
-    def game_loop() -> None:
-        nonlocal mana, cooldown, ready_flag, casts, failed_casts, total_mana_spent
+@session.fn(main_loop=True)
+def game_loop() -> None:
+    global mana, cooldown, ready_flag, casts, failed_casts, total_mana_spent
 
-        if cooldown >= 1:
-            cooldown -= 1
+    if cooldown >= 1:
+        cooldown -= 1
 
-        if cooldown == 0:
-            if mana <= MANA_MAX - REGEN_READY:
-                mana += REGEN_READY
-            elif mana < MANA_MAX:
-                mana = MANA_MAX
+    if cooldown == 0:
+        if mana <= MANA_MAX - REGEN_READY:
+            mana += REGEN_READY
+        elif mana < MANA_MAX:
+            mana = MANA_MAX
+    else:
+        if mana < MANA_MAX:
+            mana += REGEN_COOLING
+
+    if eudkit.Switch(SW_NOVA, eudkit.Set):
+        eudkit.SetSwitch(SW_NOVA, eudkit.Clear)
+        if mana == MANA_MAX and cooldown == 0:
+            eudkit.KillUnitAt(NOVA_ZERGLINGS, ZERGLING, LOC_NOVA, P8)
+            eudkit.KillUnitAt(NOVA_HYDRALISKS, HYDRALISK, LOC_NOVA, P8)
+            eudkit.MinimapPing(LOC_NOVA)
+            mana = 0
+            cooldown = NOVA_COOLDOWN
+            ready_flag = 0
+            casts += 1
+            total_mana_spent += MANA_MAX
         else:
-            if mana < MANA_MAX:
-                mana += REGEN_COOLING
+            failed_casts += 1
 
-        if eudkit.Switch(SW_NOVA, eudkit.Set):
-            eudkit.SetSwitch(SW_NOVA, eudkit.Clear)
-            if mana == MANA_MAX and cooldown == 0:
-                eudkit.KillUnitAt(NOVA_ZERGLINGS, ZERGLING, LOC_NOVA, P8)
-                eudkit.KillUnitAt(NOVA_HYDRALISKS, HYDRALISK, LOC_NOVA, P8)
-                eudkit.MinimapPing(LOC_NOVA)
-                mana = 0
-                cooldown = NOVA_COOLDOWN
-                ready_flag = 0
-                casts += 1
-                total_mana_spent += MANA_MAX
-            else:
-                failed_casts += 1
-
-        if cooldown == 0 and mana == MANA_MAX:
-            if ready_flag == 0:
-                eudkit.MinimapPing(LOC_HERO)
-                ready_flag = 1
-
-    return {
-        "mana": mana,
-        "cooldown": cooldown,
-        "ready_flag": ready_flag,
-        "casts": casts,
-        "failed_casts": failed_casts,
-        "total_mana_spent": total_mana_spent,
-    }
-
-
-def main():
-    session = eudkit.Session(BASEMAP_PATH)
-    build(session)
-    out_path = Path(__file__).parent / "output_v2.scx"
-    report = session.compile(out_path)
-    if out_path.exists():
-        out_path.unlink()
-    print("Scenario 60 (v2) compiled successfully:")
-    print(f"  Triggers: {report.trigger_count}")
-    print(f"  Payload:  {report.payload_size} bytes")
-    print(f"  VProcs:   {report.vproc_count}")
-    return report
-
-
-if __name__ == "__main__":
-    main()
+    if cooldown == 0 and mana == MANA_MAX:
+        if ready_flag == 0:
+            eudkit.MinimapPing(LOC_HERO)
+            ready_flag = 1

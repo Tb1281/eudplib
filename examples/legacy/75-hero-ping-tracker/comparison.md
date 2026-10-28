@@ -14,7 +14,7 @@ In legacy eudplib (`legacy.py`), locating a hero and announcing dynamic coordina
 
 ### Deepening with Consolidated `StringBuffer` & Periodic Clocks
 In modern eudkit (`v2.py`), hero tracking demonstrates the modern architecture:
-- **Single Dynamic String Architecture (ADR 0004)**: `session.string_buffer(48)` formats coordinates via `.printf("HERO AT ", hero_x, ", ", hero_y)`.
+- **Single Dynamic String Architecture (ADR 0004)**: `session.string(48)` formats coordinates via `.printf("HERO AT ", hero_x, ", ", hero_y)`.
 - **Declarative Clock Rule**: `with session.every(48):` governs tracking pulses.
 - **Unified Traversal & Relocation**: Traverses Player 1 units and calls stock `eudkit.MoveLocation` and `MinimapPing`.
 

@@ -24,5 +24,5 @@ A single SCX trigger can store up to 64 actions. `eudkit` automatically merges c
 ## Running the Examples
 
 ```bash
-uv run python examples/02_control_flow/eudkit_v2.py
+eudkit build --input tests/outputmap/basemap/basemap_strx.scx --output output_v2.scx --entry examples/02_control_flow/eudkit_v2.py
 ```

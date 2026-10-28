@@ -11,9 +11,9 @@ Autonomous defense wave system across 10 progressive waves:
 6. Clearing wave 10 latches victory.
 """
 
-from pathlib import Path
 import eudkit
 from eudkit import (
+    session,
     Add,
     CreateUnit,
     Ore,
@@ -22,84 +22,57 @@ from eudkit import (
     SetResources,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-BASEMAP_PATH = REPO_ROOT / "tests" / "outputmap" / "basemap" / "basemap_strx.scx"
 
 WAVE_PERIOD = 240
 MAX_WAVE = 10
 BONUS_EVERY = 5
 BONUS_ORE = 150
 
+wave = session.var(0, name="wave")
+spawn_timer = session.var(0, name="spawn_timer")
+quota = session.var(0, name="quota")
+spawned_in_wave = session.var(0, name="spawned_in_wave")
+wave_active = session.var(0, name="wave_active")
+spawn_alt = session.var(0, name="spawn_alt")
+total_spawned = session.var(0, name="total_spawned")
+waves_completed = session.var(0, name="waves_completed")
+bonus_counter = session.var(0, name="bonus_counter")
+victory = session.var(0, name="victory")
 
-def build(session: eudkit.Session):
-    wave = session.var(0, name="wave")
-    spawn_timer = session.var(0, name="spawn_timer")
-    quota = session.var(0, name="quota")
-    spawned_in_wave = session.var(0, name="spawned_in_wave")
-    wave_active = session.var(0, name="wave_active")
-    spawn_alt = session.var(0, name="spawn_alt")
-    total_spawned = session.var(0, name="total_spawned")
-    waves_completed = session.var(0, name="waves_completed")
-    bonus_counter = session.var(0, name="bonus_counter")
-    victory = session.var(0, name="victory")
+@session.fn
+def game_loop():
+    if victory == 0:
+        spawn_timer += 1
 
-    @session.fn
-    def game_loop():
-        if victory == 0:
-            spawn_timer += 1
+        # Launch next wave when timer triggers
+        if (spawn_timer >= WAVE_PERIOD) and (wave_active == 0) and (wave < MAX_WAVE):
+            wave += 1
+            quota = 4 + 2 * wave
+            spawned_in_wave = 0
+            wave_active = 1
+            spawn_timer = 0
 
-            # Launch next wave when timer triggers
-            if (spawn_timer >= WAVE_PERIOD) and (wave_active == 0) and (wave < MAX_WAVE):
-                wave += 1
-                quota = 4 + 2 * wave
-                spawned_in_wave = 0
-                wave_active = 1
-                spawn_timer = 0
+        # Stream wave units
+        if wave_active == 1:
+            if spawn_alt == 0:
+                CreateUnit(1, "Zerg Zergling", 1, Player8)
+                spawn_alt = 1
+            else:
+                CreateUnit(1, "Zerg Hydralisk", 2, Player8)
+                spawn_alt = 0
 
-            # Stream wave units
-            if wave_active == 1:
-                if spawn_alt == 0:
-                    CreateUnit(1, "Zerg Zergling", 1, Player8)
-                    spawn_alt = 1
-                else:
-                    CreateUnit(1, "Zerg Hydralisk", 2, Player8)
-                    spawn_alt = 0
+            spawned_in_wave += 1
+            total_spawned += 1
 
-                spawned_in_wave += 1
-                total_spawned += 1
+            # Wave completion check
+            if spawned_in_wave >= quota:
+                wave_active = 0
+                waves_completed += 1
+                bonus_counter += 1
 
-                # Wave completion check
-                if spawned_in_wave >= quota:
-                    wave_active = 0
-                    waves_completed += 1
-                    bonus_counter += 1
+                if bonus_counter >= BONUS_EVERY:
+                    bonus_counter = 0
+                    SetResources(Player1, Add, BONUS_ORE, Ore)
 
-                    if bonus_counter >= BONUS_EVERY:
-                        bonus_counter = 0
-                        SetResources(Player1, Add, BONUS_ORE, Ore)
-
-                    if wave >= MAX_WAVE:
-                        victory = 1
-
-    return {
-        "wave": wave,
-        "total_spawned": total_spawned,
-        "waves_completed": waves_completed,
-        "victory": victory,
-    }
-
-
-def main():
-    session = eudkit.Session(BASEMAP_PATH)
-    build(session)
-    out_path = Path(__file__).parent / "output_v2.scx"
-    report = session.compile(out_path)
-    print("Scenario 24 (v2) compiled successfully:")
-    print(f"  Triggers: {report.trigger_count}")
-    print(f"  Payload:  {report.payload_size} bytes")
-    print(f"  VProcs:   {report.vproc_count}")
-    return report
-
-
-if __name__ == "__main__":
-    main()
+                if wave >= MAX_WAVE:
+                    victory = 1

@@ -9,10 +9,9 @@ Demonstrates:
   - with until(cond): / until(cond, () => ...): Continues executing until condition becomes true
 - Zero manual timer variable management
 - Zero desynchronization risk (no fragile Wait() actions)
+- Standalone compile via `eudkit build`
 """
 
-from pathlib import Path
-import eudkit
 from eudkit import (
     Add,
     CreateUnit,
@@ -24,47 +23,31 @@ from eudkit import (
     after,
     every,
     once,
+    session,
     until,
     when,
 )
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-BASEMAP_PATH = REPO_ROOT / "tests" / "outputmap" / "basemap" / "basemap_strx.scx"
+kills = session.var(0, name="kills")
 
 
-def main():
-    session = eudkit.Session(BASEMAP_PATH)
-    kills = session.var(0, name="kills")
+@session.fn
+def game_loop():
+    # 1. One-time initialization on game start
+    with once():
+        DisplayText("Welcome to StarCraft EUD!")
+        SetResources(Player1, SetTo, 1000, Ore)
 
-    @session.fn
-    def game_loop():
-        # 1. One-time initialization on game start
-        with once():
-            DisplayText("Welcome to StarCraft EUD!")
-            SetResources(Player1, SetTo, 1000, Ore)
+    # 2. Periodic passive income: every 24 ticks (1 second on Fastest speed)
+    with every(24):
+        SetResources(Player1, Add, 50, Ore)
 
-        # 2. Periodic passive income: every 24 ticks (1 second on Fastest speed)
-        with every(24):
-            SetResources(Player1, Add, 50, Ore)
+    # 3. Timed reinforcement drop: arrives after 120 ticks (5 seconds)
+    with after(120):
+        DisplayText("Reinforcements have arrived!")
+        CreateUnit(1, "Terran Marine", "Anywhere", Player1)
 
-        # 3. Timed reinforcement drop: arrives after 120 ticks (5 seconds)
-        with after(120):
-            DisplayText("Reinforcements have arrived!")
-            CreateUnit(1, "Terran Marine", "Anywhere", Player1)
-
-        # 4. Reactive milestone reward: triggers once kills reaches 10
-        with when(kills >= 10):
-            DisplayText("Combat Milestone: +500 Ore Reward")
-            SetResources(Player1, Add, 500, Ore)
-
-    out_path = Path(__file__).parent / "output_v2.scx"
-    report = session.compile(out_path)
-
-    print("=== eudkit (v2) Reactive Rules Compilation Report ===")
-    print(f"Total Triggers:   {report.trigger_count}")
-    print(f"Payload Size:     {report.payload_size} bytes")
-    print(f"Output SCX Map:   {out_path}")
-
-
-if __name__ == "__main__":
-    main()
+    # 4. Reactive milestone reward: triggers once kills reaches 10
+    with when(kills >= 10):
+        DisplayText("Combat Milestone: +500 Ore Reward")
+        SetResources(Player1, Add, 500, Ore)

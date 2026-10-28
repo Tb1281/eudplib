@@ -20,6 +20,7 @@ import unittest
 from pathlib import Path
 
 import eudkit
+from eudkit.runner import run_build
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BASEMAP_PATH = REPO_ROOT / "tests" / "outputmap" / "basemap" / "basemap_strx.scx"
@@ -94,23 +95,17 @@ class TestLegacyVersusV2(unittest.TestCase):
         for sdir in self.scenario_dirs:
             with self.subTest(scenario=sdir.name):
                 v2_file = sdir / "v2.py"
-                spec = importlib.util.spec_from_file_location(f"test_mod_{sdir.name.replace('-', '_')}", v2_file)
-                self.assertIsNotNone(spec)
-                self.assertIsNotNone(spec.loader)
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-
-                self.assertTrue(hasattr(mod, "build"), f"{sdir.name}/v2.py missing build(session) entrypoint")
-
-                session = eudkit.Session(BASEMAP_PATH)
-                mod.build(session)
-
                 t0 = time.perf_counter()
                 with tempfile.NamedTemporaryFile(suffix=".scx", delete=True) as tmp:
-                    report = session.compile(tmp.name)
+                    report = run_build(
+                        input_map=BASEMAP_PATH,
+                        output_map=tmp.name,
+                        entry=v2_file,
+                    )
                 dt = time.perf_counter() - t0
                 total_compile_time += dt
 
+                self.assertIsNotNone(report, f"{sdir.name} build returned no report")
                 self.assertGreater(report.trigger_count, 0, f"{sdir.name} produced 0 triggers")
                 self.assertGreater(report.payload_size, 0, f"{sdir.name} produced 0 payload bytes")
                 self.assertLess(dt, 2.0, f"{sdir.name} compilation took too long ({dt:.3f}s)")

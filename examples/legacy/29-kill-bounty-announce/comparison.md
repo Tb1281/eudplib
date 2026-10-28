@@ -35,7 +35,7 @@ EUDEndIf()
 ### Modern eudkit v2 (`v2.py`)
 ```python
 # Consolidated StringBuffer with format strings
-announce_buf = session.string_buffer(128)
+announce_buf = session.string(128)
 ...
 cur_kills = dwread_epd(EPD(MARINE_DEATHS_P1))
 if cur_kills > prev_kills:
@@ -66,7 +66,7 @@ if cur_kills > prev_kills:
 ## 4. Architectural Mechanics
 
 ### Single Dynamic String Architecture
-- Following user architectural direction (Ticket #27), ambiguous string APIs (`EUDString`, `DBString`) were removed in favor of `session.string_buffer()`.
+- Following user architectural direction (Ticket #27), ambiguous string APIs (`EUDString`, `DBString`) were removed in favor of `session.string()`.
 - Modern `StringBuffer` compiles to static STRx storage relocated at `0x191943C8`, emitting residue-stride CP writes without runtime decryption overhead.
 
 ### Amortized ReadTable Engine
