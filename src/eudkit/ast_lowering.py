@@ -46,6 +46,11 @@ class LoopRange:
 
 
 def loop_range(start: int, stop: int | None = None, step: int = 1) -> LoopRange:
+    """Marks a runtime ``while``-lowered loop range inside ``@eud.fn``.
+
+    ``loop_range(stop)`` iterates from 0, while ``loop_range(start, stop,
+    step)`` mirrors Python's ``range``. See :meth:`eud.loop_range`.
+    """
     return LoopRange(start, stop, step)
 
 
