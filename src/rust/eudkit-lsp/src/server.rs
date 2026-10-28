@@ -2,8 +2,12 @@
 
 use std::collections::HashMap;
 use std::error::Error;
+use std::ops::Range;
 
-use crate::analysis::{python_diagnostics, ts_diagnostics, ParsedDocument, TsLanguage};
+use crate::analysis::{
+    python_diagnostics, python_eud_player_diagnostics, ts_diagnostics, ts_eud_player_diagnostics,
+    ParsedDocument, TsLanguage,
+};
 use crate::completion::{completions_at_with_context, offset_to_position, ts_completions_at};
 use crate::project::ProjectCache;
 use eudkit_core::map_context::MapContext;
@@ -190,24 +194,50 @@ fn publish_diagnostics(connection: &Connection, state: &mut ServerState, uri: &s
 }
 
 fn document_diagnostics(document: &Document, map_context: Option<&MapContext>) -> Vec<Diagnostic> {
-    let diagnostics = match document.language_id.as_str() {
-        "python" => python_diagnostics(&document.text, map_context),
+    let mut findings: Vec<(Range<usize>, String)> = Vec::new();
+
+    match document.language_id.as_str() {
+        "python" => {
+            findings.extend(
+                python_diagnostics(&document.text, map_context)
+                    .into_iter()
+                    .map(|diagnostic| (diagnostic.range, diagnostic.message)),
+            );
+            findings.extend(
+                python_eud_player_diagnostics(&document.text)
+                    .into_iter()
+                    .map(|diagnostic| (diagnostic.range, diagnostic.message)),
+            );
+        }
         language_id => match TsLanguage::from_language_id(language_id) {
-            Some(language) => ts_diagnostics(&document.text, language, map_context),
+            Some(language) => {
+                findings.extend(
+                    ts_diagnostics(&document.text, language, map_context)
+                        .into_iter()
+                        .map(|diagnostic| (diagnostic.range, diagnostic.message)),
+                );
+                findings.extend(
+                    ts_eud_player_diagnostics(&document.text, language)
+                        .into_iter()
+                        .map(|diagnostic| (diagnostic.range, diagnostic.message)),
+                );
+            }
             None => return Vec::new(),
         },
-    };
+    }
 
-    diagnostics
+    findings.sort_by_key(|(range, _)| range.start);
+
+    findings
         .into_iter()
-        .map(|diagnostic| Diagnostic {
+        .map(|(range, message)| Diagnostic {
             range: LspRange::new(
-                offset_to_position(&document.text, diagnostic.range.start),
-                offset_to_position(&document.text, diagnostic.range.end),
+                offset_to_position(&document.text, range.start),
+                offset_to_position(&document.text, range.end),
             ),
             severity: Some(DiagnosticSeverity::WARNING),
             source: Some("eudkit".to_string()),
-            message: diagnostic.message,
+            message,
             ..Diagnostic::default()
         })
         .collect()

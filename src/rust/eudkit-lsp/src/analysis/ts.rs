@@ -36,7 +36,7 @@ impl TsLanguage {
         }
     }
 
-    fn source_type(self) -> SourceType {
+    pub(crate) fn source_type(self) -> SourceType {
         match self {
             Self::TypeScript => SourceType::ts(),
             Self::Tsx => SourceType::tsx(),
@@ -207,7 +207,11 @@ fn argument_index(tokens: &[Token], open_index: usize, string_index: usize) -> O
 }
 
 /// Function name immediately before an open parenthesis.
-fn call_name<'a>(source: &'a str, tokens: &[Token], open_index: usize) -> Option<&'a str> {
+pub(crate) fn call_name<'a>(
+    source: &'a str,
+    tokens: &[Token],
+    open_index: usize,
+) -> Option<&'a str> {
     let name_token = tokens.get(open_index.checked_sub(1)?)?;
     if name_token.kind() != Kind::Ident {
         return None;
