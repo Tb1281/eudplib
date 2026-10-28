@@ -17,12 +17,13 @@ verification record for the user guide at
 | Python | 3.14.4 |
 | Rust | 1.99.0 |
 
-The VS Code behavior pass used the real VS Code extension host with the
-`0.1.1` extension and the published Linux x64 `eudkit-lsp` asset. The first run
-downloaded
-`eudkit-lsp-linux-x86_64` and its `.sha256` companion from the `v0.1.1`
-release, verified the checksum, installed it under global storage, probed
-`--version`, and started it. Subsequent checks reused the verified cache.
+The VS Code behavior pass used the real VS Code extension host. The extension
+under test was the release `eudkit-vscode-0.1.1.vsix` bundle, checksum verified
+and installed in a clean profile; no Rust toolchain was used. The server cache
+was cleared, so the first run downloaded `eudkit-lsp-linux-x86_64` and its
+`.sha256` companion from the `v0.1.1` release, verified the checksum, installed
+it under global storage, probed `--version`, and started it. Subsequent checks
+reused the verified cache.
 
 The Zed pass loaded the extension in a dev profile and started the same
 `eudkit-lsp` 0.1.1 binary for Python, TypeScript, and JavaScript documents.
@@ -36,7 +37,7 @@ The Zed pass loaded the extension in a dev profile and started the same
 | VS Code release download, checksum, cache, version probe | **PASS** | Output channel record; cached asset and `.sha256` present |
 | Zed extension load and server start, Python/TypeScript/JavaScript | **PASS** | Extension host log: 2 extensions loaded; 3 `eudkit-lsp` process starts |
 | Zed completion/diagnostic UI | **NOT EXECUTED** | No Zed UI test harness in this environment; shared server behavior is covered by the protocol matrix |
-| No-Rust VSIX installation | **NOT EXECUTED in this pass** | Release download/checksum path verified; clean-machine checklist in [`editor-install-smoke-test.md`](editor-install-smoke-test.md) |
+| No-Rust VSIX installation | **PASS** | Release `eudkit-vscode-0.1.1.vsix` checksum verified and installed in a clean profile with `code --install-extension`; the installed bundle then passed the VS Code behavior matrix; no Rust used. |
 | Windows/macOS execution | **Not executed here** | Assets were built and checksum/format verified in the `v0.1.1` release workflow |
 
 The Zed extension API does not expose a test harness equivalent to the VS Code
@@ -75,7 +76,8 @@ JavaScript; TypeScript/JSX and TSX registration are covered by the same suite.
 ## VS Code reference matrix
 
 This pass used a temporary `@vscode/test-electron` harness against the real
-extension host. The workspace contained three folders:
+extension host, with the installed release VSIX bundle as the extension under
+test. The workspace contained three folders:
 
 - `plain/`: no `eudkit.toml`.
 - `verify-project/`: `eudkit.toml` pointing at `test_maps/v2/verify_v2.scx`
@@ -146,6 +148,13 @@ python3 scripts/smoke_eudkit_lsp.py \
 # VS Code extension unit, release, and type-fixture checks: 21 tests + tsc
 (cd editors/vscode && npm test)
 
+# Release VSIX install in a clean profile (no Rust)
+sha256sum -c eudkit-vscode-0.1.1.vsix.sha256
+code --user-data-dir <clean-profile> --extensions-dir <clean-extensions> \
+  --install-extension eudkit-vscode-0.1.1.vsix
+code --user-data-dir <clean-profile> --extensions-dir <clean-extensions> \
+  --list-extensions --show-versions
+
 # Zed extension tests: 17 tests
 (cd editors/zed && cargo test)
 ```
@@ -157,7 +166,7 @@ manually for this record; their temporary profiles were outside the repository.
 
 | Platform | Architecture | VSIX/editor | `eudkit-lsp` execution |
 | --- | --- | --- | --- |
-| Linux | x86_64 | PASS (extension host) | PASS (this record) |
+| Linux | x86_64 | PASS (clean VSIX install + extension host) | PASS (this record) |
 | Windows | x86_64 | Built and published; not executed here | Built and checksum/format verified; not executed here |
 | macOS | arm64 | Built and published; not executed here | Built and checksum/format verified; not executed here |
 | macOS | x86_64 | Built and published; not executed here | Built and checksum/format verified; not executed here |
@@ -167,10 +176,13 @@ x86_64. Other combinations require a local server override.
 
 ## Known verification gaps
 
-- The VS Code pass used the extension host directly, not a fresh `code
-  --install-extension` on a clean machine. The release download and checksum
-  path was re-verified here; the clean-machine install checklist is documented
-  in [`editor-install-smoke-test.md`](editor-install-smoke-test.md).
+- The VS Code behavior pass loaded the installed VSIX bundle through the
+  extension-under-test path rather than activating it from the extension
+  registry. The clean-profile `code --install-extension` and
+  `--list-extensions` checks cover the install path; the behavior matrix covers
+  the packaged extension and the release server download. The remaining
+  clean-machine checklist is documented in
+  [`editor-install-smoke-test.md`](editor-install-smoke-test.md).
 - The Zed completion menu was not driven programmatically because the Zed
   extension API has no test harness and the environment is Wayland-only. Zed
   client startup and language registration were verified, and the shared
