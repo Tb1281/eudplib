@@ -50,6 +50,8 @@ impl TsLanguage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TsSymbolSlot {
     kind: SymbolKind,
+    literal_start: usize,
+    literal_end: usize,
     content_start: usize,
     content_end: usize,
 }
@@ -58,6 +60,11 @@ impl TsSymbolSlot {
     /// Byte range of the existing literal content to replace on insertion.
     pub fn content_range(&self) -> std::ops::Range<usize> {
         self.content_start..self.content_end
+    }
+
+    /// Byte range of the whole string literal, including its quotes.
+    pub fn literal_range(&self) -> std::ops::Range<usize> {
+        self.literal_start..self.literal_end
     }
 
     /// Kind of symbol accepted by this argument.
@@ -84,26 +91,59 @@ pub fn ts_symbol_slot_at(
     symbol_slot_from_tokens(source, &parsed.tokens, offset)
 }
 
+/// All closed symbol-typed string arguments in the document.
+pub fn ts_symbol_slots(source: &str, language: TsLanguage) -> Vec<TsSymbolSlot> {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, language.source_type())
+        .with_config(TokensParserConfig)
+        .parse();
+
+    if parsed.fatal_error {
+        return Vec::new();
+    }
+
+    parsed
+        .tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, _)| symbol_slot_for_token(source, &parsed.tokens, index))
+        .collect()
+}
+
 fn symbol_slot_from_tokens(source: &str, tokens: &[Token], offset: usize) -> Option<TsSymbolSlot> {
-    let (string_index, content_start, content_end) =
-        tokens.iter().enumerate().find_map(|(index, token)| {
-            if token.kind() != Kind::Str {
-                return None;
-            }
+    let string_index = tokens.iter().enumerate().find_map(|(index, token)| {
+        if token.kind() != Kind::Str {
+            return None;
+        }
 
-            let span = token.span();
-            let content_start = (span.start as usize).checked_add(1)?;
-            let content_end = (span.end as usize).checked_sub(1)?;
-            if offset < content_start || offset > content_end {
-                return None;
-            }
+        let span = token.span();
+        let content_start = (span.start as usize).checked_add(1)?;
+        let content_end = (span.end as usize).checked_sub(1)?;
+        (offset >= content_start && offset <= content_end).then_some(index)
+    })?;
 
-            Some((index, content_start, content_end))
-        })?;
+    symbol_slot_for_token(source, tokens, string_index)
+}
 
+fn symbol_slot_for_token(
+    source: &str,
+    tokens: &[Token],
+    string_index: usize,
+) -> Option<TsSymbolSlot> {
+    let token = tokens.get(string_index)?;
+    if token.kind() != Kind::Str {
+        return None;
+    }
+
+    let span = token.span();
+    let content_start = (span.start as usize).checked_add(1)?;
+    let content_end = (span.end as usize).checked_sub(1)?;
     let kind = symbol_kind_for_string(source, tokens, string_index)?;
+
     Some(TsSymbolSlot {
         kind,
+        literal_start: span.start as usize,
+        literal_end: span.end as usize,
         content_start,
         content_end,
     })
@@ -236,6 +276,8 @@ fn unterminated_string_slot(
 
             Some(TsSymbolSlot {
                 kind: argument.kind,
+                literal_start: start,
+                literal_end: end,
                 content_start: start + 1,
                 content_end: end,
             })

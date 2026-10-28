@@ -4,6 +4,7 @@ pub mod call_site;
 pub mod document;
 pub mod symbol_slot;
 pub mod ts;
+pub mod validation;
 
 pub use call_site::{enclosing_call, CallSite};
 pub use document::{ParsedDocument, StringLiteral};
@@ -12,3 +13,4 @@ pub use symbol_slot::{
     PYTHON_SYMBOLS,
 };
 pub use ts::{ts_symbol_slot_at, TsLanguage, TsSymbolSlot};
+pub use validation::{python_diagnostics, ts_diagnostics, SymbolDiagnostic};

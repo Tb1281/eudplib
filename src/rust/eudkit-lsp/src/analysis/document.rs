@@ -7,7 +7,7 @@
 use ruff_python_ast::token::{Token, TokenKind};
 use ruff_python_ast::StringFlags;
 use ruff_python_parser::{parse_unchecked, Mode, ParseOptions};
-use ruff_text_size::{Ranged, TextSize};
+use ruff_text_size::Ranged;
 
 /// A parsed Python document backed by its source text and token stream.
 #[derive(Debug)]
@@ -43,52 +43,58 @@ impl<'a> ParsedDocument<'a> {
         &self.source[token.range()]
     }
 
+    /// All string literals in the document, including unclosed ones.
+    pub fn string_literals(&self) -> Vec<StringLiteral<'a>> {
+        self.tokens
+            .iter()
+            .enumerate()
+            .filter_map(|(token_index, token)| self.string_literal(token_index, token))
+            .collect()
+    }
+
     /// Find the string literal containing `offset`.
     ///
     /// The offset is a byte offset into the source and must be on a character
     /// boundary. The end of an unclosed literal counts as inside the literal so
     /// that `KillUnit("` and `KillUnit("Mar` both work while the user is typing.
     pub fn string_literal_at(&self, offset: usize) -> Option<StringLiteral<'a>> {
-        let offset = TextSize::new(u32::try_from(offset).ok()?);
+        self.string_literals()
+            .into_iter()
+            .find(|literal| offset >= literal.content_start && offset <= literal.content_end)
+    }
 
-        self.tokens
-            .iter()
-            .enumerate()
-            .find_map(|(token_index, token)| {
-                if token.kind() != TokenKind::String {
-                    return None;
-                }
+    fn string_literal(&self, token_index: usize, token: &Token) -> Option<StringLiteral<'a>> {
+        if token.kind() != TokenKind::String {
+            return None;
+        }
 
-                let flags = token.string_flags()?;
-                let start = token.start().to_usize();
-                let end = token.end().to_usize();
-                let text = &self.source[start..end];
-                let prefix_len = text.find(['\'', '"'])?;
-                let quote_len = flags.quote_len().to_usize();
-                let content_start = start + prefix_len + quote_len;
-                let content_end = if flags.is_unclosed() {
-                    end
-                } else {
-                    end.checked_sub(quote_len)?
-                };
+        let flags = token.string_flags()?;
+        let start = token.start().to_usize();
+        let end = token.end().to_usize();
+        let text = &self.source[start..end];
+        let prefix_len = text.find(['\'', '"'])?;
+        let quote_len = flags.quote_len().to_usize();
+        let content_start = start + prefix_len + quote_len;
+        let content_end = if flags.is_unclosed() {
+            end
+        } else {
+            end.checked_sub(quote_len)?
+        };
 
-                if content_start > content_end {
-                    return None;
-                }
-                if offset < TextSize::new(u32::try_from(content_start).ok()?)
-                    || offset > TextSize::new(u32::try_from(content_end).ok()?)
-                {
-                    return None;
-                }
+        if content_start > content_end {
+            return None;
+        }
 
-                Some(StringLiteral {
-                    token_index,
-                    text,
-                    content_start,
-                    content_end,
-                    unclosed: flags.is_unclosed(),
-                })
-            })
+        Some(StringLiteral {
+            token_index,
+            text,
+            literal_start: start,
+            literal_end: end,
+            content_start,
+            content_end,
+            unclosed: flags.is_unclosed(),
+            interpolated: flags.is_interpolated_string(),
+        })
     }
 }
 
@@ -97,9 +103,15 @@ impl<'a> ParsedDocument<'a> {
 pub struct StringLiteral<'a> {
     pub token_index: usize,
     pub text: &'a str,
+    /// Byte offset of the opening quote (including any string prefix).
+    pub literal_start: usize,
+    /// Byte offset just after the closing quote (or end of source when unclosed).
+    pub literal_end: usize,
     /// Byte offset of the first character after the opening quote.
     pub content_start: usize,
     /// Byte offset just after the literal content and before a closing quote.
     pub content_end: usize,
     pub unclosed: bool,
+    /// Whether this is an f-string or t-string with interpolation.
+    pub interpolated: bool,
 }

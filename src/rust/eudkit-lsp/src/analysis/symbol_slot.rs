@@ -169,7 +169,14 @@ impl SymbolSlot<'_> {
 
 /// Find the symbol slot containing `offset`, if any.
 pub fn symbol_slot_at<'a>(document: &ParsedDocument<'a>, offset: usize) -> Option<SymbolSlot<'a>> {
-    let literal = document.string_literal_at(offset)?;
+    symbol_slot_for_literal(document, document.string_literal_at(offset)?)
+}
+
+/// Find the symbol slot for a specific string literal, if any.
+pub fn symbol_slot_for_literal<'a>(
+    document: &ParsedDocument<'a>,
+    literal: StringLiteral<'a>,
+) -> Option<SymbolSlot<'a>> {
     let call = enclosing_call(document.tokens(), document.source(), literal.token_index)?;
 
     if !call.argument_is_direct {
@@ -186,6 +193,16 @@ pub fn symbol_slot_at<'a>(document: &ParsedDocument<'a>, offset: usize) -> Optio
         kind: argument.kind,
         literal,
     })
+}
+
+/// All closed string literals that occupy a symbol slot.
+pub fn symbol_slots<'a>(document: &ParsedDocument<'a>) -> Vec<SymbolSlot<'a>> {
+    document
+        .string_literals()
+        .into_iter()
+        .filter(|literal| !literal.unclosed && !literal.interpolated)
+        .filter_map(|literal| symbol_slot_for_literal(document, literal))
+        .collect()
 }
 
 #[cfg(test)]

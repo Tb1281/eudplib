@@ -193,6 +193,40 @@ impl LspClient {
         completion_labels(&response)
     }
 
+    fn diagnostics(&mut self) -> Vec<Value> {
+        let uri = self.uri.clone();
+        self.diagnostics_for(&uri)
+    }
+
+    fn diagnostics_for(&mut self, uri: &str) -> Vec<Value> {
+        loop {
+            let message = self.read_message();
+            if message.get("method").and_then(Value::as_str)
+                != Some("textDocument/publishDiagnostics")
+            {
+                continue;
+            }
+
+            let params = &message["params"];
+            if params.get("uri").and_then(Value::as_str) != Some(uri) {
+                continue;
+            }
+
+            return params
+                .get("diagnostics")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+        }
+    }
+
+    fn close_document(&mut self, uri: &str) {
+        self.notify(
+            "textDocument/didClose",
+            json!({ "textDocument": { "uri": uri } }),
+        );
+    }
+
     fn shutdown(mut self) -> String {
         let response = self.request("shutdown", Value::Null);
         assert!(response["result"].is_null(), "shutdown should return null");
@@ -391,6 +425,57 @@ fn assert_switch_canonical(labels: &[String]) {
         labels.len(),
         "switch names should be unique"
     );
+}
+
+fn assert_warning(diagnostic: &Value, expected: &str) {
+    assert_eq!(
+        diagnostic["severity"],
+        json!(2),
+        "expected a warning diagnostic: {diagnostic}"
+    );
+    assert_eq!(diagnostic["source"], json!("eudkit"));
+
+    let message = diagnostic["message"]
+        .as_str()
+        .expect("diagnostic should have a message");
+    assert!(
+        message.contains(expected),
+        "expected {expected:?} in diagnostic message {message:?}"
+    );
+}
+
+fn assert_range(diagnostic: &Value, text: &str, start: usize, end: usize) {
+    let (line, character) = position_at(text, start);
+    let (end_line, end_character) = position_at(text, end);
+
+    assert_eq!(
+        diagnostic["range"],
+        json!({
+            "start": { "line": line, "character": character },
+            "end": { "line": end_line, "character": end_character },
+        }),
+        "unexpected diagnostic range"
+    );
+}
+
+fn custom_unit_name(map_path: &Path) -> String {
+    let session = CompilationSession::from_map(map_path, CompilationConfig::default())
+        .expect("fixture map should load");
+
+    session
+        .map_context()
+        .unit_settings()
+        .iter()
+        .filter_map(|unit| unit.custom_name.as_deref())
+        .find(|name| {
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|character| character.is_ascii_graphic() || character == ' ')
+                && !name.contains(['"', '\'', '\\'])
+        })
+        .map(str::to_string)
+        .expect("fixture should contain an ASCII custom unit name")
 }
 
 #[test]
@@ -977,4 +1062,227 @@ fn does_not_complete_outside_the_unit_slot_in_typescript_and_javascript() {
     }
 
     client.shutdown();
+}
+
+#[test]
+fn warns_about_unknown_map_symbols_in_python_and_clears_them() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    let unknown_unit = "KillUnit(\"Not A Unit\")";
+    client.open(unknown_unit);
+    let diagnostics = client.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_warning(&diagnostics[0], "Unknown unit \"Not A Unit\"");
+    let unit_start = unknown_unit.find('"').unwrap();
+    assert_range(
+        &diagnostics[0],
+        unknown_unit,
+        unit_start,
+        unknown_unit.rfind('"').unwrap() + 1,
+    );
+
+    let valid = "KillUnit(\"Terran Marine\")";
+    client.change(valid, 2);
+    assert!(
+        client.diagnostics().is_empty(),
+        "fixing the unit should clear its warning"
+    );
+
+    let unknown_location = "Bring(AllPlayers, AtLeast, 1, \"Terran Marine\", \"Not A Location\")";
+    client.change(unknown_location, 3);
+    let diagnostics = client.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_warning(&diagnostics[0], "Unknown location \"Not A Location\"");
+    let location_start = unknown_location.find("\"Not A Location\"").unwrap();
+    assert_range(
+        &diagnostics[0],
+        unknown_location,
+        location_start,
+        location_start + "\"Not A Location\"".len(),
+    );
+
+    let unknown_switch = "SetSwitch(\"Not A Switch\")";
+    client.change(unknown_switch, 4);
+    let diagnostics = client.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_warning(&diagnostics[0], "Unknown switch \"Not A Switch\"");
+
+    client.close_document(URI);
+    assert!(
+        client.diagnostics_for(URI).is_empty(),
+        "closing the document should clear its warnings"
+    );
+
+    client.shutdown();
+}
+
+#[test]
+fn accepts_numeric_stock_filter_and_free_form_symbols_in_python() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    let source = concat!(
+        "KillUnit(229)\n",
+        "KillUnit(\"Any unit\")\n",
+        "KillUnit(\"Men\")\n",
+        "KillUnit(\"Buildings\")\n",
+        "KillUnit(\"Factories\")\n",
+        "KillUnit(\"300\")\n",
+        "KillUnit(\"-1\")\n",
+        "DisplayText(\"Not A Unit\")\n",
+        "MinimapPing(\"Anywhere\")\n",
+        "MinimapPing(\"Location 1\")\n",
+        "MinimapPing(\"Location 255\")\n",
+        "SetSwitch(\"Switch 1\")\n",
+        "SetSwitch(\"Switch 256\")\n",
+    );
+
+    client.open(source);
+    assert!(
+        client.diagnostics().is_empty(),
+        "valid symbols and free-form strings should not warn"
+    );
+
+    client.shutdown();
+}
+
+#[test]
+fn accepts_known_custom_units_and_named_locations_with_a_map_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let map_path = temp.path().join("map.scx");
+    copy_fixture_to("tests/outputmap/basemap/사이비2.scx", &map_path);
+    let custom_unit = custom_unit_name(&map_path);
+    write_project(temp.path(), "map.scx");
+    let document = temp.path().join("main.py");
+
+    let mut client = LspClient::spawn_for(&document);
+    client.initialize();
+
+    let valid =
+        format!("KillUnit(\"{custom_unit}\")\nMinimapPing(\"dvs1\")\nSetSwitch(\"Switch 1\")");
+    client.open(&valid);
+    assert!(
+        client.diagnostics().is_empty(),
+        "known custom unit {custom_unit:?} and named location should not warn"
+    );
+
+    let unknown = format!("KillUnit(\"{custom_unit} Unknown\")");
+    client.change(&unknown, 2);
+    let diagnostics = client.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_warning(&diagnostics[0], "Unknown unit");
+
+    client.shutdown();
+}
+
+#[test]
+fn warns_about_unknown_map_symbols_in_typescript_and_javascript_and_clears_them() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    for (uri, language_id) in [
+        (TYPESCRIPT_URI, "typescript"),
+        (JAVASCRIPT_URI, "javascript"),
+    ] {
+        let source = concat!(
+            "KillUnit(\"Not A Unit\");\n",
+            "Bring(AllPlayers, AtLeast, 1, \"Terran Marine\", \"Not A Location\");\n",
+            "SetSwitch(\"Not A Switch\");\n",
+        );
+        client.open_document(uri, language_id, source);
+        let diagnostics = client.diagnostics_for(uri);
+        assert_eq!(diagnostics.len(), 3, "{language_id}");
+        assert_warning(&diagnostics[0], "Unknown unit");
+        assert_warning(&diagnostics[1], "Unknown location");
+        assert_warning(&diagnostics[2], "Unknown switch");
+
+        client.change_document(uri, "KillUnit(\"Terran Marine\");", 2);
+        assert!(
+            client.diagnostics_for(uri).is_empty(),
+            "{language_id} should clear fixed warnings"
+        );
+
+        client.change_document(uri, "KillUnit(\"Not A Unit\");", 3);
+        assert_eq!(
+            client.diagnostics_for(uri).len(),
+            1,
+            "{language_id} should warn again after the fix is reverted"
+        );
+
+        client.close_document(uri);
+        assert!(
+            client.diagnostics_for(uri).is_empty(),
+            "{language_id} should clear warnings on close"
+        );
+    }
+
+    client.shutdown();
+}
+
+#[test]
+fn accepts_numeric_stock_filter_and_free_form_symbols_in_typescript_and_javascript() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    let source = concat!(
+        "KillUnit(229);\n",
+        "KillUnit(\"Any unit\");\n",
+        "KillUnit(\"Men\");\n",
+        "KillUnit(\"Buildings\");\n",
+        "KillUnit(\"Factories\");\n",
+        "KillUnit(\"300\");\n",
+        "KillUnit(\"-1\");\n",
+        "DisplayText(\"Not A Unit\");\n",
+        "MinimapPing(\"Anywhere\");\n",
+        "MinimapPing(\"Location 1\");\n",
+        "SetSwitch(\"Switch 256\");\n",
+    );
+
+    for (uri, language_id) in [
+        (TYPESCRIPT_URI, "typescript"),
+        (JAVASCRIPT_URI, "javascript"),
+    ] {
+        client.open_document(uri, language_id, source);
+        assert!(
+            client.diagnostics_for(uri).is_empty(),
+            "{language_id} should not warn about valid symbols"
+        );
+
+        client.close_document(uri);
+        let _ = client.diagnostics_for(uri);
+    }
+
+    client.shutdown();
+}
+
+#[test]
+fn accepts_known_custom_units_in_typescript_with_a_map_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let map_path = temp.path().join("map.scx");
+    copy_fixture_to("tests/outputmap/basemap/사이비2.scx", &map_path);
+    let custom_unit = custom_unit_name(&map_path);
+    write_project(temp.path(), "map.scx");
+
+    for (file_name, language_id) in [("main.ts", "typescript"), ("main.js", "javascript")] {
+        let document = temp.path().join(file_name);
+        let uri = path_to_uri(&document);
+        let mut client = LspClient::spawn_for(&document);
+        client.initialize();
+
+        let valid = format!("KillUnit(\"{custom_unit}\");");
+        client.open_document(&uri, language_id, &valid);
+        assert!(
+            client.diagnostics_for(&uri).is_empty(),
+            "{language_id} should accept known custom unit {custom_unit:?}"
+        );
+
+        let unknown = format!("KillUnit(\"{custom_unit} Unknown\");");
+        client.change_document(&uri, &unknown, 2);
+        let diagnostics = client.diagnostics_for(&uri);
+        assert_eq!(diagnostics.len(), 1, "{language_id}");
+        assert_warning(&diagnostics[0], "Unknown unit");
+
+        client.shutdown();
+    }
 }

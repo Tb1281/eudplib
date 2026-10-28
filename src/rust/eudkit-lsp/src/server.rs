@@ -3,14 +3,16 @@
 use std::collections::HashMap;
 use std::error::Error;
 
-use crate::analysis::{ParsedDocument, TsLanguage};
-use crate::completion::{completions_at_with_context, ts_completions_at};
+use crate::analysis::{python_diagnostics, ts_diagnostics, ParsedDocument, TsLanguage};
+use crate::completion::{completions_at_with_context, offset_to_position, ts_completions_at};
 use crate::project::ProjectCache;
-use lsp_server::{Connection, ErrorCode, Message, Request, Response};
+use eudkit_core::map_context::MapContext;
+use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response};
 use lsp_types::{
-    CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
-    DidOpenTextDocumentParams, InitializeParams, Position, ServerCapabilities,
-    TextDocumentSyncKind,
+    CompletionOptions, CompletionParams, CompletionResponse, Diagnostic, DiagnosticSeverity,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    InitializeParams, Position, PublishDiagnosticsParams, Range as LspRange, ServerCapabilities,
+    TextDocumentSyncKind, Uri,
 };
 use url::Url;
 
@@ -68,6 +70,7 @@ fn main_loop(connection: Connection) -> ServerResult<()> {
             }
             Message::Notification(notification) => {
                 handle_notification(
+                    &connection,
                     &notification.method,
                     notification.params.clone(),
                     &mut state,
@@ -127,32 +130,104 @@ fn completion_response(
     Some(CompletionResponse::Array(items))
 }
 
-fn handle_notification(method: &str, params: serde_json::Value, state: &mut ServerState) {
+fn handle_notification(
+    connection: &Connection,
+    method: &str,
+    params: serde_json::Value,
+    state: &mut ServerState,
+) {
     match method {
         "textDocument/didOpen" => {
             if let Ok(params) = serde_json::from_value::<DidOpenTextDocumentParams>(params) {
+                let uri = params.text_document.uri.as_str().to_string();
                 state.documents.insert(
-                    params.text_document.uri.as_str().to_string(),
+                    uri.clone(),
                     Document {
                         text: params.text_document.text,
                         language_id: params.text_document.language_id,
                     },
                 );
+                publish_diagnostics(connection, state, &uri);
             }
         }
         "textDocument/didChange" => {
             if let Ok(params) = serde_json::from_value::<DidChangeTextDocumentParams>(params) {
+                let uri = params.text_document.uri.as_str().to_string();
                 if let Some(change) = params.content_changes.into_iter().next_back() {
-                    if let Some(document) =
-                        state.documents.get_mut(params.text_document.uri.as_str())
-                    {
+                    if let Some(document) = state.documents.get_mut(&uri) {
                         document.text = change.text;
                     }
                 }
+                publish_diagnostics(connection, state, &uri);
+            }
+        }
+        "textDocument/didClose" => {
+            if let Ok(params) = serde_json::from_value::<DidCloseTextDocumentParams>(params) {
+                let uri = params.text_document.uri.as_str().to_string();
+                state.documents.remove(&uri);
+                send_diagnostics(connection, &uri, Vec::new());
             }
         }
         _ => {}
     }
+}
+
+/// Validate the open document and publish its Map Symbol warnings.
+fn publish_diagnostics(connection: &Connection, state: &mut ServerState, uri: &str) {
+    let ServerState {
+        documents,
+        projects,
+    } = state;
+    let Some(document) = documents.get(uri) else {
+        return;
+    };
+    let map_context = Url::parse(uri)
+        .ok()
+        .and_then(|url| url.to_file_path().ok())
+        .and_then(|path| projects.map_context_for_document(&path));
+    let diagnostics = document_diagnostics(document, map_context.as_deref());
+    send_diagnostics(connection, uri, diagnostics);
+}
+
+fn document_diagnostics(document: &Document, map_context: Option<&MapContext>) -> Vec<Diagnostic> {
+    let diagnostics = match document.language_id.as_str() {
+        "python" => python_diagnostics(&document.text, map_context),
+        language_id => match TsLanguage::from_language_id(language_id) {
+            Some(language) => ts_diagnostics(&document.text, language, map_context),
+            None => return Vec::new(),
+        },
+    };
+
+    diagnostics
+        .into_iter()
+        .map(|diagnostic| Diagnostic {
+            range: LspRange::new(
+                offset_to_position(&document.text, diagnostic.range.start),
+                offset_to_position(&document.text, diagnostic.range.end),
+            ),
+            severity: Some(DiagnosticSeverity::WARNING),
+            source: Some("eudkit".to_string()),
+            message: diagnostic.message,
+            ..Diagnostic::default()
+        })
+        .collect()
+}
+
+fn send_diagnostics(connection: &Connection, uri: &str, diagnostics: Vec<Diagnostic>) {
+    let Ok(uri) = uri.parse::<Uri>() else {
+        return;
+    };
+    let params = PublishDiagnosticsParams {
+        uri,
+        diagnostics,
+        version: None,
+    };
+    let _ = connection
+        .sender
+        .send(Message::Notification(Notification::new(
+            "textDocument/publishDiagnostics".to_string(),
+            params,
+        )));
 }
 
 /// Convert an LSP UTF-16 position to a byte offset in `source`.
