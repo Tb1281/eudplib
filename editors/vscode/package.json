@@ -2,7 +2,7 @@
   "name": "eudkit-vscode",
   "displayName": "eudkit LSP",
   "description": "Canonical unit completion for eudplib Python, TypeScript, and JavaScript Frontend files from eudkit-lsp.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "eudkit",
   "license": "MIT",
   "repository": {
@@ -64,7 +64,7 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "verify:vsix": "node scripts/verify-vsix.mjs",
-    "package": "npm run check && npm run build -- --production && vsce package --no-dependencies --out dist/eudkit-vscode-0.1.0.vsix"
+    "package": "npm run check && npm run build -- --production && node scripts/package-vsix.mjs"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

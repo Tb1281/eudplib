@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
-const vsix = process.argv[2] ?? "dist/eudkit-vscode-0.1.0.vsix";
+const localPackageJson = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+);
+const vsix =
+  process.argv[2] ?? `dist/eudkit-vscode-${localPackageJson.version}.vsix`;
 
 if (!existsSync(vsix)) {
   console.error(`VSIX not found: ${vsix}`);
@@ -53,22 +57,32 @@ if (forbidden.length > 0) {
   process.exit(1);
 }
 
-const packageJson = JSON.parse(
+const packagedPackageJson = JSON.parse(
   execFileSync("unzip", ["-p", vsix, "extension/package.json"], {
     encoding: "utf8",
   }),
 );
-if (packageJson.repository?.url !== "https://github.com/Tb1281/eudplib") {
+if (packagedPackageJson.version !== localPackageJson.version) {
   console.error(
-    `VSIX package.json has the wrong repository URL: ${packageJson.repository?.url}`,
+    `VSIX package.json has version ${packagedPackageJson.version}, but ` +
+      `editors/vscode/package.json has ${localPackageJson.version}`,
   );
   process.exit(1);
 }
-if (packageJson.license !== "MIT") {
-  console.error(`VSIX package.json has the wrong license: ${packageJson.license}`);
+if (packagedPackageJson.repository?.url !== "https://github.com/Tb1281/eudplib") {
+  console.error(
+    `VSIX package.json has the wrong repository URL: ${packagedPackageJson.repository?.url}`,
+  );
+  process.exit(1);
+}
+if (packagedPackageJson.license !== "MIT") {
+  console.error(
+    `VSIX package.json has the wrong license: ${packagedPackageJson.license}`,
+  );
   process.exit(1);
 }
 
 console.log(
-  `Verified ${vsix}: ${entries.length} entries, README/LICENSE/TESTING/bundle present, repository ${packageJson.repository.url}.`,
+  `Verified ${vsix}: ${entries.length} entries, README/LICENSE/TESTING/bundle present, ` +
+    `version ${localPackageJson.version}, repository ${packagedPackageJson.repository.url}.`,
 );

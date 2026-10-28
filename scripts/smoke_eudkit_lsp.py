@@ -5,7 +5,7 @@ Checks the CLI version contract and a real stdio LSP session, including the
 first canonical-unit completion after ``KillUnit("``.
 
 Usage:
-    python scripts/smoke_eudkit_lsp.py /path/to/eudkit-lsp [--expected-version 0.1.0]
+    python scripts/smoke_eudkit_lsp.py /path/to/eudkit-lsp [--expected-version 0.1.1]
 """
 
 from __future__ import annotations
@@ -77,9 +77,9 @@ def check_version(binary: Path, expected: str | None) -> str:
     return version
 
 
-def check_completion(binary: Path) -> None:
+def check_completion(binary: Path, server_args: list[str], label: str) -> None:
     proc = subprocess.Popen(
-        [str(binary)],
+        [str(binary), *server_args],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -142,7 +142,7 @@ def check_completion(binary: Path) -> None:
             raise SystemExit("completion is missing 'Terran Marine'")
         if "Any unit" in labels or any(label.startswith("UNI") for label in labels):
             raise SystemExit("completion contains non-canonical unit filters")
-        print(f"eudkit-lsp returned {len(labels)} canonical units")
+        print(f"{label}: eudkit-lsp returned {len(labels)} canonical units")
 
         send_message(
             proc.stdin,
@@ -163,7 +163,7 @@ def main() -> int:
     parser.add_argument("binary", type=Path, help="Path to eudkit-lsp")
     parser.add_argument(
         "--expected-version",
-        help="Required version without a leading v (for example 0.1.0)",
+        help="Required version without a leading v (for example 0.1.1)",
     )
     args = parser.parse_args()
 
@@ -171,7 +171,10 @@ def main() -> int:
     if not binary.is_file():
         raise SystemExit(f"eudkit-lsp binary not found: {binary}")
     check_version(binary, args.expected_version)
-    check_completion(binary)
+    # vscode-languageclient launches the server with `--stdio`; both that and
+    # the bare invocation must serve a complete LSP session.
+    check_completion(binary, [], "default invocation")
+    check_completion(binary, ["--stdio"], "--stdio invocation")
     print(f"eudkit-lsp smoke test passed for {binary}")
     return 0
 
