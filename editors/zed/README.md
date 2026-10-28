@@ -59,13 +59,13 @@ Stock Unit Filter are defined in [`GLOSSARY.md`](../../GLOSSARY.md).
 ### Release source package
 
 GitHub Releases publish a dev-extension source archive named
-`eudkit-zed-0.1.0.tar.gz`. It contains `extension.toml`, `Cargo.toml`,
+`eudkit-zed-0.1.1.tar.gz`. It contains `extension.toml`, `Cargo.toml`,
 `Cargo.lock`, `src/`, `README.md`, `TESTING.md`, and `LICENSE`; build output
 such as `target/` and `extension.wasm` is excluded.
 
 1. Extract the archive.
 2. In Zed, run `zed: extensions`, click **Install Dev Extension**, and select
-   the extracted `eudkit-zed-0.1.0` directory (the one containing
+   the extracted `eudkit-zed-0.1.1` directory (the one containing
    `extension.toml`).
 3. Zed compiles the extension to WebAssembly, which requires a Rust toolchain
    with the `wasm32-wasip2` target **for this dev-extension install step only**.
@@ -121,15 +121,15 @@ If `EUDKIT_LSP_PATH` is unset and `eudkit-lsp` is not on `PATH`, the extension
 downloads the release asset for the current platform from:
 
 ```text
-https://github.com/Tb1281/eudplib/releases/download/v0.1.0/<asset>
+https://github.com/Tb1281/eudplib/releases/download/v0.1.1/<asset>
 ```
 
 The version is pinned at compile time from this package's `CARGO_PKG_VERSION`
-(`0.1.0`). It **must** match the GitHub release tag. The cache directory is also
+(`0.1.1`). It **must** match the GitHub release tag. The cache directory is also
 version-scoped:
 
 ```text
-eudkit-lsp-0.1.0/<asset>
+eudkit-lsp-0.1.1/<asset>
 ```
 
 ### Why there is no runtime `--version` check
@@ -139,7 +139,7 @@ so the Zed extension cannot run `eudkit-lsp --version` the way the VS Code
 extension does. Version compatibility is instead enforced structurally:
 
 - the download URL is pinned to the extension's own release tag
-  (`0.1.0` → `v0.1.0`);
+  (`0.1.1` → `v0.1.1`);
 - the cache is keyed by that same version, so a different extension version
   never reuses another version's binary;
 - the SHA-256 companion is required and verified before the binary is moved
@@ -166,8 +166,8 @@ Downloads are cached in the extension work directory (not in this repository):
 - macOS: `~/Library/Application Support/Zed/extensions/work/eudkit-lsp/`
 - Windows: `%LOCALAPPDATA%\Zed\extensions\work\eudkit-lsp\`
 
-The exact layout is `eudkit-lsp-0.1.0/<asset>` plus
-`eudkit-lsp-0.1.0/<asset>.sha256`.
+The exact layout is `eudkit-lsp-0.1.1/<asset>` plus
+`eudkit-lsp-0.1.1/<asset>.sha256`.
 
 ## Binary resolution order
 

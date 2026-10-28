@@ -54,11 +54,11 @@ A version mismatch is an actionable error, not a silent start.
 
 ### Release downloads
 
-Downloads are pinned to the extension's own package version. An `0.1.0`
+Downloads are pinned to the extension's own package version. An `0.1.1`
 extension fetches:
 
 ```text
-https://github.com/Tb1281/eudplib/releases/download/v0.1.0/<asset>
+https://github.com/Tb1281/eudplib/releases/download/v0.1.1/<asset>
 ```
 
 The published `<asset>.sha256` companion is mandatory. The extension downloads
