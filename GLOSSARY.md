@@ -61,5 +61,17 @@ An EUD memory technique that continuously resets StarCraft's trigger loop countd
 _Avoid_: Hyper trigger hack, turbo tick
 
 **Reactive Rule**:
-A declarative trigger construct (`once`, `when`, `until`, `after`, `every`) evaluated on each Trigger Loop and lowered to deterministic 4-byte memory counters without using engine `Wait` actions.
+A declarative trigger construct (`once`, `when`, `until`, `after`, `every`) evaluated on each Trigger Loop and lowered to deterministic 4-byte memory counters without using engine `Wait` actions. Distinguished from procedural control flow (`if`, `while`, `for` within function bodies), reactive rules declare standing event-like lifecycle and timing constraints across Trigger Loops.
 _Avoid_: Event listener, callback hook
+
+**MapString (`session.map_string`)**:
+An immutable, deduplicated string reference registered in StarCraft's static CHK `STR` section. Read-only; cannot be formatted or modified dynamically at runtime. Displayed as-is via `.display()` (chat log) or `.display_at(line)` (fixed HUD line).
+_Avoid_: Dynamic map string, mutable string ID
+
+**String (`session.string`)**:
+A mutable, format-capable string allocation in StarCraft's `STRx` section relocated at `0x191943C8`, instantiated via the canonical `session.string(content)` factory (accepting either integer byte capacity or initial text). In-game formatting (`.format()`) mutates the buffer in memory silently; `.display(*args)` formats and displays to the scrolling chat log in a single coalesced trigger; `.display_at(line, *args)` formats and displays to a fixed screen overlay line.
+_Avoid_: StringBuffer, DBString, EUDString, dynamic string struct, raw Db buffer
+
+**Screen Overlay Text (`display_at`)**:
+A fixed, non-scrolling text write directly to StarCraft's 13-line on-screen HUD buffer (`0x00640B58`, lines `0..=12`), as distinguished from `DisplayText` (which appends messages to the scrolling chat log). Lowered to in-place screen buffer writes.
+_Avoid_: print_at, f_print_at, raw text HUD poke

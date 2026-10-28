@@ -286,9 +286,17 @@ export function f_eprintln(template: string, ...args: ExprLike[]): Action {
   return new Action("f_eprintln", [template, ...args]);
 }
 
-export function print_at(line: number, template: string, ...args: ExprLike[]): Action {
-  return new Action("print_at", [line, template, ...args]);
+export function display_at(line: number, template: string, ...args: ExprLike[]): Action {
+  return new Action("display_at", [line, template, ...args]);
 }
+
+export const displayAt = display_at;
+export const DisplayTextAt = display_at;
+
+/**
+ * @deprecated Use `display_at` or `displayAt` instead.
+ */
+export const print_at = display_at;
 
 export function DisplayTextId(stringId: number, alwaysDisplay: boolean = true): Action {
   return new Action("DisplayTextId", [stringId, alwaysDisplay]);
@@ -478,6 +486,75 @@ export class MapString {
   public display(alwaysDisplay: boolean = true): Action {
     return new Action("DisplayTextId", [this.id, alwaysDisplay]);
   }
+
+  public display_at(line: number): Action {
+    return display_at(line, this.text);
+  }
+
+  public displayAt(line: number): Action {
+    return this.display_at(line);
+  }
+
+  public format(..._args: any[]): never {
+    throw new TypeError(
+      "MapString is static and cannot be formatted. Use string() for dynamic formatted buffers."
+    );
+  }
+}
+
+export class StringBuffer extends MapString {
+  constructor(content: number | string = 1024) {
+    const initialText = typeof content === "number" ? " ".repeat(content) : content;
+    super(initialText);
+  }
+
+  public printf(...args: any[]): Action {
+    return new Action("FormatString", [this.id, ...args]);
+  }
+
+  public format(...args: any[]): Action {
+    return new Action("FormatString", [this.id, ...args]);
+  }
+
+  public display(...args: any[]): Action | Action[] {
+    if (args.length > 0 && typeof args[0] !== "boolean") {
+      return [this.format(...args), super.display(true)];
+    }
+    const alwaysDisplay = args.length > 0 && typeof args[0] === "boolean" ? args[0] : true;
+    return super.display(alwaysDisplay);
+  }
+
+  public display_at(line: number, ...args: any[]): Action {
+    if (args.length > 0 && typeof args[0] === "string") {
+      return display_at(line, args[0], ...args.slice(1));
+    }
+    return display_at(line, this.text, ...args);
+  }
+
+  public displayAt(line: number, ...args: any[]): Action {
+    return this.display_at(line, ...args);
+  }
+
+  /**
+   * @deprecated Use `display_at` or `displayAt` instead.
+   */
+  public print_at(line: number, ...args: any[]): Action {
+    return this.display_at(line, ...args);
+  }
+}
+
+/**
+ * Creates or registers a mutable formatted string buffer in the map's STRx section.
+ */
+export function string(content: number | string = 1024): StringBuffer {
+  return new StringBuffer(content);
+}
+
+/**
+ * @deprecated Use `string()` instead.
+ */
+export function stringBuffer(content: number | string = 1024): StringBuffer {
+  return string(content);
 }
 
 /**

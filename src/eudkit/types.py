@@ -1019,23 +1019,38 @@ class MapString:
             raise RuntimeError("MapString requires a Session to resolve EPD")
         return self._ensure_registered(sess).epd
 
-    def display(self, always: bool = True) -> ActionSpec:
+    def display(self, *args: Any, always: bool = True) -> ActionSpec:
+        """Displays this static map string to the chat log."""
+        if args:
+            raise TypeError(
+                "MapString is static and cannot be formatted with dynamic arguments. "
+                "Use session.string(...) for dynamic formatted string buffers."
+            )
         return ActionSpec(
             lambda s: _rust_eudkit.RawAction.display_text_id(
                 self._ensure_registered(s).id, bool(always)
             )
         )
 
+    def display_at(self, line: int, *args: Any) -> ActionSpec:
+        """Displays this static map string to a fixed screen line (0..12)."""
+        if args:
+            raise TypeError(
+                "MapString is static and cannot be formatted with dynamic arguments. "
+                "Use session.string(...) for dynamic formatted string buffers."
+            )
+        return display_at(line, self.text)
+
     display_text = display
     Display = display
+    print_at = display_at
 
     def format(self, *args: Any) -> ActionSpec:
-        """Formats dynamic expressions into this MapString buffer."""
-        def _build(s: Session) -> _rust_eudkit.RawAction:
-            str_id = self._ensure_registered(s).id
-            template, raw_args = _build_format_template_and_args(args, s)
-            return _rust_eudkit.RawAction.format_map_string(str_id, template or self.text, raw_args)
-        return ActionSpec(_build)
+        """Restricts formatting on static MapString."""
+        raise TypeError(
+            "MapString is static and cannot be formatted. "
+            "Use session.string(...) to allocate a dynamic formatted string buffer."
+        )
 
     def __repr__(self) -> str:
         if self._raw_info is not None:
@@ -1068,6 +1083,31 @@ class StringBuffer(MapString):
             initial_text = str(content)
         super().__init__(initial_text, session=session)
 
+    def format(self, *args: Any) -> ActionSpec:
+        """Formats dynamic expressions into this buffer."""
+        def _build(s: Session) -> _rust_eudkit.RawAction:
+            str_id = self._ensure_registered(s).id
+            if (
+                args
+                and not isinstance(args[0], str)
+                and any(spec in self.text for spec in ("%d", "%x", "%X", "%i", "%u", "%s", "%p"))
+            ):
+                template = self.text
+                raw_args = [_coerce_raw_expr(a, s) for a in args]
+            else:
+                template, raw_args = _build_format_template_and_args(args, s)
+            return _rust_eudkit.RawAction.format_map_string(str_id, template or self.text, raw_args)
+        return ActionSpec(_build)
+
+    def display(self, *args: Any, always: bool = True) -> ActionSpec | list[ActionSpec]:
+        """Displays this buffer to chat, optionally formatting arguments first."""
+        if args:
+            return [self.format(*args), super().display(always=always)]
+        return super().display(always=always)
+
+    display_text = display
+    Display = display
+
     def printf(self, *args: Any) -> ActionSpec:
         """Formats dynamic expressions into this buffer."""
         return self.format(*args)
@@ -1080,11 +1120,15 @@ class StringBuffer(MapString):
         """Formats dynamic expressions into this buffer (v1 API compatibility)."""
         return self.format(*args)
 
-    def print_at(self, line: int, *args: Any) -> ActionSpec:
-        """Prints this buffer or formatted expressions to a screen line."""
+    def display_at(self, line: int, *args: Any) -> ActionSpec:
+        """Displays this buffer or formatted expressions to a fixed screen line (0..12)."""
         if args:
-            return print_at(line, *args)
-        return print_at(line, self)
+            if not isinstance(args[0], str) and any(spec in self.text for spec in ("%d", "%x", "%X", "%i", "%u", "%s", "%p")):
+                return display_at(line, self.text, *args)
+            return display_at(line, *args)
+        return display_at(line, self.text)
+
+    print_at = display_at
 
     def __repr__(self) -> str:
         if self._raw_info is not None:
@@ -1097,6 +1141,7 @@ class StringBuffer(MapString):
 
 EUDString = StringBuffer
 DBString = StringBuffer
+String = StringBuffer
 
 
 def _build_format_template_and_args(
@@ -1171,13 +1216,18 @@ def displayText(*args: Any, always_display: bool = True) -> ActionSpec:
 DisplayText = displayText
 
 
-def print_at(line: int, *args: Any) -> ActionSpec:
+def display_at(line: int, *args: Any) -> ActionSpec:
+    """Displays text or formatted values to a fixed on-screen HUD line (0..12)."""
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.print_at(
             int(line),
             *_build_format_template_and_args(args, s),
         )
     )
+
+
+DisplayTextAt = display_at
+print_at = display_at
 
 
 def DisplayTextId(string_id: int, always_display: bool = True) -> ActionSpec:

@@ -627,11 +627,23 @@ class TestEudkitPythonFrontend(unittest.TestCase):
         self.assertEqual(ms1.address, 0x191943C8 + ms1.offset)
         self.assertEqual(ms1.epd, (ms1.address - 0x58A364) // 4)
 
+        # MapString is static: formatting or passing args must raise TypeError
+        with self.assertRaises(TypeError):
+            ms3.format(12345)
+        with self.assertRaises(TypeError):
+            ms1.display(12345)
+        with self.assertRaises(TypeError):
+            ms1.display_at(0, 12345)
+
+        # Dynamic string buffer supports formatting
+        buf = session.string(64)
+
         # String display and format actions
         @session.fn
         def main():
             ms1.display()
-            ms3.format(12345)
+            ms1.display_at(0)
+            buf.format(12345)
 
         hir_text = session.dump_hir()
         self.assertIn("DisplayTextId", hir_text)
@@ -1076,6 +1088,35 @@ class TestEudkitPythonFrontend(unittest.TestCase):
         self.assertGreater(rep.payload_size, 0)
         if out_path.exists():
             out_path.unlink()
+
+    def test_session_string_api(self):
+        """Verify session.string() canonical constructor and backward-compatible alias."""
+        import eudkit
+
+        session = eudkit.Session(TESTMAP_PATH)
+        s1 = session.string(256)
+        s2 = session.string("Template: %d")
+        s3 = session.string_buffer(128)
+
+        self.assertGreater(s1.id, 0)
+        self.assertGreater(s2.id, 0)
+        self.assertGreater(s3.id, 0)
+        self.assertEqual(len(s1.text), 256)
+        self.assertEqual(s2.text, "Template: %d")
+        self.assertEqual(len(s3.text), 128)
+
+        # Test pre-templated string formatting without repeating template
+        v = session.var(42)
+        @session.fn
+        def run():
+            s2.format(v)
+            s2.display()
+            s2.display(v)
+            s2.display_at(0, v)
+            session.display_at(1, "Fixed: %d", v)
+            eudkit.display_at(2, "Standalone: %d", v)
+            eudkit.DisplayTextAt(3, "Alias: %d", v)
+            eudkit.print_at(4, "Legacy: %d", v)
 
 
 if __name__ == "__main__":

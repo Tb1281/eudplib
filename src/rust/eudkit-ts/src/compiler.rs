@@ -1524,7 +1524,7 @@ impl<'a> TsCompiler<'a> {
                     always_display: true,
                 }))
             }
-            "print_at" | "PrintAt" => {
+            "print_at" | "PrintAt" | "display_at" | "displayAt" | "DisplayTextAt" => {
                 let line = if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
                     self.eval_const_expr(arg0)? as u8
                 } else {

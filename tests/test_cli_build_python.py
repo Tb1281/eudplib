@@ -131,10 +131,12 @@ output_map = "project_out1.scx"
 """
             )
 
+            env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src")}
             # 1. Zero-arg build inside project directory
             res1 = subprocess.run(
                 [sys.executable, "-m", "eudkit.cli", "build"],
                 cwd=cwd,
+                env=env,
                 capture_output=True,
                 text=True,
             )
@@ -145,6 +147,7 @@ output_map = "project_out1.scx"
             res2 = subprocess.run(
                 [sys.executable, "-m", "eudkit.cli", "build", "--output", str(out2)],
                 cwd=cwd,
+                env=env,
                 capture_output=True,
                 text=True,
             )
@@ -153,9 +156,11 @@ output_map = "project_out1.scx"
 
     def test_python_cli_missing_arguments_errors_cleanly(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
+            env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src")}
             res = subprocess.run(
                 [sys.executable, "-m", "eudkit.cli", "build"],
                 cwd=tmpdir,
+                env=env,
                 capture_output=True,
                 text=True,
             )

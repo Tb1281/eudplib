@@ -636,6 +636,10 @@ class AstToHirLowerer:
         res = self.eval_expr(expr)
         if isinstance(res, ActionSpec):
             self.session.do(res)
+        elif isinstance(res, (list, tuple)):
+            for r in res:
+                if isinstance(r, ActionSpec):
+                    self.session.do(r)
 
     def _expand_if_clauses(
         self, node: ast.If

@@ -17,6 +17,7 @@ from .types import (
     _active_builder_session,
     coerce_conditions,
     displayText,
+    display_at,
     f_eprintln,
     print_at,
 )
@@ -118,9 +119,13 @@ class Session:
         """Registers or retrieves a MapString inside this Compilation Session."""
         return MapString(text, session=self)
 
-    def string_buffer(self, content: str | int = 1024) -> StringBuffer:
-        """Allocates or registers a typed StringBuffer inside this Compilation Session."""
+    def string(self, content: str | int = 1024) -> StringBuffer:
+        """Allocates or registers a format-capable string inside this Compilation Session."""
         return StringBuffer(content, session=self)
+
+    def string_buffer(self, content: str | int = 1024) -> StringBuffer:
+        """Deprecated alias for session.string(). Use session.string() instead."""
+        return self.string(content)
 
     def f_eprintln(self, *args: Any, always_display: bool = True) -> None:
         """Formats and displays text using CPString streaming actions."""
@@ -130,9 +135,11 @@ class Session:
         """Displays static or formatted text."""
         self.do(displayText(*args, always_display=always_display))
 
-    def print_at(self, line: int, *args: Any) -> None:
-        """Formats and writes text to a specific screen line (0..12)."""
-        self.do(print_at(line, *args))
+    def display_at(self, line: int, *args: Any) -> None:
+        """Formats and writes text to a fixed on-screen HUD line (0..12)."""
+        self.do(display_at(line, *args))
+
+    print_at = display_at
 
     @overload
     def fn(self, func: Callable[..., Any]) -> EudFunction: ...

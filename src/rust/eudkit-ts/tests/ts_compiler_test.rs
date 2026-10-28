@@ -184,7 +184,7 @@ fn compiles_typescript_format_print_and_user_cp() {
     let map_ctx = session.map_context();
 
     let ts_source = r#"
-import { var_, IsUserCP, f_eprintln, print_at } from "@eudkit/sdk";
+import { var_, IsUserCP, f_eprintln, print_at, display_at, displayAt } from "@eudkit/sdk";
 
 let score = var_(150, "score");
 
@@ -192,6 +192,8 @@ export function main() {
     if (IsUserCP()) {
         f_eprintln("Current score: %d pts", score);
         print_at(3, "Fixed Line: %d", score);
+        display_at(4, "DisplayAt Line: %d", score);
+        displayAt(5, "CamelCase Line: %d", score);
     }
 }
 "#;
