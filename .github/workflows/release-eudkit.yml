@@ -18,6 +18,8 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    env:
+      CMAKE_GENERATOR: Ninja
     strategy:
       fail-fast: false
       matrix:
@@ -49,7 +51,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y zlib1g-dev libbz2-dev
+          sudo apt-get install -y ninja-build zlib1g-dev libbz2-dev
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
