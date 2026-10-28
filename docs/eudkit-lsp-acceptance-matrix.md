@@ -36,18 +36,36 @@ The Zed pass loaded the extension in a dev profile and started the same
 | VS Code reference UX, Python/TypeScript/JavaScript, with and without `eudkit.toml` | **PASS** | all reference checks below |
 | VS Code release download, checksum, cache, version probe | **PASS** | Output channel record; cached asset and `.sha256` present |
 | Zed extension load and server start, Python/TypeScript/JavaScript | **PASS** | Extension host log: 2 extensions loaded; 3 `eudkit-lsp` process starts |
-| Zed completion/diagnostic UI | **NOT EXECUTED** | No Zed UI test harness in this environment; shared server behavior is covered by the protocol matrix |
+| Zed completion/diagnostic UI | **NOT EXECUTED** | Zed's LSP client rendering was not driven; the extension contains no UI code, and shared server behavior is covered by the protocol matrix |
 | No-Rust VSIX installation | **PASS** | Release `eudkit-vscode-0.1.1.vsix` checksum verified and installed in a clean profile with `code --install-extension`; the installed bundle then passed the VS Code behavior matrix; no Rust used. |
 | Windows/macOS execution | **Not executed here** | Assets were built and checksum/format verified in the `v0.1.1` release workflow |
 
+### How Zed runs the extension
+
+Zed's language-server extensions have two documented parts
+([Developing Extensions](https://zed.dev/docs/extensions/developing-extensions),
+[Language Servers](https://zed.dev/docs/extensions/languages#language-servers)):
+
+1. `extension.toml` registers the server under `[language_servers.<id>]` and
+   lists the Zed language names it applies to.
+2. The Rust `Extension::language_server_command` method returns the executable,
+   its arguments, and environment variables.
+
+Zed then starts and supervises that process and renders its LSP responses with
+its own client. This extension implements only those two parts: the manifest
+registration plus `language_server_command`, which resolves the binary (or
+downloads and checksum-verifies it). It returns no arguments and no environment
+overrides, and it contains no completion, diagnostic, or UI code.
+
 The Zed extension API does not expose a test harness equivalent to the VS Code
-extension host, and this environment is Wayland-only, so the Zed completion
-menu was not driven programmatically. The extension is declarative: it
-registers `eudkit-lsp` for the four languages and contains no completion or
-diagnostic code. The behavior-bearing server pass is the protocol matrix below,
-and the Zed client pass confirms that the extension loads and starts that
-server for each MVP language. This record does not claim a Zed UI-level
-completion or diagnostic result. The manual Zed checklist remains in
+extension host, and this environment is Wayland-only, so the completion menu
+was not driven programmatically. Because the extension has no UI code, "the
+server starts for each MVP language" is the complete extension-level pass;
+everything rendered afterwards is Zed's stock LSP client. This record therefore
+marks Zed UI rendering as not executed rather than as a pass or a failure, and
+does not claim a Zed UI-level completion or diagnostic result. The official Zed
+docs document log-based debugging (`zed: open log`, `zed --foreground`) and do
+not describe an automated UI harness. The manual Zed checklist remains in
 [`editors/zed/TESTING.md`](../editors/zed/TESTING.md).
 
 ## Shared server protocol matrix
