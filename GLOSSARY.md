@@ -28,6 +28,18 @@ _Avoid_: Allocator, bundler, runtime
 The read-only schema of assets and entities (locations, strings, unit settings, players) extracted from an input `.scx`/`.scm` file for Frontend type-checking and symbol resolution.
 _Avoid_: Map data, CHK globals, string map
 
+**Map Symbol**:
+A named asset from the Map Context that a Frontend can reference by name or numeric ID, such as a location, unit setting, switch, or player.
+_Avoid_: Map name, CHK symbol
+
+**Canonical Symbol**:
+A StarCraft-defined name available without a Map Context, such as a stock unit name, player constant, or the `"Anywhere"` location.
+_Avoid_: Default symbol, builtin name
+
+**Stock Unit Filter**:
+A unit-list pseudo-value in a stock trigger (`"Any unit"`, `"Men"`, `"Buildings"`, `"Factories"`) that selects a category of units rather than one concrete unit.
+_Avoid_: Special unit, pseudo unit
+
 **Compilation Session**:
 An isolated, state-owning compilation instance that holds the `Map Context`, the `IR` under construction, and all configuration, replacing module-level global singletons.
 _Avoid_: Global state, phase manager
@@ -55,6 +67,10 @@ _Avoid_: Randomization, hardcoded obfuscation
 **Trigger Loop**:
 StarCraft's discrete trigger evaluation pass (roughly every 30-31 game frames in standard maps, or every single frame when an EUD Turbo Trigger is active). The fundamental unit of time for eudkit reactive timing rules (`after`, `every`).
 _Avoid_: Tick, frame, second
+
+**EUD Trigger**:
+A StarCraft trigger that overflows the unit field of a `Deaths` condition or `SetDeaths` action (including the `X` variants) to read or write arbitrary game memory through the player deaths table.
+_Avoid_: Bring trigger, memory trigger
 
 **EUD Turbo Trigger**:
 An EUD memory technique that continuously resets StarCraft's trigger loop countdown byte (`0x6509A0`) to 0, forcing trigger evaluation to execute every single game frame (~24 times per second on Fastest speed).
