@@ -627,7 +627,7 @@ export class MapString {
 
   constructor(public readonly text: string) {}
 
-  public display(alwaysDisplay: boolean = true): Action {
+  public display(alwaysDisplay: boolean = true): Action | Action[] {
     return new Action("DisplayTextId", [this.id, alwaysDisplay]);
   }
 
@@ -639,7 +639,7 @@ export class MapString {
     return this.display_at(line);
   }
 
-  public format(..._args: any[]): never {
+  public format(..._args: any[]): Action {
     throw new TypeError(
       "MapString is static and cannot be formatted. Use string() for dynamic formatted buffers."
     );
@@ -662,7 +662,11 @@ export class StringBuffer extends MapString {
 
   public display(...args: any[]): Action | Action[] {
     if (args.length > 0 && typeof args[0] !== "boolean") {
-      return [this.format(...args), super.display(true)];
+      const displayAction = super.display(true);
+      return [
+        this.format(...args),
+        ...(Array.isArray(displayAction) ? displayAction : [displayAction]),
+      ];
     }
     const alwaysDisplay = args.length > 0 && typeof args[0] === "boolean" ? args[0] : true;
     return super.display(alwaysDisplay);
@@ -707,8 +711,8 @@ export function map_string(text: string): MapString {
 export const session = {
   var: var_,
   string: string,
-  string_buffer: stringBuffer,
-  stringBuffer: stringBuffer,
+  string_buffer: string,
+  stringBuffer: string,
   map_string: map_string,
   mapString: map_string,
   display_at: display_at,
