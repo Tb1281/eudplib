@@ -298,6 +298,48 @@ jobs:
       - name: Display downloaded artifacts
         run: ls -la release-assets
 
+      - name: Verify release asset set
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          assets = Path("release-assets")
+          version = os.environ["EUDKIT_VERSION"]
+          binaries = [
+              f"eudkit-{platform}{suffix}"
+              for platform, suffix in [
+                  ("windows-x86_64", ".exe"),
+                  ("linux-x86_64", ""),
+                  ("macos-aarch64", ""),
+                  ("macos-x86_64", ""),
+              ]
+          ] + [
+              f"eudkit-lsp-{platform}{suffix}"
+              for platform, suffix in [
+                  ("windows-x86_64", ".exe"),
+                  ("linux-x86_64", ""),
+                  ("macos-aarch64", ""),
+                  ("macos-x86_64", ""),
+              ]
+          ]
+          packages = [
+              f"eudkit-vscode-{version}.vsix",
+              f"eudkit-zed-{version}.tar.gz",
+          ]
+          expected = binaries + packages
+          missing = [name for name in expected if not (assets / name).is_file()]
+          missing += [
+              f"{name}.sha256"
+              for name in expected
+              if not (assets / f"{name}.sha256").is_file()
+          ]
+          if missing:
+              raise SystemExit("Missing release assets:\n" + "\n".join(missing))
+          print(f"Release asset set present: {len(expected)} files plus checksums")
+          PY
+          (cd release-assets && sha256sum -c *.sha256)
+
       - name: Determine tag name
         id: tag
         run: |

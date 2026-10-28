@@ -22,14 +22,16 @@ try {
   process.exit(1);
 }
 
-const required = [
-  "extension/package.json",
-  "extension/README.md",
-  "extension/LICENSE",
-  "extension/TESTING.md",
-  "extension/dist/extension.js",
+const requiredGroups = [
+  ["extension/package.json"],
+  ["extension/README.md", "extension/readme.md"],
+  ["extension/LICENSE", "extension/LICENSE.txt", "extension/LICENSE.md"],
+  ["extension/TESTING.md"],
+  ["extension/dist/extension.js"],
 ];
-const missing = required.filter((entry) => !entries.includes(entry));
+const missing = requiredGroups
+  .filter((group) => !group.some((entry) => entries.includes(entry)))
+  .map((group) => group[0]);
 const forbidden = entries.filter(
   (entry) =>
     entry.includes("node_modules/") ||
