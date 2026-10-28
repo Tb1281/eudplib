@@ -6,7 +6,11 @@ end-to-end user guide, including first run, Map Context discovery, diagnostics,
 and troubleshooting, see
 [`docs/eudkit-lsp-user-guide.md`](../../docs/eudkit-lsp-user-guide.md). It adds
 completion for the 228 canonical unit names in the `KillUnit` unit argument, for
-example after typing `KillUnit("`.
+example after typing `KillUnit("`, plus hover and signature help for supported
+eudkit calls and canonical/Map Context symbols.
+
+Hover and signature help are post-`v0.1.1` development work. They are not in
+the published `v0.1.1` VSIX or server assets and will ship in the next release.
 
 The extension is intentionally narrow:
 
@@ -14,9 +18,11 @@ The extension is intentionally narrow:
   starts `eudkit-lsp` as a language client.
 - It has no map-path setting and never asks for a map. `eudkit-lsp` does not
   need one.
-- It does not synthesize type errors. Pylance (Python) and tsserver
-  (TypeScript/JavaScript) remain the source of API types and type diagnostics;
-  the eudkit client runs alongside them.
+- It does not synthesize type errors or general type information. Pylance
+  (Python) and tsserver (TypeScript/JavaScript) remain the source of API types
+  and type diagnostics; the eudkit client runs alongside them. eudkit's own
+  hover and signature help are limited to canonical/Map Context symbols and the
+  supported call list in the user guide.
 - eudkit's own Map Symbol and EUD warnings are published as LSP warnings and
   appear in the Problems panel. They are advisory and never block
   `eudkit build`.
