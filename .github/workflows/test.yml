@@ -123,6 +123,50 @@ jobs:
       - name: Run mypy for Python 3.14 (max)
         run: mypy src/eudplib --python-version 3.14
 
+  pyright:
+    name: Pyright
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build zlib1g-dev libbz2-dev
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build wheel
+        run: python -m pip wheel . --no-deps --wheel-dir dist
+      - name: Verify py.typed is packaged
+        run: |
+          python - <<'PY'
+          import pathlib
+          import zipfile
+
+          wheel = next(pathlib.Path("dist").glob("*.whl"))
+          with zipfile.ZipFile(wheel) as archive:
+              names = archive.namelist()
+          assert "eudkit/py.typed" in names, f"eudkit/py.typed missing from {wheel}"
+          print(f"{wheel.name} contains eudkit/py.typed")
+          PY
+      - name: Install wheel and Pyright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install dist/*.whl pyright
+      - name: Type-check consumer fixture
+        # Run outside the repository so Pyright resolves the installed wheel
+        # rather than adding the local src directory as an extra path.
+        working-directory: ${{ runner.temp }}
+        run: pyright --pythonpath "$(python -c 'import sys; print(sys.executable)')" "$GITHUB_WORKSPACE/tests/typing"
+
   typos:
     name: Typos
     runs-on: ubuntu-latest
