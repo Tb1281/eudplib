@@ -1,37 +1,109 @@
 //! Completion items derived from the reusable analysis layer.
 
-use crate::analysis::{symbol_slot_at, ParsedDocument, SymbolSlot};
-use eudkit_core::map_context::CANONICAL_UNIT_NAMES;
+use std::collections::HashSet;
+
+use crate::analysis::{symbol_slot_at, ParsedDocument, SymbolKind};
+use eudkit_core::map_context::{MapContext, CANONICAL_UNIT_NAMES};
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionTextEdit, Position, Range, TextEdit,
 };
 
-/// Completion items for `offset`, or `None` when the cursor is not in a known
-/// symbol slot.
+/// Completion items for `offset` without a Map Context.
 pub fn completions_at(document: &ParsedDocument<'_>, offset: usize) -> Option<Vec<CompletionItem>> {
-    match symbol_slot_at(document, offset)? {
-        SymbolSlot::UnitName(slot) => {
-            let range = byte_range_to_lsp(
-                document.source(),
-                slot.content_range().start,
-                slot.content_range().end,
-            );
-            Some(
-                CANONICAL_UNIT_NAMES
-                    .iter()
-                    .map(|name| CompletionItem {
-                        label: (*name).to_string(),
-                        kind: Some(CompletionItemKind::ENUM_MEMBER),
-                        detail: Some("EUD canonical unit".to_string()),
-                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                            range,
-                            new_text: (*name).to_string(),
-                        })),
-                        ..CompletionItem::default()
-                    })
-                    .collect(),
-            )
+    completions_at_with_context(document, offset, None)
+}
+
+/// Completion items for `offset`, using Map Symbols when a Map Context is
+/// available and Canonical Symbols otherwise.
+pub fn completions_at_with_context(
+    document: &ParsedDocument<'_>,
+    offset: usize,
+    map_context: Option<&MapContext>,
+) -> Option<Vec<CompletionItem>> {
+    let slot = symbol_slot_at(document, offset)?;
+    let range = byte_range_to_lsp(
+        document.source(),
+        slot.content_range().start,
+        slot.content_range().end,
+    );
+    let names = match slot.kind {
+        SymbolKind::Unit => canonical_unit_names(),
+        SymbolKind::Location => location_names(map_context),
+        SymbolKind::Switch => switch_names(map_context),
+    };
+
+    Some(
+        names
+            .into_iter()
+            .map(|name| CompletionItem {
+                label: name.clone(),
+                kind: Some(CompletionItemKind::ENUM_MEMBER),
+                detail: Some(slot.kind.detail().to_string()),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    range,
+                    new_text: name,
+                })),
+                ..CompletionItem::default()
+            })
+            .collect(),
+    )
+}
+
+impl SymbolKind {
+    fn detail(self) -> &'static str {
+        match self {
+            SymbolKind::Unit => "EUD canonical unit",
+            SymbolKind::Location => "EUD location",
+            SymbolKind::Switch => "EUD switch",
         }
+    }
+}
+
+fn canonical_unit_names() -> Vec<String> {
+    CANONICAL_UNIT_NAMES
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
+fn location_names(map_context: Option<&MapContext>) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = HashSet::new();
+    push_unique(&mut names, &mut seen, "Anywhere");
+
+    if let Some(context) = map_context {
+        for location in context.locations() {
+            if let Some(name) = &location.name {
+                push_unique(&mut names, &mut seen, name);
+            }
+        }
+    }
+
+    names
+}
+
+fn switch_names(map_context: Option<&MapContext>) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(context) = map_context {
+        for switch in context.switches() {
+            if let Some(name) = &switch.name {
+                push_unique(&mut names, &mut seen, name);
+            }
+        }
+    }
+
+    for index in 1..=256 {
+        push_unique(&mut names, &mut seen, &format!("Switch {index}"));
+    }
+
+    names
+}
+
+fn push_unique(names: &mut Vec<String>, seen: &mut HashSet<String>, name: &str) {
+    if seen.insert(name.to_string()) {
+        names.push(name.to_string());
     }
 }
 

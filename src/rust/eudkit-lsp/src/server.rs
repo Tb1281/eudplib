@@ -4,19 +4,22 @@ use std::collections::HashMap;
 use std::error::Error;
 
 use crate::analysis::ParsedDocument;
-use crate::completion::completions_at;
+use crate::completion::completions_at_with_context;
+use crate::project::ProjectCache;
 use lsp_server::{Connection, ErrorCode, Message, Request, Response};
 use lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
     DidOpenTextDocumentParams, InitializeParams, Position, ServerCapabilities,
     TextDocumentSyncKind,
 };
+use url::Url;
 
 type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 #[derive(Default)]
 struct ServerState {
     documents: HashMap<String, String>,
+    projects: ProjectCache,
 }
 
 /// Run the language server over stdin/stdout.
@@ -52,7 +55,7 @@ fn main_loop(connection: Connection) -> ServerResult<()> {
                 if connection.handle_shutdown(&request)? {
                     break;
                 }
-                let response = handle_request(&request, &state);
+                let response = handle_request(&request, &mut state);
                 if connection.sender.send(response.into()).is_err() {
                     break;
                 }
@@ -71,7 +74,7 @@ fn main_loop(connection: Connection) -> ServerResult<()> {
     Ok(())
 }
 
-fn handle_request(request: &Request, state: &ServerState) -> Response {
+fn handle_request(request: &Request, state: &mut ServerState) -> Response {
     match request.method.as_str() {
         "textDocument/completion" => {
             match serde_json::from_value::<CompletionParams>(request.params.clone()) {
@@ -94,15 +97,20 @@ fn handle_request(request: &Request, state: &ServerState) -> Response {
 }
 
 fn completion_response(
-    state: &ServerState,
+    state: &mut ServerState,
     params: &CompletionParams,
 ) -> Option<CompletionResponse> {
     let position = params.text_document_position.position;
-    let uri = params.text_document_position.text_document.uri.as_str();
-    let text = state.documents.get(uri)?;
+    let uri = &params.text_document_position.text_document.uri;
+    let text = state.documents.get(uri.as_str())?;
     let offset = position_to_offset(text, position)?;
+    let map_context = Url::parse(uri.as_str())
+        .ok()
+        .and_then(|url| url.to_file_path().ok())
+        .and_then(|path| state.projects.map_context_for_document(&path));
     let document = ParsedDocument::parse(text);
-    completions_at(&document, offset).map(CompletionResponse::Array)
+    completions_at_with_context(&document, offset, map_context.as_deref())
+        .map(CompletionResponse::Array)
 }
 
 fn handle_notification(method: &str, params: serde_json::Value, state: &mut ServerState) {

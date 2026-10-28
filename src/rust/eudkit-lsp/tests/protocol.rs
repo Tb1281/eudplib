@@ -1,20 +1,38 @@
 use eudkit_core::map_context::CANONICAL_UNIT_NAMES;
+use eudkit_core::{Chk, CompilationConfig, CompilationSession};
+use eudplib_stormlib::{Archive, OpenArchiveFlags};
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 const URI: &str = "file:///tmp/eudkit-lsp-test.py";
+const LOCATION_CALL: &str = "Bring(AllPlayers, AtLeast, 1, \"Terran Marine\", \"";
+const SWITCH_CALL: &str = "SetSwitch(\"";
 
 struct LspClient {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    stderr: Option<ChildStderr>,
     next_id: i64,
+    uri: String,
 }
 
 impl LspClient {
     fn spawn() -> Self {
+        Self::spawn_with_uri(URI)
+    }
+
+    fn spawn_for(path: &Path) -> Self {
+        Self::spawn_with_uri(&path_to_uri(path))
+    }
+
+    fn spawn_with_uri(uri: &str) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_eudkit-lsp"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -24,12 +42,15 @@ impl LspClient {
 
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
+        let stderr = child.stderr.take().expect("stderr is piped");
 
         Self {
             child,
             stdin,
             stdout,
+            stderr: Some(stderr),
             next_id: 1,
+            uri: uri.to_string(),
         }
     }
 
@@ -106,11 +127,16 @@ impl LspClient {
     }
 
     fn open(&mut self, text: &str) {
+        let uri = self.uri.clone();
+        self.open_at(&uri, text);
+    }
+
+    fn open_at(&mut self, uri: &str, text: &str) {
         self.notify(
             "textDocument/didOpen",
             json!({
                 "textDocument": {
-                    "uri": URI,
+                    "uri": uri,
                     "languageId": "python",
                     "version": 1,
                     "text": text,
@@ -120,35 +146,55 @@ impl LspClient {
     }
 
     fn change(&mut self, text: &str, version: i32) {
+        let uri = self.uri.clone();
+        self.change_at(&uri, text, version);
+    }
+
+    fn change_at(&mut self, uri: &str, text: &str, version: i32) {
         self.notify(
             "textDocument/didChange",
             json!({
-                "textDocument": { "uri": URI, "version": version },
+                "textDocument": { "uri": uri, "version": version },
                 "contentChanges": [{ "text": text }],
             }),
         );
     }
 
     fn completion(&mut self, text: &str, byte_offset: usize) -> Vec<String> {
+        let uri = self.uri.clone();
+        self.completion_at(&uri, text, byte_offset)
+    }
+
+    fn completion_at(&mut self, uri: &str, text: &str, byte_offset: usize) -> Vec<String> {
         let (line, character) = position_at(text, byte_offset);
         let response = self.request(
             "textDocument/completion",
             json!({
-                "textDocument": { "uri": URI },
+                "textDocument": { "uri": uri },
                 "position": { "line": line, "character": character },
             }),
         );
         completion_labels(&response)
     }
 
-    fn shutdown(mut self) {
+    fn shutdown(mut self) -> String {
         let response = self.request("shutdown", Value::Null);
         assert!(response["result"].is_null(), "shutdown should return null");
         self.notify("exit", Value::Null);
         drop(self.stdin);
 
         let status = self.child.wait().expect("eudkit-lsp should exit");
-        assert!(status.success(), "eudkit-lsp exited with {status}");
+        let mut stderr = String::new();
+        if let Some(mut stderr_pipe) = self.stderr.take() {
+            stderr_pipe
+                .read_to_string(&mut stderr)
+                .expect("stderr should be readable");
+        }
+        assert!(
+            status.success(),
+            "eudkit-lsp exited with {status}; stderr:\n{stderr}"
+        );
+        stderr
     }
 }
 
@@ -207,6 +253,127 @@ fn assert_canonical_units(labels: &[String]) {
     assert!(
         labels.iter().all(|label| !label.starts_with("UNI")),
         "custom UNIx names must not be suggested"
+    );
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
+
+fn fixture(relative: &str) -> PathBuf {
+    let path = repo_root().join(relative);
+    assert!(path.exists(), "missing fixture {}", path.display());
+    path
+}
+
+fn copy_fixture_to(relative: &str, target: &Path) {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::copy(fixture(relative), target).unwrap();
+}
+
+fn path_to_uri(path: &Path) -> String {
+    url::Url::from_file_path(path)
+        .expect("file path should convert to a file URI")
+        .to_string()
+}
+
+fn write_project(directory: &Path, input_map: &str) -> PathBuf {
+    let toml_path = directory.join("eudkit.toml");
+    fs::write(
+        &toml_path,
+        format!(
+            "[project]\nname = \"lsp-test\"\ninput_map = {input_map:?}\noutput_map = \"out.scx\"\n"
+        ),
+    )
+    .unwrap();
+    toml_path
+}
+
+fn reusable_switch_name(map_path: &Path) -> (String, u32) {
+    let session = CompilationSession::from_map(map_path, CompilationConfig::default())
+        .expect("fixture map should load");
+    let context = session.map_context();
+
+    for bytes in context.strings() {
+        if bytes.is_empty()
+            || !bytes
+                .iter()
+                .all(|byte| byte.is_ascii_graphic() || *byte == b' ')
+        {
+            continue;
+        }
+        let Some(string_id) = context.string_table().find_id(bytes) else {
+            continue;
+        };
+        let Some(name) = context.strings().get(string_id as usize - 1) else {
+            continue;
+        };
+        let name = String::from_utf8(name.clone()).expect("filtered string should be ASCII");
+        if name == "Anywhere" || name.starts_with("Switch ") {
+            continue;
+        }
+        return (name, string_id);
+    }
+
+    panic!("fixture should contain a reusable string for a switch name");
+}
+
+fn replace_chk(map_path: &Path, chk_bytes: &[u8]) {
+    Archive::set_file_locale(0);
+    let mut archive = Archive::open(map_path, OpenArchiveFlags::empty()).unwrap();
+    let mut tmp_chk = tempfile::NamedTempFile::new().unwrap();
+    tmp_chk.write_all(chk_bytes).unwrap();
+    tmp_chk.flush().unwrap();
+    archive
+        .add_file(tmp_chk.path(), "staredit\\scenario.chk", true)
+        .unwrap();
+    archive.compact().unwrap();
+}
+
+fn name_first_switch(map_path: &Path, string_id: u32) {
+    Archive::set_file_locale(0);
+    let mut archive = Archive::open(map_path, OpenArchiveFlags::empty()).unwrap();
+    let raw_chk = {
+        let mut file = archive.open_file("staredit\\scenario.chk").unwrap();
+        file.read_all().unwrap()
+    };
+    let mut chk = Chk::parse(&raw_chk).unwrap();
+    let mut swnm = chk
+        .section(b"SWNM")
+        .map(<[u8]>::to_vec)
+        .unwrap_or_else(|| vec![0; 256 * 4]);
+    swnm.resize(256 * 4, 0);
+    swnm[0..4].copy_from_slice(&string_id.to_le_bytes());
+    chk.set_section(b"SWNM", swnm).unwrap();
+    drop(archive);
+    replace_chk(map_path, &chk.to_bytes());
+}
+
+fn assert_location_fallback(labels: &[String]) {
+    assert_eq!(
+        labels,
+        ["Anywhere".to_string()],
+        "without a usable Map Context only the canonical Anywhere location should be suggested"
+    );
+}
+
+fn assert_switch_canonical(labels: &[String]) {
+    assert_eq!(labels.len(), 256, "expected 256 canonical switches");
+    assert_eq!(labels.first().map(String::as_str), Some("Switch 1"));
+    assert_eq!(labels.last().map(String::as_str), Some("Switch 256"));
+    assert_eq!(
+        labels.iter().collect::<HashSet<_>>().len(),
+        labels.len(),
+        "switch names should be unique"
     );
 }
 
@@ -287,6 +454,273 @@ fn does_not_complete_outside_the_kill_unit_unit_slot() {
     assert!(client
         .completion(ordinary_code, ordinary_code.len())
         .is_empty());
+
+    client.shutdown();
+}
+
+#[test]
+fn completes_map_locations_from_the_nearest_eudkit_toml() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    copy_fixture_to("test_maps/v2/verify_v2.scx", &project.join("map.scx"));
+    write_project(&project, "map.scx");
+    let document = project.join("src").join("main.py");
+
+    let mut client = LspClient::spawn_for(&document);
+    client.initialize();
+    client.open(LOCATION_CALL);
+    let labels = client.completion(LOCATION_CALL, LOCATION_CALL.len());
+
+    assert_eq!(
+        labels,
+        [
+            "Anywhere".to_string(),
+            "=== [EUDKIT V2 TEST MAP] ===".to_string(),
+        ]
+    );
+
+    let keyword_call = "MoveLocation(location=\"";
+    client.change(keyword_call, 2);
+    let keyword_labels = client.completion(keyword_call, keyword_call.len());
+    assert_eq!(keyword_labels, labels);
+
+    client.shutdown();
+}
+
+#[test]
+fn completes_map_switches_from_eudkit_toml() {
+    let temp = tempfile::tempdir().unwrap();
+    let map_path = temp.path().join("map.scx");
+    copy_fixture_to("test_maps/v2/verify_v2.scx", &map_path);
+    let (switch_name, string_id) = reusable_switch_name(&map_path);
+    name_first_switch(&map_path, string_id);
+    write_project(temp.path(), "map.scx");
+    let document = temp.path().join("main.py");
+
+    let mut client = LspClient::spawn_for(&document);
+    client.initialize();
+    client.open(SWITCH_CALL);
+    let labels = client.completion(SWITCH_CALL, SWITCH_CALL.len());
+
+    assert_eq!(
+        labels.len(),
+        257,
+        "expected one named switch plus 256 canonical switches"
+    );
+    assert_eq!(
+        labels
+            .iter()
+            .filter(|label| label.as_str() == switch_name.as_str())
+            .count(),
+        1,
+        "named switch should be suggested exactly once"
+    );
+    assert_eq!(
+        labels
+            .iter()
+            .filter(|label| label.as_str() == "Switch 1")
+            .count(),
+        1,
+        "canonical switch should be deduplicated"
+    );
+    assert_switch_canonical(&labels[1..]);
+
+    client.shutdown();
+}
+
+#[test]
+fn unit_slot_stays_canonical_only_with_a_map_context() {
+    let temp = tempfile::tempdir().unwrap();
+    copy_fixture_to(
+        "tests/outputmap/basemap/사이비2.scx",
+        &temp.path().join("map.scx"),
+    );
+    write_project(temp.path(), "map.scx");
+    let document = temp.path().join("main.py");
+
+    let mut client = LspClient::spawn_for(&document);
+    client.initialize();
+    client.open("KillUnit(\"");
+    let labels = client.completion("KillUnit(\"", "KillUnit(\"".len());
+
+    assert_canonical_units(&labels);
+
+    client.shutdown();
+}
+
+#[test]
+fn falls_back_to_canonical_symbols_without_eudkit_toml() {
+    let temp = tempfile::tempdir().unwrap();
+    let document = temp.path().join("main.py");
+
+    let mut client = LspClient::spawn_for(&document);
+    client.initialize();
+    client.open("KillUnit(\"");
+    assert_canonical_units(&client.completion("KillUnit(\"", "KillUnit(\"".len()));
+
+    client.change(LOCATION_CALL, 2);
+    assert_location_fallback(&client.completion(LOCATION_CALL, LOCATION_CALL.len()));
+
+    client.change(SWITCH_CALL, 3);
+    assert_switch_canonical(&client.completion(SWITCH_CALL, SWITCH_CALL.len()));
+
+    client.shutdown();
+}
+
+#[test]
+fn nearest_project_wins_for_each_document() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let nested = root.join("nested");
+
+    copy_fixture_to(
+        "tests/outputmap/basemap/basemap_wireframe.scx",
+        &root.join("map.scx"),
+    );
+    copy_fixture_to("test_maps/v2/verify_v2.scx", &nested.join("map.scx"));
+    write_project(root, "map.scx");
+    write_project(&nested, "map.scx");
+
+    let root_document = root.join("main.py");
+    let nested_document = nested.join("main.py");
+    let root_uri = path_to_uri(&root_document);
+    let nested_uri = path_to_uri(&nested_document);
+
+    let mut client = LspClient::spawn_for(&root_document);
+    client.initialize();
+    client.open_at(&root_uri, LOCATION_CALL);
+    client.open_at(&nested_uri, LOCATION_CALL);
+
+    let root_labels = client.completion_at(&root_uri, LOCATION_CALL, LOCATION_CALL.len());
+    assert!(
+        root_labels.contains(&"Nowhere".to_string()),
+        "root document should use the root project: {root_labels:?}"
+    );
+    assert!(
+        !root_labels.contains(&"=== [EUDKIT V2 TEST MAP] ===".to_string()),
+        "root document must not use the nested project"
+    );
+
+    let nested_labels = client.completion_at(&nested_uri, LOCATION_CALL, LOCATION_CALL.len());
+    assert!(
+        nested_labels.contains(&"=== [EUDKIT V2 TEST MAP] ===".to_string()),
+        "nested document should use the nearest project: {nested_labels:?}"
+    );
+    assert!(
+        !nested_labels.contains(&"Nowhere".to_string()),
+        "nested document must not use the root project"
+    );
+
+    client.shutdown();
+}
+
+#[test]
+fn falls_back_to_canonical_locations_for_invalid_projects_and_maps() {
+    let invalid_toml = tempfile::tempdir().unwrap();
+    fs::write(invalid_toml.path().join("eudkit.toml"), "input_map =\n").unwrap();
+    let mut client = LspClient::spawn_for(&invalid_toml.path().join("main.py"));
+    client.initialize();
+    client.open(LOCATION_CALL);
+    assert_location_fallback(&client.completion(LOCATION_CALL, LOCATION_CALL.len()));
+    let stderr = client.shutdown();
+    assert!(
+        stderr.contains("eudkit-lsp: failed to load"),
+        "invalid eudkit.toml should be logged: {stderr}"
+    );
+
+    let missing_map = tempfile::tempdir().unwrap();
+    write_project(missing_map.path(), "missing.scx");
+    let mut client = LspClient::spawn_for(&missing_map.path().join("main.py"));
+    client.initialize();
+    client.open(LOCATION_CALL);
+    assert_location_fallback(&client.completion(LOCATION_CALL, LOCATION_CALL.len()));
+    assert_location_fallback(&client.completion(LOCATION_CALL, LOCATION_CALL.len()));
+    let stderr = client.shutdown();
+    assert_eq!(
+        stderr
+            .matches("eudkit-lsp: failed to load input map")
+            .count(),
+        1,
+        "a failed map load should be logged once, not on every completion: {stderr}"
+    );
+
+    let malformed_chk = tempfile::tempdir().unwrap();
+    let map_path = malformed_chk.path().join("map.scx");
+    copy_fixture_to("test_maps/v2/verify_v2.scx", &map_path);
+    replace_chk(&map_path, b"bad");
+    write_project(malformed_chk.path(), "map.scx");
+    let mut client = LspClient::spawn_for(&malformed_chk.path().join("main.py"));
+    client.initialize();
+    client.open(LOCATION_CALL);
+    assert_location_fallback(&client.completion(LOCATION_CALL, LOCATION_CALL.len()));
+    let stderr = client.shutdown();
+    assert!(
+        stderr.contains("eudkit-lsp: failed to load input map"),
+        "malformed CHK should be logged: {stderr}"
+    );
+}
+
+#[test]
+fn reloads_map_context_after_eudkit_toml_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    copy_fixture_to("test_maps/v2/verify_v2.scx", &root.join("a.scx"));
+    copy_fixture_to(
+        "tests/outputmap/basemap/basemap_wireframe.scx",
+        &root.join("b.scx"),
+    );
+    write_project(root, "a.scx");
+    let document = root.join("main.py");
+
+    let mut client = LspClient::spawn_for(&document);
+    client.initialize();
+    client.open(LOCATION_CALL);
+    let initial = client.completion(LOCATION_CALL, LOCATION_CALL.len());
+    assert!(initial.contains(&"=== [EUDKIT V2 TEST MAP] ===".to_string()));
+
+    thread::sleep(Duration::from_millis(20));
+    write_project(root, "b.scx");
+
+    let reloaded = client.completion(LOCATION_CALL, LOCATION_CALL.len());
+    assert!(
+        reloaded.contains(&"Nowhere".to_string()),
+        "completion should use the updated project: {reloaded:?}"
+    );
+    assert!(
+        !reloaded.contains(&"=== [EUDKIT V2 TEST MAP] ===".to_string()),
+        "completion should drop the old map context"
+    );
+
+    client.shutdown();
+}
+
+#[test]
+fn reloads_map_context_after_the_input_map_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let map_path = root.join("map.scx");
+    copy_fixture_to("test_maps/v2/verify_v2.scx", &map_path);
+    write_project(root, "map.scx");
+    let document = root.join("main.py");
+
+    let mut client = LspClient::spawn_for(&document);
+    client.initialize();
+    client.open(LOCATION_CALL);
+    let initial = client.completion(LOCATION_CALL, LOCATION_CALL.len());
+    assert!(initial.contains(&"=== [EUDKIT V2 TEST MAP] ===".to_string()));
+
+    thread::sleep(Duration::from_millis(20));
+    copy_fixture_to("tests/outputmap/basemap/basemap_wireframe.scx", &map_path);
+
+    let reloaded = client.completion(LOCATION_CALL, LOCATION_CALL.len());
+    assert!(
+        reloaded.contains(&"Nowhere".to_string()),
+        "completion should use the updated input map: {reloaded:?}"
+    );
+    assert!(
+        !reloaded.contains(&"=== [EUDKIT V2 TEST MAP] ===".to_string()),
+        "completion should drop the old map context"
+    );
 
     client.shutdown();
 }
