@@ -109,7 +109,7 @@ fn location_id(value: &str, map_context: Option<&MapContext>) -> Option<u32> {
     canonical_location_id(value)
 }
 
-fn canonical_location_id(value: &str) -> Option<u32> {
+pub(crate) fn canonical_location_id(value: &str) -> Option<u32> {
     if value == "Anywhere" {
         return Some(64);
     }
@@ -126,7 +126,7 @@ fn switch_id(value: &str, map_context: Option<&MapContext>) -> Option<u8> {
     canonical_switch_id(value)
 }
 
-fn canonical_switch_id(value: &str) -> Option<u8> {
+pub(crate) fn canonical_switch_id(value: &str) -> Option<u8> {
     let index = value.strip_prefix("Switch ")?.parse::<u16>().ok()?;
     (1..=256).contains(&index).then_some((index - 1) as u8)
 }
