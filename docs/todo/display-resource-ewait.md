@@ -1,9 +1,11 @@
 # TODO — Display resource without EWait (deferred)
 
-Status: **deferred** (2026-10-28). No StarCraft client is available for runtime
-testing, and EWait has been dropped as the mechanism. Do not implement this
-until the LSP/eudkit work is complete and a 32-bit and/or 64-bit SC:R client is
-available for a probe.
+Status: **deferred** (2026-10-28). This is a deferred design record, not an
+active spec; its status is tracked by
+[`docs/handoffs/2026-10-28-lsp-mvp.md`](../handoffs/2026-10-28-lsp-mvp.md). No
+StarCraft client is available for runtime testing, and EWait has been dropped as
+the mechanism. Do not implement this until the LSP/eudkit work is complete and a
+32-bit and/or 64-bit SC:R client is available for a probe.
 
 ## Decision
 

@@ -39,9 +39,10 @@ Terms such as **Map Context**, **Map Symbol**, **Canonical Symbol**, and
   asks for a map path.
 
 The extensions contain no completion, hover, signature, or diagnostic logic of
-their own. VS Code and Zed both start the same `eudkit-lsp` binary, so they
-return the same symbols, the same warnings, the same hover text, and the same
-signatures.
+their own. VS Code and Zed both start the same `eudkit-lsp` binary, so both
+editors receive the same LSP responses. Zed's UI rendering of those responses
+was not independently driven; see the
+[acceptance matrix](eudkit-lsp-acceptance-matrix.md) for the verified scope.
 
 The LSP does **not** provide general API types, per-map stubs, or type checking.
 Hover and signature help are intentionally narrow: they resolve canonical and
@@ -190,6 +191,29 @@ the Command Palette.
 4. Use `zed: open log` to inspect extension and language-server startup
    messages when something fails.
 
+### Fresh-user walkthrough
+
+This is the shortest path from a clean install to working eudkit features. It
+needs no project setup, no source edits beyond the call you type, and no map
+path. Pylance and tsserver are optional for eudkit completion, hover, and
+signature help; install them only if you also want host-language types.
+
+1. Install the VSIX as described above in a clean VS Code profile, then open an
+   empty folder.
+2. Add one empty file: `main.py`, `main.ts`, or `main.js`. Eudkit activates from
+   the file's language mode; no import or project file is required.
+3. Type `KillUnit("` on its own. Completion should offer exactly the 228
+   canonical unit names. Hover over a unit such as `Terran Marine` to see
+   `Canonical unit` and its ID. Type `KillUnit(` and open signature help to see
+   `unit, player`.
+4. To try Map Context names, open a folder that already contains an
+   `eudkit.toml` whose `input_map` points at a readable map. Repeat the steps in
+   a `.py`, `.ts`, or `.js` file: `KillUnit("` still lists the 228 canonical
+   units, while location and switch arguments such as `Bring(..., "` and
+   `SetSwitch("` add the map's named locations and switches. No map path is
+   configured in the editor, and no source edit is needed beyond typing the
+   call.
+
 ### Minimal examples
 
 Python:
@@ -233,9 +257,11 @@ works without the package installed.
 ## Hover and signature help
 
 Hover and signature help are available in Python, TypeScript, TSX, JavaScript,
-and JSX. They use the same shared server, so both editors show the same text.
-This support is on the development branch after `v0.1.1`; none of the released
-`v0.1.1` assets contain it.
+and JSX. They use the same shared server, so both editors receive the same
+responses. Zed's UI rendering was not independently driven; see the
+[acceptance matrix](eudkit-lsp-acceptance-matrix.md). This support is on the
+development branch after `v0.1.1`; none of the released `v0.1.1` assets contain
+it.
 
 ### Symbol hover
 
@@ -282,7 +308,10 @@ Signature help opens after `(` and `,`. The active parameter follows commas.
 In Python, a keyword argument such as `KillUnit(unit=...)` selects the matching
 parameter even when it is not in its positional slot. TypeScript and JavaScript
 support both the imported form (`KillUnit(...)`) and the qualified namespace
-form (`eudkit.KillUnit(...)`).
+form (`eudkit.KillUnit(...)`); they show the TypeScript SDK parameter names,
+for example `SetSwitch(switchId, action)` and
+`MoveLocation(location, onUnit, owner, destLocation)`. Python keeps its own
+names, such as `SetSwitch(switch, state)`.
 
 ```python
 KillUnit(

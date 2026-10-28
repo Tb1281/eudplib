@@ -10,8 +10,11 @@ discovery, diagnostics, hover, signature help, and troubleshooting, see
 [`docs/eudkit-lsp-user-guide.md`](../../docs/eudkit-lsp-user-guide.md).
 
 The extension contains no editor-specific completion logic. Zed and VS Code
-both talk to the same `eudkit-lsp` binary, so they see the same capabilities,
-the same 228-entry unit table, and the same future features.
+both talk to the same `eudkit-lsp` binary, so both editors receive the same LSP
+capabilities and responses, including the same 228-entry unit table. Zed's
+rendering of those responses was not independently driven; see the
+[acceptance matrix](../../docs/eudkit-lsp-acceptance-matrix.md) for the verified
+scope.
 
 ## What it provides
 

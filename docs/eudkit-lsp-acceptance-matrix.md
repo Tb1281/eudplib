@@ -39,13 +39,14 @@ The Zed pass loaded the extension in a dev profile and started the same
 
 | Area | Result | Evidence |
 | --- | --- | --- |
-| Shared LSP behavior, all languages and contexts | **PASS** | 87 Rust tests, including 34 protocol tests |
+| Shared LSP behavior, all languages and contexts | **PASS** | 89 Rust tests, including 35 protocol tests |
 | Hover and signature help (post-`v0.1.1` development branch) | **PASS at protocol level** | 8 protocol tests and unit coverage; not present in the published `v0.1.1` assets |
 | VS Code reference UX, Python/TypeScript/JavaScript, with and without `eudkit.toml` | **PASS** | all reference checks below |
 | VS Code release download, checksum, cache, version probe | **PASS** | Output channel record; cached asset and `.sha256` present |
 | Zed extension load and server start, Python/TypeScript/JavaScript | **PASS** | Extension host log: 2 extensions loaded; 3 `eudkit-lsp` process starts |
 | Zed completion/diagnostic/hover/signature UI | **NOT EXECUTED** | Zed's stock LSP client was not driven; the extension contains no UI code, and shared server behavior is covered by the protocol matrix |
 | No-Rust VSIX installation | **PASS** | Release `eudkit-vscode-0.1.1.vsix` checksum verified and installed in a clean profile with `code --install-extension`; the installed bundle then passed the VS Code behavior matrix; no Rust used. |
+| Fresh-user walkthrough (clean profile, no source edits, no map path) | **PASS for clean-VSIX first run/completion** | Same clean-profile VSIX install, then an empty-folder `plain/` workspace with a `.py`/`.ts`/`.js` file: canonical completion worked with no source edit and no map path. Hover and signature steps are covered by the protocol matrix, not by the released `v0.1.1` VSIX. Pylance and tsserver were not installed in that profile. |
 | Windows/macOS execution | **Not executed here** | Assets were built and checksum/format verified in the `v0.1.1` release workflow |
 
 ### How Zed runs the extension
@@ -198,7 +199,7 @@ compatibility rule for the VS Code client is enforced at runtime.
 ## Commands run
 
 ```sh
-# Shared server: 45 lib + 4 main + 4 CLI + 34 protocol = 87 tests
+# Shared server: 46 lib + 4 main + 4 CLI + 35 protocol = 89 tests
 (cd src/rust && cargo test -p eudkit-lsp)
 
 # Clippy is clean for eudkit-lsp; eudkit-core has pre-existing warnings outside
