@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use zed_extension_api::{
-    self as zed, process::Command as ProcessCommand, Architecture, DownloadedFileType,
-    LanguageServerId, LanguageServerInstallationStatus, Os, Result, Worktree,
+    self as zed, Architecture, DownloadedFileType, LanguageServerId,
+    LanguageServerInstallationStatus, Os, Result, Worktree,
 };
 
 const LANGUAGE_SERVER_ID: &str = "eudkit-lsp";
@@ -18,9 +18,8 @@ const BINARY_NAME: &str = "eudkit-lsp";
 const ENV_OVERRIDE: &str = "EUDKIT_LSP_PATH";
 const RELEASE_REPOSITORY: &str = "Tb1281/eudplib";
 /// Pinned at compile time from the extension package version. Downloads come
-/// from this exact release tag, the cache is version-scoped, and every cached
-/// or downloaded binary must answer `--version` with the same major/minor
-/// series before Zed is allowed to start it.
+/// from this exact release tag and the cache is version-scoped, so a cached
+/// binary cannot be reused by a different extension version.
 const RELEASE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Release assets published for `eudkit-lsp`.
