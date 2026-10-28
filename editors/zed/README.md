@@ -1,8 +1,9 @@
 # EUDKIT LSP for Zed
 
 Zed extension that registers the shared [`eudkit-lsp`](../../src/rust/eudkit-lsp)
-language server for Python. It adds completion for the 228 canonical StarCraft
-unit names inside `KillUnit("...")`.
+language server for Python, TypeScript, TSX, and JavaScript. It adds completion
+for the 228 canonical StarCraft unit names inside `KillUnit("...")` and exposes
+the server's Map Context and warning behavior in all four languages.
 
 The extension contains no editor-specific completion logic. Zed and VS Code
 both talk to the same `eudkit-lsp` binary, so they see the same capabilities,
@@ -10,12 +11,48 @@ the same 228-entry unit table, and the same future features.
 
 ## What it provides
 
-- The `eudkit-lsp` language server for `Python` documents.
+- The `eudkit-lsp` language server for `Python`, `TypeScript`, `TSX`, and
+  `JavaScript` documents. Zed's `JavaScript` language also covers `.jsx`
+  files; Zed has no separate JSX language name.
 - Canonical unit completion inside the first `KillUnit` argument, for example
   `KillUnit("` or `KillUnit("Mar`.
-- Map Symbol and EUD warnings from the shared server in Zed's diagnostics.
-- No map-path setting. `eudkit-lsp` does not need a map path, and neither does
-  this extension.
+- Map Context location and switch completion when an `eudkit.toml` is found at
+  or above the document. Without one, the shared server falls back to the
+  canonical `Anywhere` location and the canonical switch names.
+- Unknown Map Symbol and EUD player warnings from the shared server in Zed's
+  diagnostics. Stock Unit Filters such as `Any unit`, `Men`, `Buildings`, and
+  `Factories` do not produce false positives.
+- No map-path setting and no `eudkit.inputMap` setting. `eudkit-lsp` discovers
+  `eudkit.toml` from the document path, and neither the server nor this
+  extension asks for a map path.
+- Pylance and tsserver remain the sources of API types and type diagnostics;
+  eudkit warnings appear alongside them with source `eudkit`.
+
+## Feature parity checklist
+
+The shared server owns all behavior; this extension only registers it for the
+Zed languages. Run the detailed manual checklist in [TESTING.md](TESTING.md)
+after changing the manifest or the server.
+
+- [ ] Python: `KillUnit("` offers canonical units; `Bring(..., "` and
+      `SetSwitch("` offer Map Context symbols.
+- [ ] TypeScript: the same completion behavior in `.ts` files.
+- [ ] TSX: the same behavior in `.tsx` files, reported as `typescriptreact`.
+- [ ] JavaScript: the same behavior in `.js` files. `.jsx` opens as Zed's
+      JavaScript language.
+- [ ] With `eudkit.toml`: Map Context locations and named switches are added
+      to the canonical symbols.
+- [ ] Without `eudkit.toml`: only canonical symbols are offered
+      (`Anywhere`, `Switch 1`..`Switch 256`, and the 228 unit names).
+- [ ] Unknown Map Symbols warn with source `eudkit`; Stock Unit Filters and
+      numeric stock IDs do not.
+- [ ] EUD group-player warnings appear for offsets above 232 and stay silent
+      for stock units, concrete players, variables, and ambiguous expressions.
+- [ ] No `eudkit.inputMap` or map-path setting exists.
+
+See [`docs/editor-install-smoke-test.md`](../../docs/editor-install-smoke-test.md)
+for the clean-machine install check. Terms such as Map Context, Map Symbol, and
+Stock Unit Filter are defined in [`GLOSSARY.md`](../../GLOSSARY.md).
 
 ## Installing
 
@@ -34,7 +71,7 @@ such as `target/` and `extension.wasm` is excluded.
    with the `wasm32-wasip2` target **for this dev-extension install step only**.
    The `eudkit-lsp` server itself is downloaded as a native binary and does not
    need Rust.
-4. Open a Python file and type `KillUnit("`.
+4. Open a Python, TypeScript, TSX, or JavaScript file and type `KillUnit("`.
 
 A later Zed registry package will remove the local Rust build step; the source
 archive is deliberately shaped so it can be submitted unchanged.
@@ -76,7 +113,7 @@ local binary override and server logs.
    ```
 
    Launch Zed from the same environment (or set the variable at the OS level),
-   then open a Python file and type `KillUnit("`.
+   then open a Python, TypeScript, TSX, or JavaScript file and type `KillUnit("`.
 
 ## Release binary and version pinning
 
