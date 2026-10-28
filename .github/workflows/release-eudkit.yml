@@ -14,10 +14,14 @@ on:
 permissions:
   contents: write
 
+env:
+  EUDKIT_VERSION: 0.1.0
+
 jobs:
   build:
-    name: Build (${{ matrix.target }})
+    name: Build eudkit (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     env:
       CMAKE_GENERATOR: Ninja
     strategy:
@@ -96,10 +100,193 @@ jobs:
           path: to-release/*
           if-no-files-found: error
 
+  build-lsp:
+    name: Build eudkit-lsp (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      CMAKE_GENERATOR: Ninja
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_name: eudkit-lsp
+            raw_binary_name: eudkit-lsp-linux-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: eudkit-lsp.exe
+            raw_binary_name: eudkit-lsp-windows-x86_64.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: eudkit-lsp
+            raw_binary_name: eudkit-lsp-macos-aarch64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary_name: eudkit-lsp
+            raw_binary_name: eudkit-lsp-macos-x86_64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build zlib1g-dev libbz2-dev
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build eudkit-lsp binary
+        run: |
+          cargo build --release --manifest-path src/rust/Cargo.toml -p eudkit-lsp --bin eudkit-lsp --target ${{ matrix.target }}
+
+      - name: Smoke-test release binary (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          python3 scripts/smoke_eudkit_lsp.py \
+            "src/rust/target/${{ matrix.target }}/release/${{ matrix.binary_name }}" \
+            --expected-version "$EUDKIT_VERSION"
+
+      - name: Smoke-test release binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python scripts/smoke_eudkit_lsp.py `
+            "src/rust/target/${{ matrix.target }}/release/${{ matrix.binary_name }}" `
+            --expected-version "$env:EUDKIT_VERSION"
+
+      - name: Package artifacts (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          BIN_PATH="src/rust/target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+          chmod +x "$BIN_PATH"
+          mkdir -p to-release
+          cp "$BIN_PATH" "to-release/${{ matrix.raw_binary_name }}"
+          (cd to-release && sha256sum "${{ matrix.raw_binary_name }}" > "${{ matrix.raw_binary_name }}.sha256")
+
+      - name: Package artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binPath = "src/rust/target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+          New-Item -ItemType Directory -Force -Path "to-release"
+          Copy-Item $binPath -Destination "to-release/${{ matrix.raw_binary_name }}"
+
+          Push-Location to-release
+          $hRaw = (Get-FileHash -Algorithm SHA256 "${{ matrix.raw_binary_name }}").Hash.ToLower()
+          "$hRaw  ${{ matrix.raw_binary_name }}" | Out-File -Encoding ascii "${{ matrix.raw_binary_name }}.sha256"
+          Pop-Location
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.raw_binary_name }}
+          path: to-release/*
+          if-no-files-found: error
+
+  build-editors:
+    name: Package editor extensions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Install VS Code extension dependencies
+        working-directory: editors/vscode
+        run: npm ci
+
+      - name: Test VS Code extension
+        working-directory: editors/vscode
+        run: npm test
+
+      - name: Type-check VS Code extension
+        working-directory: editors/vscode
+        run: npm run check
+
+      - name: Build VSIX
+        working-directory: editors/vscode
+        run: npm run package
+
+      - name: Verify VSIX contents
+        working-directory: editors/vscode
+        run: npm run verify:vsix
+
+      - name: Package Zed dev extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' editors/zed/extension.toml | head -n1)"
+          package_name="eudkit-zed-${version}"
+          staging="$(mktemp -d)"
+          mkdir -p "$staging/$package_name/src" release-assets
+
+          cp editors/zed/extension.toml editors/zed/Cargo.toml editors/zed/Cargo.lock \
+            editors/zed/README.md editors/zed/TESTING.md "$staging/$package_name/"
+          cp LICENSE "$staging/$package_name/LICENSE"
+          cp -R editors/zed/src/. "$staging/$package_name/src/"
+
+          tar -czf "release-assets/${package_name}.tar.gz" -C "$staging" "$package_name"
+          cp editors/vscode/dist/eudkit-vscode-*.vsix release-assets/
+
+          entries="$(tar -tzf "release-assets/${package_name}.tar.gz")"
+          for required in \
+            "$package_name/extension.toml" \
+            "$package_name/Cargo.toml" \
+            "$package_name/Cargo.lock" \
+            "$package_name/src/lib.rs" \
+            "$package_name/README.md" \
+            "$package_name/TESTING.md" \
+            "$package_name/LICENSE"; do
+            if ! grep -qx "$required" <<< "$entries"; then
+              echo "Zed package is missing $required" >&2
+              exit 1
+            fi
+          done
+          if grep -Eq '(^|/)(target/|extension\.wasm$)' <<< "$entries"; then
+            echo "Zed package contains build output:" >&2
+            grep -E '(^|/)(target/|extension\.wasm$)' <<< "$entries" >&2
+            exit 1
+          fi
+
+          for asset in release-assets/*; do
+            (cd release-assets && sha256sum "$(basename "$asset")" > "$(basename "$asset").sha256")
+          done
+          ls -l release-assets
+
+      - name: Upload editor packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-packages
+          path: release-assets/*
+          if-no-files-found: error
+
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, build-lsp, build-editors]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.tag_name != ''
     steps:
       - name: Download all build artifacts
@@ -115,10 +302,66 @@ jobs:
         id: tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag_name }}" ]; then
-            echo "name=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+            echo "name=${{ github.event.inputs.tag_name }}" >> "$GITHUB_OUTPUT"
           else
-            echo "name=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Record binary and package sizes
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          assets = Path("release-assets")
+          entries = {path.name: path for path in assets.iterdir() if path.is_file()}
+
+          def describe(name: str) -> tuple[int, str] | None:
+              path = entries.get(name)
+              if path is None:
+                  return None
+              size = path.stat().st_size
+              human = f"{size / (1024 * 1024):.2f} MiB" if size >= 1024 * 1024 else f"{size / 1024:.1f} KiB"
+              return size, human
+
+          lines = [
+              f"EUDKit release binary sizes for {os.environ.get('RELEASE_TAG', '')}".rstrip(),
+              "",
+              "The eudkit build CLI is a separate binary from eudkit-lsp.",
+              "",
+              f"{'binary':<36} {'bytes':>12}  {'size':>10}",
+          ]
+          platforms = [
+              ("windows-x86_64", ".exe"),
+              ("linux-x86_64", ""),
+              ("macos-aarch64", ""),
+              ("macos-x86_64", ""),
+          ]
+          for platform, suffix in platforms:
+              for binary in ("eudkit", "eudkit-lsp"):
+                  name = f"{binary}-{platform}{suffix}"
+                  size = describe(name)
+                  if size is None:
+                      lines.append(f"{name:<36} {'MISSING':>12}")
+                  else:
+                      lines.append(f"{name:<36} {size[0]:>12}  {size[1]:>10}")
+
+          lines.extend(["", "Editor packages:", ""])
+          packages = sorted(
+              name
+              for name in entries
+              if name.endswith(".vsix") or name.endswith(".tar.gz")
+          )
+          for name in packages:
+              size = entries[name].stat().st_size
+              lines.append(f"{name:<36} {size:>12}")
+
+          output = assets / "BINARY-SIZES.txt"
+          output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(output.read_text(encoding="utf-8"))
+          PY
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

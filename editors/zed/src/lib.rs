@@ -17,6 +17,10 @@ const LANGUAGE_SERVER_ID: &str = "eudkit-lsp";
 const BINARY_NAME: &str = "eudkit-lsp";
 const ENV_OVERRIDE: &str = "EUDKIT_LSP_PATH";
 const RELEASE_REPOSITORY: &str = "Tb1281/eudplib";
+/// Pinned at compile time from the extension package version. The Zed
+/// extension cannot execute `eudkit-lsp --version` through zed_extension_api
+/// 0.7, so compatibility is enforced by downloading only the release tag for
+/// this exact version and caching it under a version-scoped directory.
 const RELEASE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Release assets published for `eudkit-lsp`.
@@ -113,7 +117,7 @@ impl EudkitExtension {
         let asset_url = release_asset_url(RELEASE_VERSION, asset_name);
 
         let version_dir = format!("eudkit-lsp-{RELEASE_VERSION}");
-        let binary_relative = format!("{version_dir}/{asset_name}");
+        let binary_relative = versioned_binary_relative_path(RELEASE_VERSION, asset_name);
         let work_dir = extension_work_dir()?;
         let binary_path = work_dir.join(&binary_relative);
 
@@ -152,27 +156,23 @@ impl EudkitExtension {
         let checksum_url = format!("{asset_url}.sha256");
         let checksum_relative = format!("{binary_relative}.sha256");
         let checksum_path = work_dir.join(&checksum_relative);
-        match download_published_checksum(&checksum_url, &checksum_relative, &checksum_path)? {
-            Some(published_checksum) => {
-                let contents = fs::read(&temp_path).map_err(|error| {
-                    format!(
-                        "failed to read downloaded '{}': {error}",
-                        temp_path.display()
-                    )
-                })?;
-                verify_sha256(&contents, &published_checksum).map_err(|error| {
-                    remove_file_if_exists(&temp_path);
-                    format!(
-                        "refusing to install {asset_name}: {error} (published at {checksum_url})"
-                    )
-                })?;
-                println!("eudkit-lsp: verified SHA-256 checksum for {asset_name}");
-            }
-            None => println!(
-                "eudkit-lsp: warning: no published checksum at {checksum_url}; \
-                 continuing without checksum verification"
-            ),
-        }
+        let published_checksum = download_published_checksum(
+            asset_name,
+            &checksum_url,
+            &checksum_relative,
+            &checksum_path,
+        )?;
+        let contents = fs::read(&temp_path).map_err(|error| {
+            format!(
+                "failed to read downloaded '{}': {error}",
+                temp_path.display()
+            )
+        })?;
+        verify_sha256(&contents, &published_checksum).map_err(|error| {
+            remove_file_if_exists(&temp_path);
+            format!("refusing to install {asset_name}: {error} (published at {checksum_url})")
+        })?;
+        println!("eudkit-lsp: verified SHA-256 checksum for {asset_name}");
 
         remove_file_if_exists(&binary_path);
         fs::rename(&temp_path, &binary_path).map_err(|error| {
@@ -267,28 +267,45 @@ fn make_executable(os: Os, relative_path: &str) -> Result<()> {
 }
 
 fn download_published_checksum(
+    asset_name: &str,
     checksum_url: &str,
     checksum_relative: &str,
     checksum_path: &Path,
-) -> Result<Option<String>> {
+) -> Result<String> {
     match zed::download_file(
         checksum_url,
         checksum_relative,
         DownloadedFileType::Uncompressed,
     ) {
-        Ok(()) => fs::read_to_string(checksum_path)
-            .map(Some)
-            .map_err(|error| {
-                format!(
-                    "downloaded checksum '{}' but could not read it: {error}",
-                    checksum_path.display()
-                )
-            }),
-        Err(error) => {
-            println!("eudkit-lsp: could not download checksum from {checksum_url}: {error}");
-            Ok(None)
-        }
+        Ok(()) => fs::read_to_string(checksum_path).map_err(|error| {
+            format!(
+                "downloaded checksum '{}' but could not read it: {error}",
+                checksum_path.display()
+            )
+        }),
+        Err(error) => Err(required_checksum_error(
+            asset_name,
+            checksum_url,
+            &error.to_string(),
+        )),
     }
+}
+
+fn required_checksum_error(asset_name: &str, checksum_url: &str, error: &str) -> String {
+    format!(
+        "eudkit-lsp release asset '{asset_name}' is missing its required .sha256 companion at \
+         {checksum_url} ({error}). Refusing to install an unverified binary. Set {ENV_OVERRIDE} \
+         to a locally built eudkit-lsp or put eudkit-lsp on PATH."
+    )
+}
+
+/// Cache layout is pinned to the extension version: `eudkit-lsp-<version>/<asset>`.
+fn versioned_binary_relative_path(version: &str, asset_name: &str) -> String {
+    format!(
+        "eudkit-lsp-{}/{}",
+        version.trim_start_matches('v'),
+        asset_name
+    )
 }
 
 fn sha256_hex(contents: &[u8]) -> String {
@@ -445,6 +462,38 @@ mod tests {
         let error = verify_sha256(b"abc", wrong).unwrap_err();
         assert!(error.contains("SHA-256 mismatch"), "{error}");
         assert!(error.contains(wrong), "{error}");
+    }
+
+    #[test]
+    fn pins_download_url_and_cache_to_the_package_version() {
+        let asset = "eudkit-lsp-linux-x86_64";
+        assert_eq!(RELEASE_VERSION, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            release_asset_url(RELEASE_VERSION, asset),
+            format!(
+                "https://github.com/Tb1281/eudplib/releases/download/v{RELEASE_VERSION}/{asset}"
+            )
+        );
+        assert_eq!(
+            versioned_binary_relative_path(RELEASE_VERSION, asset),
+            format!("eudkit-lsp-{RELEASE_VERSION}/{asset}")
+        );
+        assert_eq!(
+            versioned_binary_relative_path("v0.1.0", asset),
+            "eudkit-lsp-0.1.0/eudkit-lsp-linux-x86_64"
+        );
+    }
+
+    #[test]
+    fn missing_checksums_are_reported_as_required() {
+        let error = required_checksum_error(
+            "eudkit-lsp-linux-x86_64",
+            "https://example.invalid/eudkit-lsp-linux-x86_64.sha256",
+            "HTTP 404",
+        );
+        assert!(error.contains("required .sha256 companion"), "{error}");
+        assert!(error.contains("HTTP 404"), "{error}");
+        assert!(error.contains("eudkit-lsp-linux-x86_64.sha256"), "{error}");
     }
 
     fn release_asset_name(os: Os, arch: Architecture) -> Result<&'static str> {

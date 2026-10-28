@@ -106,6 +106,50 @@ jobs:
           rustup toolchain install 1.97.0 --profile minimal
           cargo +1.97.0 check --workspace --all-targets
 
+  vscode-extension:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+      - name: Install dependencies
+        working-directory: editors/vscode
+        run: npm ci
+      - name: Unit tests
+        working-directory: editors/vscode
+        run: npm test
+      - name: Type check
+        working-directory: editors/vscode
+        run: npm run check
+      - name: Package and verify VSIX
+        working-directory: editors/vscode
+        run: |
+          npm run package
+          npm run verify:vsix
+
+  zed-extension:
+    name: Zed extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: editors/zed
+      - name: Host unit tests
+        working-directory: editors/zed
+        run: cargo test
+
   mypy:
     name: mypy
     runs-on: ubuntu-latest

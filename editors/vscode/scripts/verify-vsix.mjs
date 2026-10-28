@@ -1,0 +1,72 @@
+#!/usr/bin/env node
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+
+const vsix = process.argv[2] ?? "dist/eudkit-vscode-0.1.0.vsix";
+
+if (!existsSync(vsix)) {
+  console.error(`VSIX not found: ${vsix}`);
+  process.exit(1);
+}
+
+let entries;
+try {
+  entries = execFileSync("unzip", ["-Z1", vsix], { encoding: "utf8" })
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+} catch (error) {
+  console.error(
+    `Could not inspect ${vsix} with unzip. Install unzip or run this check on Linux/macOS: ${error.message}`,
+  );
+  process.exit(1);
+}
+
+const required = [
+  "extension/package.json",
+  "extension/README.md",
+  "extension/LICENSE",
+  "extension/TESTING.md",
+  "extension/dist/extension.js",
+];
+const missing = required.filter((entry) => !entries.includes(entry));
+const forbidden = entries.filter(
+  (entry) =>
+    entry.includes("node_modules/") ||
+    entry === "extension/src" ||
+    entry.startsWith("extension/src/") ||
+    entry.startsWith("extension/test/") ||
+    entry.startsWith("extension/scripts/") ||
+    entry.startsWith("extension/.vscode/"),
+);
+
+if (missing.length > 0) {
+  console.error(`VSIX is missing required files:\n${missing.join("\n")}`);
+  process.exit(1);
+}
+if (forbidden.length > 0) {
+  console.error(
+    `VSIX contains development-only files:\n${forbidden.join("\n")}`,
+  );
+  process.exit(1);
+}
+
+const packageJson = JSON.parse(
+  execFileSync("unzip", ["-p", vsix, "extension/package.json"], {
+    encoding: "utf8",
+  }),
+);
+if (packageJson.repository?.url !== "https://github.com/Tb1281/eudplib") {
+  console.error(
+    `VSIX package.json has the wrong repository URL: ${packageJson.repository?.url}`,
+  );
+  process.exit(1);
+}
+if (packageJson.license !== "MIT") {
+  console.error(`VSIX package.json has the wrong license: ${packageJson.license}`);
+  process.exit(1);
+}
+
+console.log(
+  `Verified ${vsix}: ${entries.length} entries, README/LICENSE/TESTING/bundle present, repository ${packageJson.repository.url}.`,
+);
