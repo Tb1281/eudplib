@@ -1,5 +1,9 @@
 # Clean-machine editor install smoke test
 
+For the complete user-facing flow, see the
+[eudkit LSP user guide](eudkit-lsp-user-guide.md). This document is the
+release-verification checklist.
+
 This is the no-Rust-toolchain check for the published editor artifacts. Run the
 primary pass on any supported platform with VS Code and Zed installed: Windows
 x64, Linux x64, macOS arm64, or macOS x86_64. The matching native server is

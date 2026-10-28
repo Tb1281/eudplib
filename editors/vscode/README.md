@@ -1,7 +1,10 @@
 # eudkit LSP for VS Code
 
 This extension connects VS Code's Python, TypeScript, and JavaScript editors to
-[`eudkit-lsp`](../../src/rust/eudkit-lsp), the eudplib language server. It adds
+[`eudkit-lsp`](../../src/rust/eudkit-lsp), the eudplib language server. For the
+end-to-end user guide, including first run, Map Context discovery, diagnostics,
+and troubleshooting, see
+[`docs/eudkit-lsp-user-guide.md`](../../docs/eudkit-lsp-user-guide.md). It adds
 completion for the 228 canonical unit names in the `KillUnit` unit argument, for
 example after typing `KillUnit("`.
 

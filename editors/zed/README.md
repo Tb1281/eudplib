@@ -3,7 +3,10 @@
 Zed extension that registers the shared [`eudkit-lsp`](../../src/rust/eudkit-lsp)
 language server for Python, TypeScript, TSX, and JavaScript. It adds completion
 for the 228 canonical StarCraft unit names inside `KillUnit("...")` and exposes
-the server's Map Context and warning behavior in all four languages.
+the server's Map Context and warning behavior in all four languages. For the
+end-to-end user guide, including installation, first run, Map Context
+discovery, diagnostics, and troubleshooting, see
+[`docs/eudkit-lsp-user-guide.md`](../../docs/eudkit-lsp-user-guide.md).
 
 The extension contains no editor-specific completion logic. Zed and VS Code
 both talk to the same `eudkit-lsp` binary, so they see the same capabilities,
