@@ -1280,6 +1280,35 @@ fn hovers_over_typescript_and_javascript_units_and_qualified_calls() {
 }
 
 #[test]
+fn completes_and_hovers_legacy_qualified_calls_in_typescript_and_javascript() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    for (uri, language_id) in [
+        (TYPESCRIPT_URI, "typescript"),
+        (JAVASCRIPT_URI, "javascript"),
+    ] {
+        let source = "eud.KillUnit(\"Mar";
+        client.open_document(uri, language_id, source);
+        assert_canonical_units(&client.completion_for(uri, source, source.len()));
+
+        let closed = "eud.KillUnit(\"Terran Marine\", 1);";
+        client.change_document(uri, closed, 2);
+        let hover = client
+            .hover_for(uri, closed, closed.find("KillUnit").unwrap() + 2)
+            .unwrap_or_else(|| panic!("{language_id} legacy qualified call should have hover"));
+        let text = hover_markdown(&hover);
+        assert!(
+            text.contains("**KillUnit(unit, player)**"),
+            "{language_id}: {text}"
+        );
+        assert!(text.contains("Returns `Action`."), "{language_id}: {text}");
+    }
+
+    client.shutdown();
+}
+
+#[test]
 fn provides_python_signature_help_at_calls_and_keyword_arguments() {
     let mut client = LspClient::spawn();
     client.initialize();
@@ -1335,6 +1364,28 @@ fn provides_python_signature_help_at_calls_and_keyword_arguments() {
         "{signature}"
     );
 
+    let switch = "SetSwitch(";
+    client.change(switch, 5);
+    let signature = client
+        .signature_help(switch, switch.len())
+        .expect("SetSwitch( should have signature help");
+    assert_eq!(
+        signature["signatures"][0]["label"],
+        "SetSwitch(switch, state)"
+    );
+    assert_eq!(signature["activeParameter"], 0);
+
+    let keyword = "MoveLocation(dest_location=\"";
+    client.change(keyword, 6);
+    let signature = client
+        .signature_help(keyword, keyword.len())
+        .expect("a Python keyword argument should select its parameter");
+    assert_eq!(
+        signature["signatures"][0]["label"],
+        "MoveLocation(location, unit, player, dest_location)"
+    );
+    assert_eq!(signature["activeParameter"], 3);
+
     client.shutdown();
 }
 
@@ -1373,6 +1424,39 @@ fn provides_signature_help_for_qualified_typescript_and_javascript_calls() {
                 .as_str()
                 .unwrap()
                 .contains("Returns `Action`."),
+            "{language_id}: {signature}"
+        );
+
+        let switch = "eudkit.SetSwitch(";
+        client.change_document(uri, switch, 3);
+        let signature = client
+            .signature_help_for(uri, switch, switch.len())
+            .unwrap_or_else(|| {
+                panic!("{language_id} qualified SetSwitch should have signature help")
+            });
+        assert_eq!(
+            signature["signatures"][0]["label"], "SetSwitch(switchId, action)",
+            "{language_id}: {signature}"
+        );
+        assert_eq!(
+            signature["activeParameter"], 0,
+            "{language_id}: {signature}"
+        );
+
+        let keyword = "eudkit.MoveLocation(destLocation=\"";
+        client.change_document(uri, keyword, 4);
+        let signature = client
+            .signature_help_for(uri, keyword, keyword.len())
+            .unwrap_or_else(|| {
+                panic!("{language_id} qualified MoveLocation should have signature help")
+            });
+        assert_eq!(
+            signature["signatures"][0]["label"],
+            "MoveLocation(location, onUnit, owner, destLocation)",
+            "{language_id}: {signature}"
+        );
+        assert_eq!(
+            signature["activeParameter"], 3,
             "{language_id}: {signature}"
         );
     }
@@ -1414,24 +1498,28 @@ fn returns_no_hover_or_signature_help_outside_supported_contexts() {
         (TYPESCRIPT_URI, "typescript"),
         (JAVASCRIPT_URI, "javascript"),
     ] {
-        let unsupported = "console.log(\"Not A Unit\")";
-        client.open_document(uri, language_id, unsupported);
-        assert!(
-            client
-                .hover_for(
-                    uri,
-                    unsupported,
-                    unsupported.find("Not A Unit").unwrap() + 2
-                )
-                .is_none(),
-            "{language_id} unsupported member call should not have hover"
-        );
-        assert!(
-            client
-                .signature_help_for(uri, unsupported, unsupported.find('(').unwrap() + 1)
-                .is_none(),
-            "{language_id} unsupported member call should not have signature help"
-        );
+        for unsupported in [
+            "console.log(\"Not A Unit\")",
+            "eudkit.DisplayText(\"Not A Unit\")",
+        ] {
+            client.open_document(uri, language_id, unsupported);
+            assert!(
+                client
+                    .hover_for(
+                        uri,
+                        unsupported,
+                        unsupported.find("Not A Unit").unwrap() + 2
+                    )
+                    .is_none(),
+                "{language_id} unsupported member call should not have hover: {unsupported}"
+            );
+            assert!(
+                client
+                    .signature_help_for(uri, unsupported, unsupported.find('(').unwrap() + 1)
+                    .is_none(),
+                "{language_id} unsupported member call should not have signature help: {unsupported}"
+            );
+        }
     }
 
     client.shutdown();
