@@ -31,12 +31,12 @@ The Zed pass loaded the extension in a dev profile and started the same
 
 | Area | Result | Evidence |
 | --- | --- | --- |
-| Shared LSP behavior, all languages and contexts | **PASS** | 66 Rust tests, including 26 protocol tests |
+| Shared LSP behavior, all languages and contexts | **PASS** | 67 Rust tests, including 26 protocol tests |
 | VS Code reference UX, Python/TypeScript/JavaScript, with and without `eudkit.toml` | **PASS** | all reference checks below |
 | VS Code release download, checksum, cache, version probe | **PASS** | Output channel record; cached asset and `.sha256` present |
 | Zed extension load and server start, Python/TypeScript/JavaScript | **PASS** | Extension host log: 2 extensions loaded; 3 `eudkit-lsp` process starts |
-| Zed completion/diagnostic behavior | **PASS (shared server)** | Same binary and capabilities as the protocol-tested server; no Zed-specific logic |
-| No-Rust VSIX installation | **PASS (earlier clean-machine check)** | See [`editor-install-smoke-test.md`](editor-install-smoke-test.md) |
+| Zed completion/diagnostic UI | **NOT EXECUTED** | No Zed UI test harness in this environment; shared server behavior is covered by the protocol matrix |
+| No-Rust VSIX installation | **NOT EXECUTED in this pass** | Release download/checksum path verified; clean-machine checklist in [`editor-install-smoke-test.md`](editor-install-smoke-test.md) |
 | Windows/macOS execution | **Not executed here** | Assets were built and checksum/format verified in the `v0.1.1` release workflow |
 
 The Zed extension API does not expose a test harness equivalent to the VS Code
@@ -45,7 +45,8 @@ menu was not driven programmatically. The extension is declarative: it
 registers `eudkit-lsp` for the four languages and contains no completion or
 diagnostic code. The behavior-bearing server pass is the protocol matrix below,
 and the Zed client pass confirms that the extension loads and starts that
-server for each MVP language. The manual Zed checklist remains in
+server for each MVP language. This record does not claim a Zed UI-level
+completion or diagnostic result. The manual Zed checklist remains in
 [`editors/zed/TESTING.md`](../editors/zed/TESTING.md).
 
 ## Shared server protocol matrix
@@ -59,7 +60,7 @@ JavaScript; TypeScript/JSX and TSX registration are covered by the same suite.
 | `KillUnit("` returns exactly 228 canonical units | PASS | PASS | PASS | `completes_canonical_units_in_typescript_tsx_javascript_and_jsx`, `initializes_and_completes_canonical_units_for_unterminated_kill_unit_string` |
 | Stock Unit Filters are not suggested | PASS | PASS | PASS | `unit_slot_stays_canonical_only_with_a_map_context` and language variants |
 | Custom `UNIx` names are not suggested | PASS | PASS | PASS | `typescript_unit_slot_stays_canonical_with_a_map_context` |
-| Completion only inside the unit slot | PASS | PASS | PASS | `does_not_complete_outside_the_kill_unit_unit_slot`, `does_not_complete_outside_the_unit_slot_in_typescript_and_javascript` |
+| Completion only inside supported symbol arguments, not free-form strings | PASS | PASS | PASS | `does_not_complete_outside_the_kill_unit_unit_slot`, `does_not_complete_outside_the_unit_slot_in_typescript_and_javascript` |
 | Map locations from the nearest `eudkit.toml` | PASS | PASS | PASS | `completes_map_locations_from_the_nearest_eudkit_toml`, `completes_map_locations_and_switches_in_typescript_and_javascript` |
 | Named map switches plus `Switch 1`..`Switch 256` | PASS | PASS | PASS | `completes_map_switches_from_eudkit_toml` |
 | Canonical fallback without a project | PASS | PASS | PASS | `falls_back_to_canonical_symbols_without_eudkit_toml` and language variant |
@@ -125,7 +126,7 @@ Language server started.
 | `eudkit-lsp` starts for `main.ts` | PASS | `starting language server process ... eudkit-lsp` |
 | `eudkit-lsp` starts for `main.js` | PASS | `starting language server process ... eudkit-lsp` |
 | Language registration matches the shared server | PASS | `extension.toml`: Python, TypeScript, TSX, JavaScript; language IDs `python`, `typescript`, `typescriptreact`, `javascript` |
-| Completion/diagnostics content | PASS (shared) | Protocol matrix above; the extension contains no behavior logic |
+| Completion/diagnostics UI | **NOT EXECUTED** | Shared server behavior is covered by the protocol matrix; the extension contains no behavior logic and the UI was not driven in this environment |
 
 Zed version compatibility is structural rather than a runtime `--version`
 probe: the extension pins the release URL and cache to `CARGO_PKG_VERSION`
@@ -135,7 +136,7 @@ compatibility rule for the VS Code client is enforced at runtime.
 ## Commands run
 
 ```sh
-# Shared server: 32 lib + 4 main + 4 CLI + 26 protocol = 66 tests
+# Shared server: 33 lib + 4 main + 4 CLI + 26 protocol = 67 tests
 (cd src/rust && cargo test -p eudkit-lsp)
 
 # Real LSP smoke: version and 228 units for bare and --stdio invocations
@@ -156,7 +157,7 @@ manually for this record; their temporary profiles were outside the repository.
 
 | Platform | Architecture | VSIX/editor | `eudkit-lsp` execution |
 | --- | --- | --- | --- |
-| Linux | x86_64 | PASS | PASS (this record) |
+| Linux | x86_64 | PASS (extension host) | PASS (this record) |
 | Windows | x86_64 | Built and published; not executed here | Built and checksum/format verified; not executed here |
 | macOS | arm64 | Built and published; not executed here | Built and checksum/format verified; not executed here |
 | macOS | x86_64 | Built and published; not executed here | Built and checksum/format verified; not executed here |
@@ -167,9 +168,9 @@ x86_64. Other combinations require a local server override.
 ## Known verification gaps
 
 - The VS Code pass used the extension host directly, not a fresh `code
-  --install-extension` on a clean machine. That install path is covered by
-  [`editor-install-smoke-test.md`](editor-install-smoke-test.md); the release
-  download and checksum path was re-verified here.
+  --install-extension` on a clean machine. The release download and checksum
+  path was re-verified here; the clean-machine install checklist is documented
+  in [`editor-install-smoke-test.md`](editor-install-smoke-test.md).
 - The Zed completion menu was not driven programmatically because the Zed
   extension API has no test harness and the environment is Wayland-only. Zed
   client startup and language registration were verified, and the shared
@@ -180,4 +181,4 @@ x86_64. Other combinations require a local server override.
   was verified to publish only source `eudkit` warnings and to work without
   either language server present.
 
-These gaps do not affect the MVP exclusions or the documented user flow.
+These gaps are explicit acceptance limits, not silent assumptions.

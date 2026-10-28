@@ -195,6 +195,19 @@ mod tests {
     }
 
     #[test]
+    fn location_64_is_anywhere_not_a_location_name() {
+        for value in ["Location 0", "Location 64"] {
+            let source = format!("MinimapPing(\"{value}\")");
+            let messages = python_messages(&source);
+            assert_eq!(messages.len(), 1, "{value:?} should warn");
+            assert!(
+                messages[0].contains("Unknown location"),
+                "{value:?} should be reported as an unknown location"
+            );
+        }
+    }
+
+    #[test]
     fn ignores_free_form_strings_and_unclosed_literals() {
         for source in [
             "DisplayText(\"Not A Unit\")",

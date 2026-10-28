@@ -1,8 +1,9 @@
 # eudkit LSP user guide (MVP)
 
-This guide is the reference UX for the eudkit language server in the `0.1.x`
-editor MVP. It covers VS Code and Zed, Python/TypeScript/JavaScript, projects
-with and without `eudkit.toml`, the warnings the server publishes, and what is
+This guide describes the reference user experience for the eudkit language
+server in the `0.1.x` editor MVP: the behavior the release is accepted against.
+It covers VS Code and Zed, Python/TypeScript/JavaScript, projects with and
+without `eudkit.toml`, the warnings the server publishes, and what is
 deliberately not included yet.
 
 Terms such as **Map Context**, **Map Symbol**, **Canonical Symbol**, and
@@ -10,8 +11,9 @@ Terms such as **Map Context**, **Map Symbol**, **Canonical Symbol**, and
 
 ## What the MVP provides
 
-- Completion for the 228 canonical StarCraft unit names in the first argument
-  of `KillUnit(...)`, for example after `KillUnit("`.
+- Completion for the 228 canonical StarCraft unit names in the unit argument of
+  `KillUnit(...)` and other supported unit arguments, for example after
+  `KillUnit("`.
 - Completion for Map Context locations (for example the location argument of
   `Bring`) and switches (for example `SetSwitch("`) when an `eudkit.toml`
   project with a readable input map is found.
@@ -35,7 +37,7 @@ types and type diagnostics and run alongside eudkit.
 | Component | Requirement |
 | --- | --- |
 | VS Code | 1.91 or newer. |
-| Zed | A Zed build with extension support. The MVP was verified with Zed 1.25.3. |
+| Zed | A Zed build with extension support. The extension startup path was verified with Zed 1.25.3; the completion menu has not been automated. |
 | Platform | Windows x64, Linux x64, macOS arm64, or macOS x86_64. |
 | Rust | Not needed for VS Code. Not needed for `eudkit-lsp` in either editor. Needed only to compile the Zed **dev extension** to WebAssembly. |
 | Map | Optional. Without `eudkit.toml` the server uses Canonical Symbols only. |
@@ -196,10 +198,14 @@ import { KillUnit, Player1 } from "eudkit";
 KillUnit("
 ```
 
-Completion is intentionally limited to the unit slot. It does not appear in
-`DisplayText("`, in the player argument, in comments, or inside arbitrary
-strings. In TypeScript and JavaScript, only plain string literals are handled;
-template literals and other expressions are ignored.
+Completion is available only inside supported eudkit symbol arguments: the unit
+argument of `KillUnit`, `KillUnitAt`, `Deaths`, and related functions; the
+location arguments of `Bring`, `KillUnitAt`, `MinimapPing`, and related
+functions; and the switch argument of `Switch` and `SetSwitch`. It does not
+appear in free-form strings such as `DisplayText("`, in player arguments, in
+comments, or inside arbitrary strings. In TypeScript and JavaScript, only plain
+string literals are handled; template literals and other expressions are
+ignored.
 
 A missing `eudkit` module warning from tsserver, or a missing `eudplib`
 import warning from Pylance, is separate from eudkit. Install the SDK package
@@ -223,9 +229,10 @@ output_map = "out.scx"
   `eudkit.toml`.
 - The map must exist and be readable by the server.
 - `output_map` is not used by the LSP.
-- If the nearest project has no `input_map`, cannot be parsed, or cannot load
-  the map, the server logs the problem to stderr and falls back to Canonical
-  Symbols. It does not fail the editor session.
+- If the nearest project has no `input_map`, the server silently uses Canonical
+  Symbols. If the file cannot be parsed or the map cannot be loaded, the server
+  logs the error to stderr and falls back to Canonical Symbols. Neither case
+  fails the editor session.
 - The nearest `eudkit.toml` wins for each document.
 - The Map Context is reloaded when the project file or the input map changes.
 - Nested projects can use different maps; each document uses its own nearest
@@ -241,12 +248,14 @@ output_map = "out.scx"
 | Switch completion | Named map switches + `Switch 1`..`Switch 256` | `Switch 1`..`Switch 256` |
 | Unknown-symbol warnings | Use Map Symbols and canonical names | Use canonical names only |
 | Custom unit names in diagnostics | Accepted when present in the map | Warn as unknown |
-| `Location N` diagnostics | Accepted | Accepted |
+| `Location N` diagnostics | `Anywhere`, `Location 1`..`Location 255` except `Location 64`; named map locations | `Anywhere`, `Location 1`..`Location 255` except `Location 64` |
 | Numeric IDs/offsets | Accepted | Accepted |
 
 Location completion does not list every `Location 1`..`Location 255`; those
-canonical names are still accepted if typed. Switch completion always includes
-the 256 canonical switch names and adds named map switches without duplicates.
+canonical names are still accepted if typed. `Location 64` is the canonical
+`Anywhere` location; its canonical name is `Anywhere`, not `Location 64`.
+Switch completion always includes the 256 canonical switch names and adds
+named map switches without duplicates.
 
 ### Custom `UNIx` names
 
@@ -274,7 +283,7 @@ The server checks closed string literals that occupy a symbol-typed argument:
 | Slot | Examples | Accepted values |
 | --- | --- | --- |
 | Unit | first argument of `KillUnit`, unit argument of `KillUnitAt` | canonical units, map custom units, numeric IDs, Stock Unit Filters |
-| Location | location arguments of `Bring`, `KillUnitAt`, and related functions | `Anywhere`, `Location 1`..`Location 255`, named map locations |
+| Location | location arguments of `Bring`, `KillUnitAt`, and related functions | `Anywhere`, `Location 1`..`Location 255` except `Location 64`, named map locations |
 | Switch | `SetSwitch` | `Switch 1`..`Switch 256`, named map switches |
 
 Examples:
@@ -319,8 +328,9 @@ other ambiguous expressions stay silent.
 
 - Confirm the editor's language mode is Python, TypeScript, or JavaScript
   (TSX/JSX are also registered).
-- Put the cursor after the opening quote in the **first** `KillUnit` argument:
-  `KillUnit("` or `KillUnit("Mar`.
+- Put the cursor inside a supported symbol argument, for example after the
+  opening quote in `KillUnit("`, `Bring(..., "` for a location, or
+  `SetSwitch("`.
 - Trigger completion manually. In VS Code use <kbd>Ctrl</kbd>+<kbd>Space</kbd>;
   in Zed run `editor: completions`.
 - Check the VS Code **eudkit LSP** output channel, or `zed: open log`. If the
@@ -337,9 +347,10 @@ other ambiguous expressions stay silent.
 - Confirm the nearest project is the one you expect; nested projects override
   outer ones for documents below them.
 - Check the server stderr in the editor logs. Invalid TOML and unreadable maps
-  are logged and fall back to canonical symbols.
-- Completion offers named locations plus `Anywhere`. `Location N` names are
-  valid if typed but are not listed.
+  are logged. A missing or empty `input_map` falls back silently.
+- Completion offers named locations plus `Anywhere`. Canonical names
+  `Location 1` through `Location 255` (except `Location 64`) are valid if typed
+  but are not listed. `Location 64` is `Anywhere`.
 
 ### Pylance or tsserver shows errors or missing imports
 
