@@ -6,10 +6,11 @@ hover/signature work tracked by [#54](https://github.com/Tb1281/eudplib/issues/5
 This is the reference verification record for the user guide at
 [`eudkit-lsp-user-guide.md`](eudkit-lsp-user-guide.md).
 
-The released `v0.1.1` assets contain completion, diagnostics, and Map Context
-behavior only. Hover and signature help were added on the development branch
-after that release; rows marked **post-`v0.1.1`** are verified against the
-development tree, not against the published `v0.1.1` binaries.
+The released `v0.1.1` assets contain the completion, diagnostics, and Map Context
+behavior described in this matrix; they do not contain hover or signature help.
+That support was added on the development branch after the release, so rows
+marked **post-`v0.1.1`** are verified against the development tree, not the
+published `v0.1.1` binaries.
 
 ## Environment
 
