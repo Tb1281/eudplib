@@ -1093,4 +1093,13 @@ export function after(loops: number, callback: () => void): void {
  * @param loops - Interval in trigger loop cycles between successive firings (e.g. 24 loops = every 1s under Turbo).
  * @param callback - Logic to execute periodically every `loops` trigger cycles.
  */
-e
+export function every(loops: number, callback: () => void): void {
+  const timer = var_(loops);
+  if (timer.atLeast(1)) {
+    timer.subtract(1);
+  }
+  if (timer.exactly(0)) {
+    timer.setTo(loops);
+    callback();
+  }
+}
