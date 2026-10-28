@@ -867,8 +867,7 @@ export { EUDArray as Array };
 /**
  * Immutable static string registered in the map's STR section.
  *
- * Map strings cannot be formatted; use {@link StringBuffer}/{@link string} for
- * dynamic text.
+ * Map strings cannot be formatted; use {@link string} for dynamic text.
  */
 export class MapString {
   public readonly id: number = 0;
