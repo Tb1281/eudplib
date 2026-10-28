@@ -37,7 +37,7 @@ types and type diagnostics and run alongside eudkit.
 | Component | Requirement |
 | --- | --- |
 | VS Code | 1.91 or newer. |
-| Zed | A Zed build with extension support. The extension startup path was verified with Zed 1.25.3; the completion menu has not been automated. |
+| Zed | A Zed build with extension support. The extension was loaded and started with Zed 1.25.3; see the [acceptance matrix](eudkit-lsp-acceptance-matrix.md) for the verified scope. |
 | Platform | Windows x64, Linux x64, macOS arm64, or macOS x86_64. |
 | Rust | Not needed for VS Code. Not needed for `eudkit-lsp` in either editor. Needed only to compile the Zed **dev extension** to WebAssembly. |
 | Map | Optional. Without `eudkit.toml` the server uses Canonical Symbols only. |
