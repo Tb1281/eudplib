@@ -3,8 +3,13 @@
 This guide describes the reference user experience for the eudkit language
 server in the `0.1.x` editor MVP: the behavior the release is accepted against.
 It covers VS Code and Zed, Python/TypeScript/JavaScript, projects with and
-without `eudkit.toml`, the warnings the server publishes, and what is
-deliberately not included yet.
+without `eudkit.toml`, the warnings the server publishes, hover and signature
+help, and what is deliberately not included yet.
+
+Hover and signature help were added on the development branch after `v0.1.1`.
+They are **not** part of the published `v0.1.1` VSIX, Zed archive, or
+`eudkit-lsp` binaries; the next release will ship them. The rest of this guide
+describes the current development tree.
 
 Terms such as **Map Context**, **Map Symbol**, **Canonical Symbol**, and
 **Stock Unit Filter** are defined in [`GLOSSARY.md`](../GLOSSARY.md).
@@ -21,16 +26,29 @@ Terms such as **Map Context**, **Map Symbol**, **Canonical Symbol**, and
   `Switch 256`, and the 228 unit names.
 - Unknown Map Symbol warnings and EUD group-player warnings as advisory LSP
   diagnostics with source `eudkit`.
+- Hover for canonical and Map Context unit, location, and switch strings. The
+  hover names the symbol, says whether it is canonical or map-defined, and
+  shows its ID. Stock Unit Filters show their filter ID.
+- Hover for the supported eudkit calls listed below, showing the call
+  signature, a one-line summary, the return type, and which parameters accept
+  symbols.
+- Signature help for those calls in Python, TypeScript, and JavaScript. The
+  active parameter follows commas and Python keyword arguments, and qualified
+  TypeScript/JavaScript calls such as `eudkit.KillUnit(...)` are supported.
 - Zero map configuration. Neither extension has a map-path setting and neither
   asks for a map path.
 
-The extensions contain no completion or diagnostic logic of their own. VS Code
-and Zed both start the same `eudkit-lsp` binary, so they return the same
-symbols, the same warnings, and the same fallback behavior.
+The extensions contain no completion, hover, signature, or diagnostic logic of
+their own. VS Code and Zed both start the same `eudkit-lsp` binary, so they
+return the same symbols, the same warnings, the same hover text, and the same
+signatures.
 
-The LSP does **not** provide API types, hovers, signatures, or type checking.
-Pylance (Python) and tsserver (TypeScript/JavaScript) remain the source of
-types and type diagnostics and run alongside eudkit.
+The LSP does **not** provide general API types, per-map stubs, or type checking.
+Hover and signature help are intentionally narrow: they resolve canonical and
+Map Context symbols and the supported eudkit calls listed below, not arbitrary
+expressions or the full SDK API. Pylance (Python) and tsserver
+(TypeScript/JavaScript) remain the source of general type information and type
+diagnostics and run alongside eudkit.
 
 ## Requirements
 
@@ -212,6 +230,74 @@ import warning from Pylance, is separate from eudkit. Install the SDK package
 (or configure `tsconfig`/`jsconfig` paths) for types. eudkit completion still
 works without the package installed.
 
+## Hover and signature help
+
+Hover and signature help are available in Python, TypeScript, TSX, JavaScript,
+and JSX. They use the same shared server, so both editors show the same text.
+This support is on the development branch after `v0.1.1`; none of the released
+`v0.1.1` assets contain it.
+
+### Symbol hover
+
+Hover over a quoted symbol argument to see:
+
+- the symbol name;
+- whether it is a **Canonical** symbol or a **Map Context** symbol (a name
+  from the loaded map);
+- its numeric ID; and
+- for a map-defined alias of a canonical unit, the canonical name.
+
+A Stock Unit Filter such as `Any unit`, `Men`, `Buildings`, or `Factories`
+shows `Stock Unit Filter` and its filter ID. Numeric IDs and unknown names show
+no hover, matching the warning validator: numeric values are valid but are not
+resolved to a name.
+
+```python
+KillUnit("Terran Marine", Player1)          # Canonical unit · ID 0
+Bring(AllPlayers, AtLeast, 1, "Terran Marine", "Anywhere")
+                                             # Canonical location · ID 64
+SetSwitch("Switch 1")                        # Canonical switch · ID 0
+```
+
+With an `eudkit.toml` project, a custom `UNIx` unit name or a named location
+shows `Map Context unit` or `Map Context location`; a named location also
+shows its map bounds. Custom `UNIx` names remain absent from completion but are
+recognized by hover when the map is loaded.
+
+### Call hover and signature help
+
+Hover over one of the supported call names to see its signature, a one-line
+summary, its return type, and which parameters accept symbols:
+
+- `KillUnit`
+- `Deaths`, `DeathsX`, `SetDeaths`, `SetDeathsX`
+- `Bring`
+- `CreateUnit`, `KillUnitAt`, `RemoveUnitAt`
+- `MinimapPing`
+- `MoveLocation`, `MoveUnit`
+- `GiveUnits`, `Order`
+- `Switch`, `SetSwitch`
+
+Signature help opens after `(` and `,`. The active parameter follows commas.
+In Python, a keyword argument such as `KillUnit(unit=...)` selects the matching
+parameter even when it is not in its positional slot. TypeScript and JavaScript
+support both the imported form (`KillUnit(...)`) and the qualified namespace
+form (`eudkit.KillUnit(...)`).
+
+```python
+KillUnit(
+#        ^ signature help: unit, then player after the comma
+KillUnit(unit="
+#        ^ active parameter: unit
+```
+
+The server shows documentation only for these calls. It does not type-check
+arguments, infer variable types, or provide hovers for arbitrary expressions,
+variables, imports, or SDK APIs outside this list. Pylance and tsserver remain
+responsible for general type information. A qualified call from an unrelated
+object only produces completion, hover, or signature help when its member name
+is one of the supported eudkit calls above.
+
 ## Project mode: `eudkit.toml` and Map Context
 
 The server searches from the document's directory upward for the nearest
@@ -354,8 +440,9 @@ other ambiguous expressions stay silent.
 
 ### Pylance or tsserver shows errors or missing imports
 
-eudkit does not synthesize type errors, types, or hovers. It publishes only
-Map Symbol and EUD warnings with source `eudkit`.
+eudkit does not synthesize type errors or general type information. It
+publishes Map Symbol and EUD warnings with source `eudkit`, plus the narrow
+hover and signature help described above.
 
 - Install the Python SDK (`eudplib`) or the TypeScript SDK (`eudkit`) for API
   types.
@@ -365,6 +452,21 @@ Map Symbol and EUD warnings with source `eudkit`.
   Pylance/`typescript` diagnostics.
 - Both providers can report on the same file. That is expected; eudkit does not
   suppress or replace the language server for the host language.
+
+### No hover or signature help appears
+
+- Hover only resolves canonical or Map Context unit, location, and switch
+  strings, plus the supported call names listed in
+  [Hover and signature help](#hover-and-signature-help). Variables, numeric
+  arguments, dynamic expressions, unsupported APIs, and free-form strings do
+  not produce eudkit hover.
+- Signature help is available only inside the supported calls, after `(` or
+  `,`. A `DisplayText(...)` or other unsupported call returns nothing.
+- Confirm the `eudkit-lsp` version is from the development branch or a release
+  after `v0.1.1`. The published `v0.1.1` assets do not contain hover or
+  signature help.
+- Pylance and tsserver may show their own hover and signature results on the
+  same symbol. That is expected.
 
 ### Download, checksum, or version failure
 
@@ -412,11 +514,17 @@ The following are explicitly outside the `0.1.x` editor MVP:
   editor Problems panel; run the CLI or CI for compile errors.
 - A map-path setting or map picker. There is no `eudkit.inputMap` setting.
 - Custom `UNIx` names in `KillUnit` completion.
-- Hover, signature help, type information, or type checking from eudkit.
+- General type information or type checking from eudkit. Hover and signature
+  help cover only canonical/Map Context symbols and the supported eudkit calls;
+  they are not a substitute for Pylance or tsserver.
 - Automatic installation of the Python or TypeScript SDK.
 - A Zed registry package. The MVP ships a dev-extension source archive.
-- Editor-specific completion or diagnostic logic. Both editors share the
-  server.
+- Editor-specific completion, hover, signature, or diagnostic logic. Both
+  editors share the server.
+
+Hover and signature help are post-`v0.1.1` development work and are not present
+in the published `v0.1.1` artifacts. The release notes stay historical; the next
+release will include this support.
 
 ## Related documentation
 
