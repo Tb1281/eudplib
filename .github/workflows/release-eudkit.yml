@@ -28,22 +28,18 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary_name: eudkit
             raw_binary_name: eudkit-linux-x86_64
-            archive_name: eudkit-linux-x86_64.tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary_name: eudkit.exe
             raw_binary_name: eudkit-windows-x86_64.exe
-            archive_name: eudkit-windows-x86_64.zip
           - os: macos-latest
             target: aarch64-apple-darwin
             binary_name: eudkit
             raw_binary_name: eudkit-macos-aarch64
-            archive_name: eudkit-macos-aarch64.tar.gz
           - os: macos-latest
             target: x86_64-apple-darwin
             binary_name: eudkit
             raw_binary_name: eudkit-macos-x86_64
-            archive_name: eudkit-macos-x86_64.tar.gz
 
     steps:
       - name: Checkout repository
@@ -76,11 +72,8 @@ jobs:
         run: |
           BIN_PATH="src/rust/target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
           chmod +x "$BIN_PATH"
-          mkdir -p dist to-release
-          cp "$BIN_PATH" dist/
-          tar -czf "to-release/${{ matrix.archive_name }}" -C dist "${{ matrix.binary_name }}"
+          mkdir -p to-release
           cp "$BIN_PATH" "to-release/${{ matrix.raw_binary_name }}"
-          (cd to-release && sha256sum "${{ matrix.archive_name }}" > "${{ matrix.archive_name }}.sha256")
           (cd to-release && sha256sum "${{ matrix.raw_binary_name }}" > "${{ matrix.raw_binary_name }}.sha256")
 
       - name: Package artifacts (Windows)
@@ -88,16 +81,11 @@ jobs:
         shell: pwsh
         run: |
           $binPath = "src/rust/target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
-          New-Item -ItemType Directory -Force -Path "dist", "to-release"
-          Copy-Item $binPath -Destination "dist/${{ matrix.binary_name }}"
-          Compress-Archive -Path "dist/${{ matrix.binary_name }}" -DestinationPath "to-release/${{ matrix.archive_name }}"
+          New-Item -ItemType Directory -Force -Path "to-release"
           Copy-Item $binPath -Destination "to-release/${{ matrix.raw_binary_name }}"
           Copy-Item $binPath -Destination "to-release/eudkit.exe"
 
           Push-Location to-release
-          $hArchive = (Get-FileHash -Algorithm SHA256 "${{ matrix.archive_name }}").Hash.ToLower()
-          "$hArchive  ${{ matrix.archive_name }}" | Out-File -Encoding ascii "${{ matrix.archive_name }}.sha256"
-
           $hRaw = (Get-FileHash -Algorithm SHA256 "${{ matrix.raw_binary_name }}").Hash.ToLower()
           "$hRaw  ${{ matrix.raw_binary_name }}" | Out-File -Encoding ascii "${{ matrix.raw_binary_name }}.sha256"
 
