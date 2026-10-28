@@ -15,6 +15,8 @@ pub struct TsCompiler<'a> {
     builder: HirBuilder,
     map_ctx: &'a MapContext,
     constants: HashMap<String, i32>,
+    array_constants: HashMap<String, Vec<i32>>,
+    local_constants: HashMap<String, i32>,
     vars: HashMap<String, VarId>,
     functions: HashMap<String, usize>, // name -> function index
     function_decls: Vec<(String, bool, Vec<VarId>, usize, Option<bool>)>,
@@ -79,11 +81,21 @@ impl<'a> TsCompiler<'a> {
 
         constants.insert("Set".to_string(), 2);
         constants.insert("Cleared".to_string(), 3);
+        constants.insert("Clear".to_string(), 5);
+        constants.insert("Toggle".to_string(), 6);
+        constants.insert("Random".to_string(), 7);
+
+        constants.insert("All".to_string(), 0);
+        constants.insert("Move".to_string(), 0);
+        constants.insert("Patrol".to_string(), 1);
+        constants.insert("Attack".to_string(), 2);
 
         Self {
             builder: HirBuilder::new(module_name),
             map_ctx,
             constants,
+            array_constants: HashMap::new(),
+            local_constants: HashMap::new(),
             vars: HashMap::new(),
             functions: HashMap::new(),
             function_decls: Vec::new(),
@@ -244,6 +256,73 @@ impl<'a> TsCompiler<'a> {
                     }
                 }
 
+                // Check if init is an ArrayExpression (e.g. `[session.var(...), ...]` or `[100, 200, 350]`)
+                if let Expression::ArrayExpression(arr) = init {
+                    let mut is_var_arr = false;
+                    for (idx, el) in arr.elements.iter().enumerate() {
+                        if let Some(Expression::CallExpression(call)) = el.as_expression() {
+                            let is_var_call = match &call.callee {
+                                Expression::Identifier(callee_ident) => {
+                                    callee_ident.name.as_str() == "var"
+                                        || callee_ident.name.as_str() == "var_"
+                                }
+                                Expression::StaticMemberExpression(mem) => {
+                                    mem.property.name.as_str() == "var"
+                                        || mem.property.name.as_str() == "var_"
+                                }
+                                _ => false,
+                            };
+                            if is_var_call {
+                                is_var_arr = true;
+                                let init_val = if let Some(arg0) =
+                                    call.arguments.first().and_then(|a| a.as_expression())
+                                {
+                                    self.eval_const_expr(arg0).unwrap_or(0)
+                                } else {
+                                    0
+                                };
+                                let elem_name = if let Some(arg1) =
+                                    call.arguments.get(1).and_then(|a| a.as_expression())
+                                {
+                                    if let Expression::StringLiteral(slit) = arg1 {
+                                        slit.value.as_str().unwrap_or("").to_string()
+                                    } else {
+                                        format!("{var_name}_{idx}")
+                                    }
+                                } else {
+                                    format!("{var_name}_{idx}")
+                                };
+                                let id = self.builder.add_var(&elem_name, init_val);
+                                self.vars.insert(elem_name.clone(), id);
+                                self.vars.insert(format!("{var_name}_{idx}"), id);
+                            }
+                        }
+                    }
+                    if is_var_arr {
+                        continue;
+                    }
+
+                    let mut const_vec = Vec::new();
+                    let mut all_const = true;
+                    for el in &arr.elements {
+                        if let Some(e) = el.as_expression() {
+                            if let Ok(c) = self.eval_const_expr(e) {
+                                const_vec.push(c);
+                            } else {
+                                all_const = false;
+                                break;
+                            }
+                        } else {
+                            all_const = false;
+                            break;
+                        }
+                    }
+                    if all_const && !const_vec.is_empty() {
+                        self.array_constants.insert(var_name.to_string(), const_vec);
+                        continue;
+                    }
+                }
+
                 // If const declaration with constant expression
                 if decl.kind == VariableDeclarationKind::Const {
                     if let Ok(cval) = self.eval_const_expr(init) {
@@ -355,14 +434,28 @@ impl<'a> TsCompiler<'a> {
         self.current_fn_idx = None;
         Ok(())
     }
+}
 
+fn split_or_conditions<'e>(expr: &'e Expression<'e>) -> Vec<&'e Expression<'e>> {
+    match expr {
+        Expression::ParenthesizedExpression(p) => split_or_conditions(&p.expression),
+        Expression::LogicalExpression(log) if log.operator == LogicalOperator::Or => {
+            let mut left = split_or_conditions(&log.left);
+            left.extend(split_or_conditions(&log.right));
+            left
+        }
+        _ => vec![expr],
+    }
+}
+
+impl<'a> TsCompiler<'a> {
     fn lower_stmt(&mut self, stmt: &Statement, out: &mut Vec<HirStmt>) -> Result<()> {
         match stmt {
             Statement::ExpressionStatement(estmt) => {
                 self.lower_expr_stmt(&estmt.expression, out)?;
             }
             Statement::IfStatement(if_stmt) => {
-                let conds = self.lower_condition(&if_stmt.test)?;
+                let branches = split_or_conditions(&if_stmt.test);
                 let mut then_body = Vec::new();
                 self.lower_block_or_stmt(&if_stmt.consequent, &mut then_body)?;
 
@@ -371,11 +464,25 @@ impl<'a> TsCompiler<'a> {
                     self.lower_block_or_stmt(alt, &mut else_body)?;
                 }
 
-                out.push(HirStmt::If {
-                    conditions: conds,
-                    then_body,
-                    else_body,
-                });
+                if branches.len() > 1 {
+                    let mut current_else = else_body;
+                    for branch in branches.into_iter().rev() {
+                        let conds = self.lower_condition(branch)?;
+                        current_else = vec![HirStmt::If {
+                            conditions: conds,
+                            then_body: then_body.clone(),
+                            else_body: current_else,
+                        }];
+                    }
+                    out.extend(current_else);
+                } else {
+                    let conds = self.lower_condition(&if_stmt.test)?;
+                    out.push(HirStmt::If {
+                        conditions: conds,
+                        then_body,
+                        else_body,
+                    });
+                }
             }
             Statement::WhileStatement(while_stmt) => {
                 let conds = self.lower_condition(&while_stmt.test)?;
@@ -482,6 +589,164 @@ impl<'a> TsCompiler<'a> {
                             }
                         }
 
+                        if let Expression::CallExpression(call) = init {
+                            let fn_name = match &call.callee {
+                                Expression::Identifier(call_ident) => Some(call_ident.name.as_str()),
+                                Expression::StaticMemberExpression(mem) => {
+                                    if let Expression::Identifier(obj) = &mem.object {
+                                        if obj.name.as_str() == "eudkit" {
+                                            Some(mem.property.name.as_str())
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                }
+                                _ => None,
+                            };
+                            if let Some(fname) = fn_name {
+                                match fname {
+                                    "dwread_epd" => {
+                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                            let epd = self.lower_expr(arg0)?;
+                                            let vid = self.builder.add_var(var_name, 0);
+                                            self.vars.insert(var_name.to_string(), vid);
+                                            out.push(HirStmt::MemRead {
+                                                dst: vid,
+                                                epd,
+                                                mask: 0xFFFF_FFFF,
+                                                shift: 0,
+                                                initial_val: 0,
+                                            });
+                                            continue;
+                                        }
+                                    }
+                                    "dwread" => {
+                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                            let ptr = self.lower_expr(arg0)?;
+                                            let epd = HirExpr::BinOp {
+                                                op: HirBinOp::Div,
+                                                lhs: Box::new(HirExpr::BinOp {
+                                                    op: HirBinOp::Sub,
+                                                    lhs: Box::new(ptr),
+                                                    rhs: Box::new(HirExpr::Const(0x0058A364)),
+                                                }),
+                                                rhs: Box::new(HirExpr::Const(4)),
+                                            }.fold_constants();
+                                            let vid = self.builder.add_var(var_name, 0);
+                                            self.vars.insert(var_name.to_string(), vid);
+                                            out.push(HirStmt::MemRead {
+                                                dst: vid,
+                                                epd,
+                                                mask: 0xFFFF_FFFF,
+                                                shift: 0,
+                                                initial_val: 0,
+                                            });
+                                            continue;
+                                        }
+                                    }
+                                    "epdread_epd" => {
+                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                            let epd = self.lower_expr(arg0)?;
+                                            let vid = self.builder.add_var(var_name, 0);
+                                            self.vars.insert(var_name.to_string(), vid);
+                                            out.push(HirStmt::MemRead {
+                                                dst: vid,
+                                                epd,
+                                                mask: 0xFFFF_FFFF,
+                                                shift: 0,
+                                                initial_val: -(0x0058A364 / 4),
+                                            });
+                                            continue;
+                                        }
+                                    }
+                                    "bread_epd" => {
+                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                            let epd = self.lower_expr(arg0)?;
+                                            let vid = self.builder.add_var(var_name, 0);
+                                            self.vars.insert(var_name.to_string(), vid);
+                                            out.push(HirStmt::MemRead {
+                                                dst: vid,
+                                                epd,
+                                                mask: 0xFF,
+                                                shift: 0,
+                                                initial_val: 0,
+                                            });
+                                            continue;
+                                        }
+                                    }
+                                    "bread" => {
+                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                            let ptr = self.lower_expr(arg0)?;
+                                            let epd = HirExpr::BinOp {
+                                                op: HirBinOp::Div,
+                                                lhs: Box::new(HirExpr::BinOp {
+                                                    op: HirBinOp::Sub,
+                                                    lhs: Box::new(ptr),
+                                                    rhs: Box::new(HirExpr::Const(0x0058A364)),
+                                                }),
+                                                rhs: Box::new(HirExpr::Const(4)),
+                                            }.fold_constants();
+                                            let vid = self.builder.add_var(var_name, 0);
+                                            self.vars.insert(var_name.to_string(), vid);
+                                            out.push(HirStmt::MemRead {
+                                                dst: vid,
+                                                epd,
+                                                mask: 0xFF,
+                                                shift: 0,
+                                                initial_val: 0,
+                                            });
+                                            continue;
+                                        }
+                                    }
+                                    "wread_epd" => {
+                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                            let epd = self.lower_expr(arg0)?;
+                                            let vid = self.builder.add_var(var_name, 0);
+                                            self.vars.insert(var_name.to_string(), vid);
+                                            out.push(HirStmt::MemRead {
+                                                dst: vid,
+                                                epd,
+                                                mask: 0xFFFF,
+                                                shift: 0,
+                                                initial_val: 0,
+                                            });
+                                            continue;
+                                        }
+                                    }
+                                    "wread" => {
+                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                            let ptr = self.lower_expr(arg0)?;
+                                            let epd = HirExpr::BinOp {
+                                                op: HirBinOp::Div,
+                                                lhs: Box::new(HirExpr::BinOp {
+                                                    op: HirBinOp::Sub,
+                                                    lhs: Box::new(ptr),
+                                                    rhs: Box::new(HirExpr::Const(0x0058A364)),
+                                                }),
+                                                rhs: Box::new(HirExpr::Const(4)),
+                                            }.fold_constants();
+                                            let vid = self.builder.add_var(var_name, 0);
+                                            self.vars.insert(var_name.to_string(), vid);
+                                            out.push(HirStmt::MemRead {
+                                                dst: vid,
+                                                epd,
+                                                mask: 0xFFFF,
+                                                shift: 0,
+                                                initial_val: 0,
+                                            });
+                                            continue;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+
+                        if let Ok(cval) = self.eval_const_expr(init) {
+                            self.local_constants.insert(var_name.to_string(), cval);
+                        }
                         let expr = self.lower_expr(init)?;
                         let vid = self.builder.add_var(var_name, 0);
                         self.vars.insert(var_name.to_string(), vid);
@@ -754,34 +1019,270 @@ impl<'a> TsCompiler<'a> {
         assign: &AssignmentExpression,
         out: &mut Vec<HirStmt>,
     ) -> Result<()> {
-        if let AssignmentTarget::AssignmentTargetIdentifier(ident) = &assign.left {
-            let var_name = ident.name.as_str();
-            let Some(&var_id) = self.vars.get(var_name) else {
-                return Err(EudkitTsError::Compile(format!(
-                    "unknown variable {var_name}"
-                )));
-            };
+        let resolved_var_id = match &assign.left {
+            AssignmentTarget::AssignmentTargetIdentifier(ident) => {
+                let var_name = ident.name.as_str();
+                self.vars.get(var_name).copied()
+            }
+            AssignmentTarget::ComputedMemberExpression(comp) => {
+                if let Expression::Identifier(ident) = &comp.object {
+                    if let Ok(idx) = self.eval_const_expr(&comp.expression) {
+                        let var_name = format!("{}_{}", ident.name.as_str(), idx);
+                        self.vars.get(&var_name).copied()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
 
+        if let Some(var_id) = resolved_var_id {
             if assign.operator == AssignmentOperator::Assign {
                 if let Expression::CallExpression(call) = &assign.right {
-                    if let Expression::Identifier(call_ident) = &call.callee {
-                        if let Some(&fn_idx) = self.functions.get(call_ident.name.as_str()) {
-                            let mut args = Vec::new();
-                            for a in &call.arguments {
-                                if let Some(e) = a.as_expression() {
-                                    args.push(self.lower_expr(e)?);
+                    let fn_name = match &call.callee {
+                        Expression::Identifier(call_ident) => Some(call_ident.name.as_str()),
+                        Expression::StaticMemberExpression(mem) => {
+                            if let Expression::Identifier(obj) = &mem.object {
+                                if obj.name.as_str() == "eudkit" {
+                                    Some(mem.property.name.as_str())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(fname) = fn_name {
+                        match fname {
+                            "dwread_epd" => {
+                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                    let epd = self.lower_expr(arg0)?;
+                                    out.push(HirStmt::MemRead {
+                                        dst: var_id,
+                                        epd,
+                                        mask: 0xFFFF_FFFF,
+                                        shift: 0,
+                                        initial_val: 0,
+                                    });
+                                    return Ok(());
                                 }
                             }
-                            out.push(HirStmt::Call {
-                                callee: eudkit_core::hir::FuncId(fn_idx as u32),
-                                args,
-                                rets: vec![var_id],
-                            });
-                            return Ok(());
+                            "dwread" => {
+                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                    let ptr = self.lower_expr(arg0)?;
+                                    let epd = HirExpr::BinOp {
+                                        op: HirBinOp::Div,
+                                        lhs: Box::new(HirExpr::BinOp {
+                                            op: HirBinOp::Sub,
+                                            lhs: Box::new(ptr),
+                                            rhs: Box::new(HirExpr::Const(0x0058A364)),
+                                        }),
+                                        rhs: Box::new(HirExpr::Const(4)),
+                                    }.fold_constants();
+                                    out.push(HirStmt::MemRead {
+                                        dst: var_id,
+                                        epd,
+                                        mask: 0xFFFF_FFFF,
+                                        shift: 0,
+                                        initial_val: 0,
+                                    });
+                                    return Ok(());
+                                }
+                            }
+                            "epdread_epd" => {
+                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                    let epd = self.lower_expr(arg0)?;
+                                    out.push(HirStmt::MemRead {
+                                        dst: var_id,
+                                        epd,
+                                        mask: 0xFFFF_FFFF,
+                                        shift: 0,
+                                        initial_val: -(0x0058A364 / 4),
+                                    });
+                                    return Ok(());
+                                }
+                            }
+                            "bread_epd" => {
+                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                    let epd = self.lower_expr(arg0)?;
+                                    out.push(HirStmt::MemRead {
+                                        dst: var_id,
+                                        epd,
+                                        mask: 0xFF,
+                                        shift: 0,
+                                        initial_val: 0,
+                                    });
+                                    return Ok(());
+                                }
+                            }
+                            "bread" => {
+                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                    let ptr = self.lower_expr(arg0)?;
+                                    let epd = HirExpr::BinOp {
+                                        op: HirBinOp::Div,
+                                        lhs: Box::new(HirExpr::BinOp {
+                                            op: HirBinOp::Sub,
+                                            lhs: Box::new(ptr),
+                                            rhs: Box::new(HirExpr::Const(0x0058A364)),
+                                        }),
+                                        rhs: Box::new(HirExpr::Const(4)),
+                                    }.fold_constants();
+                                    out.push(HirStmt::MemRead {
+                                        dst: var_id,
+                                        epd,
+                                        mask: 0xFF,
+                                        shift: 0,
+                                        initial_val: 0,
+                                    });
+                                    return Ok(());
+                                }
+                            }
+                            "wread_epd" => {
+                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                    let epd = self.lower_expr(arg0)?;
+                                    out.push(HirStmt::MemRead {
+                                        dst: var_id,
+                                        epd,
+                                        mask: 0xFFFF,
+                                        shift: 0,
+                                        initial_val: 0,
+                                    });
+                                    return Ok(());
+                                }
+                            }
+                            "wread" => {
+                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                    let ptr = self.lower_expr(arg0)?;
+                                    let epd = HirExpr::BinOp {
+                                        op: HirBinOp::Div,
+                                        lhs: Box::new(HirExpr::BinOp {
+                                            op: HirBinOp::Sub,
+                                            lhs: Box::new(ptr),
+                                            rhs: Box::new(HirExpr::Const(0x0058A364)),
+                                        }),
+                                        rhs: Box::new(HirExpr::Const(4)),
+                                    }.fold_constants();
+                                    out.push(HirStmt::MemRead {
+                                        dst: var_id,
+                                        epd,
+                                        mask: 0xFFFF,
+                                        shift: 0,
+                                        initial_val: 0,
+                                    });
+                                    return Ok(());
+                                }
+                            }
+                            _ => {
+                                if let Some(&fn_idx) = self.functions.get(fname) {
+                                    let mut args = Vec::new();
+                                    for a in &call.arguments {
+                                        if let Some(e) = a.as_expression() {
+                                            args.push(self.lower_expr(e)?);
+                                        }
+                                    }
+                                    out.push(HirStmt::Call {
+                                        callee: eudkit_core::hir::FuncId(fn_idx as u32),
+                                        args,
+                                        rets: vec![var_id],
+                                    });
+                                    return Ok(());
+                                }
+                            }
                         }
                     }
                 }
             }
+
+            let rhs_expr = self.lower_expr(&assign.right)?;
+            match assign.operator {
+                AssignmentOperator::Assign => {
+                    if let HirExpr::Const(c) = rhs_expr {
+                        out.push(HirStmt::VarAssignConst {
+                            var: var_id,
+                            value: c,
+                        });
+                    } else {
+                        out.push(HirStmt::VarAssignExpr {
+                            var: var_id,
+                            expr: rhs_expr,
+                        });
+                    }
+                }
+                AssignmentOperator::Addition => {
+                    if let HirExpr::Const(c) = rhs_expr {
+                        out.push(HirStmt::VarAddConst {
+                            var: var_id,
+                            value: c,
+                        });
+                    } else {
+                        let add_expr = HirExpr::BinOp {
+                            op: HirBinOp::Add,
+                            lhs: Box::new(HirExpr::Var(var_id)),
+                            rhs: Box::new(rhs_expr),
+                        }
+                        .fold_constants();
+                        out.push(HirStmt::VarAssignExpr {
+                            var: var_id,
+                            expr: add_expr,
+                        });
+                    }
+                }
+                AssignmentOperator::Subtraction => {
+                    if let HirExpr::Const(c) = rhs_expr {
+                        out.push(HirStmt::VarSubConst {
+                            var: var_id,
+                            value: c,
+                        });
+                    } else {
+                        let sub_expr = HirExpr::BinOp {
+                            op: HirBinOp::Sub,
+                            lhs: Box::new(HirExpr::Var(var_id)),
+                            rhs: Box::new(rhs_expr),
+                        }
+                        .fold_constants();
+                        out.push(HirStmt::VarAssignExpr {
+                            var: var_id,
+                            expr: sub_expr,
+                        });
+                    }
+                }
+                _ => {
+                    let bin_op = match assign.operator {
+                        AssignmentOperator::Multiplication => Some(HirBinOp::Mul),
+                        AssignmentOperator::Division => Some(HirBinOp::Div),
+                        AssignmentOperator::Remainder => Some(HirBinOp::Rem),
+                        AssignmentOperator::ShiftLeft => Some(HirBinOp::Shl),
+                        AssignmentOperator::ShiftRight => Some(HirBinOp::Shr),
+                        AssignmentOperator::BitwiseAnd => Some(HirBinOp::BitAnd),
+                        AssignmentOperator::BitwiseOR => Some(HirBinOp::BitOr),
+                        AssignmentOperator::BitwiseXOR => Some(HirBinOp::BitXor),
+                        _ => None,
+                    };
+                    if let Some(op) = bin_op {
+                        let expr = HirExpr::BinOp {
+                            op,
+                            lhs: Box::new(HirExpr::Var(var_id)),
+                            rhs: Box::new(rhs_expr),
+                        }
+                        .fold_constants();
+                        out.push(HirStmt::VarAssignExpr {
+                            var: var_id,
+                            expr,
+                        });
+                    } else {
+                        return Err(EudkitTsError::Compile(format!(
+                            "unsupported assignment operator {:?}",
+                            assign.operator
+                        )));
+                    }
+                }
+            }
+            return Ok(());
         }
 
         let rhs_expr = self.lower_expr(&assign.right)?;
@@ -944,14 +1445,31 @@ impl<'a> TsCompiler<'a> {
     }
 
     fn lower_update(&mut self, upd: &UpdateExpression, out: &mut Vec<HirStmt>) -> Result<()> {
-        let SimpleAssignmentTarget::AssignmentTargetIdentifier(ident) = &upd.argument else {
-            return Ok(());
-        };
-        let var_name = ident.name.as_str();
-        let Some(&var_id) = self.vars.get(var_name) else {
-            return Err(EudkitTsError::Compile(format!(
-                "unknown variable {var_name}"
-            )));
+        let var_id = match &upd.argument {
+            SimpleAssignmentTarget::AssignmentTargetIdentifier(ident) => {
+                let var_name = ident.name.as_str();
+                let Some(&vid) = self.vars.get(var_name) else {
+                    return Err(EudkitTsError::Compile(format!(
+                        "unknown variable {var_name}"
+                    )));
+                };
+                vid
+            }
+            SimpleAssignmentTarget::ComputedMemberExpression(comp) => {
+                if let Expression::Identifier(ident) = &comp.object {
+                    let idx = self.eval_const_expr(&comp.expression)?;
+                    let var_name = format!("{}_{}", ident.name.as_str(), idx);
+                    let Some(&vid) = self.vars.get(&var_name) else {
+                        return Err(EudkitTsError::Compile(format!(
+                            "unknown variable {var_name}"
+                        )));
+                    };
+                    vid
+                } else {
+                    return Ok(());
+                }
+            }
+            _ => return Ok(()),
         };
 
         match upd.operator {
@@ -1125,6 +1643,7 @@ impl<'a> TsCompiler<'a> {
 
     fn lower_condition(&mut self, expr: &Expression) -> Result<Vec<StockCondition>> {
         match expr {
+            Expression::ParenthesizedExpression(paren) => self.lower_condition(&paren.expression),
             Expression::LogicalExpression(log) if log.operator == LogicalOperator::And => {
                 let mut conds = self.lower_condition(&log.left)?;
                 conds.extend(self.lower_condition(&log.right)?);
@@ -1192,7 +1711,7 @@ impl<'a> TsCompiler<'a> {
         };
 
         if let Some(obj) = obj_name {
-            if obj != "eud" {
+            if obj != "eud" && obj != "session" && obj != "eudkit" {
                 if let Some(&var_id) = self.vars.get(obj) {
                     let op = match fn_name {
                         "atLeast" => Some(CmpOp::Ge),
@@ -1370,6 +1889,36 @@ impl<'a> TsCompiler<'a> {
                     resource: res,
                 }))
             }
+            "Command" => {
+                let p = self.eval_const_expr(call.arguments[0].as_expression().unwrap())?;
+                let cmp = self.resolve_comparison(call.arguments[1].as_expression().unwrap())?;
+                let amt = self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u32;
+                let unit = if let Some(arg3) = call.arguments.get(3).and_then(|a| a.as_expression()) {
+                    self.resolve_unit_id(arg3)?
+                } else {
+                    0
+                };
+                Ok(Some(StockCondition::Command {
+                    player: PlayerId::from_player_slot(p as u8),
+                    comparison: cmp,
+                    amount: amt,
+                    unit,
+                }))
+            }
+            "Bring" => {
+                let p = self.eval_const_expr(call.arguments[0].as_expression().unwrap())?;
+                let cmp = self.resolve_comparison(call.arguments[1].as_expression().unwrap())?;
+                let amt = self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u32;
+                let unit = self.resolve_unit_id(call.arguments[3].as_expression().unwrap())?;
+                let loc = self.resolve_location_id(call.arguments[4].as_expression().unwrap())?;
+                Ok(Some(StockCondition::Bring {
+                    player: PlayerId::from_player_slot(p as u8),
+                    comparison: cmp,
+                    amount: amt,
+                    unit,
+                    location: loc,
+                }))
+            }
             "ElapsedTime" => {
                 let cmp = self.resolve_comparison(call.arguments[0].as_expression().unwrap())?;
                 let seconds = self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u32;
@@ -1389,6 +1938,26 @@ impl<'a> TsCompiler<'a> {
                     comparison: cmp,
                     amount: amt,
                 }))
+            }
+            "Switch" => {
+                let sw_arg = call
+                    .arguments
+                    .first()
+                    .and_then(|a| a.as_expression())
+                    .ok_or_else(|| EudkitTsError::Compile("Switch requires switch id".to_string()))?;
+                let state_arg = call
+                    .arguments
+                    .get(1)
+                    .and_then(|a| a.as_expression())
+                    .ok_or_else(|| EudkitTsError::Compile("Switch requires state".to_string()))?;
+                let switch = self.eval_const_expr(sw_arg)? as u8;
+                let state_val = self.eval_const_expr(state_arg)?;
+                let state = match state_val {
+                    2 | 1 => eudkit_core::hir::SwitchState::Set,
+                    3 | 0 => eudkit_core::hir::SwitchState::Cleared,
+                    _ => return Err(EudkitTsError::Compile(format!("invalid switch state {state_val}"))),
+                };
+                Ok(Some(StockCondition::Switch { switch, state }))
             }
             _ => Ok(None),
         }
@@ -1454,12 +2023,113 @@ impl<'a> TsCompiler<'a> {
                     _ => {}
                 }
             }
-            if obj != "eud" && obj != "session" {
+            if obj != "eud" && obj != "session" && obj != "eudkit" {
                 return Ok(None);
             }
         }
 
         match fn_name {
+            "dwwrite_epd" => {
+                let epd_arg = call
+                    .arguments
+                    .first()
+                    .and_then(|a| a.as_expression())
+                    .ok_or_else(|| EudkitTsError::Compile("dwwrite_epd requires epd".to_string()))?;
+                let val_arg = call
+                    .arguments
+                    .get(1)
+                    .and_then(|a| a.as_expression())
+                    .ok_or_else(|| EudkitTsError::Compile("dwwrite_epd requires value".to_string()))?;
+                let epd_expr = self.lower_expr(epd_arg)?;
+                let val_expr = self.lower_expr(val_arg)?;
+                if let (HirExpr::Const(p), HirExpr::Const(v)) = (&epd_expr, &val_expr) {
+                    let pid = PlayerId::from_player_slot(*p as u8);
+                    Ok(Some(StockAction::SetDeaths {
+                        player: pid,
+                        modifier: Modifier::SetTo,
+                        value: HirValue::Const(*v),
+                        unit: 0,
+                    }))
+                } else {
+                    Ok(Some(StockAction::SetDeathsDynamic {
+                        player: epd_expr,
+                        modifier: Modifier::SetTo,
+                        value: val_expr,
+                        unit: 0,
+                        mask: None,
+                    }))
+                }
+            }
+            "bwrite_epd" => {
+                let epd_arg = call
+                    .arguments
+                    .first()
+                    .and_then(|a| a.as_expression())
+                    .ok_or_else(|| EudkitTsError::Compile("bwrite_epd requires epd".to_string()))?;
+                let val_arg = call
+                    .arguments
+                    .get(1)
+                    .and_then(|a| a.as_expression())
+                    .ok_or_else(|| EudkitTsError::Compile("bwrite_epd requires value".to_string()))?;
+                let epd_expr = self.lower_expr(epd_arg)?;
+                let val_expr = self.lower_expr(val_arg)?;
+                Ok(Some(StockAction::SetDeathsDynamic {
+                    player: epd_expr,
+                    modifier: Modifier::SetTo,
+                    value: val_expr,
+                    unit: 0,
+                    mask: Some(0xFF),
+                }))
+            }
+            "wwrite_epd" => {
+                let epd_arg = call
+                    .arguments
+                    .first()
+                    .and_then(|a| a.as_expression())
+                    .ok_or_else(|| EudkitTsError::Compile("wwrite_epd requires epd".to_string()))?;
+                let val_arg = call
+                    .arguments
+                    .get(1)
+                    .and_then(|a| a.as_expression())
+                    .ok_or_else(|| EudkitTsError::Compile("wwrite_epd requires value".to_string()))?;
+                let epd_expr = self.lower_expr(epd_arg)?;
+                let val_expr = self.lower_expr(val_arg)?;
+                Ok(Some(StockAction::SetDeathsDynamic {
+                    player: epd_expr,
+                    modifier: Modifier::SetTo,
+                    value: val_expr,
+                    unit: 0,
+                    mask: Some(0xFFFF),
+                }))
+            }
+            "dwwrite" => {
+                let addr_arg = call
+                    .arguments
+                    .first()
+                    .and_then(|a| a.as_expression())
+                    .ok_or_else(|| EudkitTsError::Compile("dwwrite requires address".to_string()))?;
+                let val_arg = call
+                    .arguments
+                    .get(1)
+                    .and_then(|a| a.as_expression())
+                    .ok_or_else(|| EudkitTsError::Compile("dwwrite requires value".to_string()))?;
+                let addr = self.eval_const_expr(addr_arg)? as u32;
+                let val_expr = self.lower_expr(val_arg)?;
+                if let HirExpr::Const(v) = val_expr {
+                    Ok(Some(StockAction::SetMemory {
+                        address: addr,
+                        modifier: Modifier::SetTo,
+                        value: HirValue::Const(v),
+                    }))
+                } else {
+                    Ok(Some(StockAction::SetMemoryDynamic {
+                        address: addr,
+                        modifier: Modifier::SetTo,
+                        value: val_expr,
+                        mask: None,
+                    }))
+                }
+            }
             "SetDeaths" | "SetDeathsX" => {
                 let p_arg = call
                     .arguments
@@ -1882,8 +2552,14 @@ impl<'a> TsCompiler<'a> {
                 if let Some(&lval) = self.loop_vars.get(name) {
                     return Ok(HirExpr::Const(lval));
                 }
+                if let Some(&lval) = self.local_constants.get(name) {
+                    return Ok(HirExpr::Const(lval));
+                }
                 if let Some(&cval) = self.constants.get(name) {
                     return Ok(HirExpr::Const(cval));
+                }
+                if let Some(bval) = Self::builtin_const(name) {
+                    return Ok(HirExpr::Const(bval));
                 }
                 if let Some(&var_id) = self.vars.get(name) {
                     return Ok(HirExpr::Var(var_id));
@@ -1981,12 +2657,82 @@ impl<'a> TsCompiler<'a> {
                     )))
                 }
             }
+            Expression::ComputedMemberExpression(comp) => {
+                if let Expression::Identifier(ident) = &comp.object {
+                    let name = ident.name.as_str();
+                    if let Some(arr) = self.array_constants.get(name) {
+                        let idx = self.eval_const_expr(&comp.expression)?;
+                        if (idx as usize) < arr.len() {
+                            return Ok(HirExpr::Const(arr[idx as usize]));
+                        }
+                    }
+                    if let Ok(idx) = self.eval_const_expr(&comp.expression) {
+                        let key = format!("{name}_{idx}");
+                        if let Some(&var_id) = self.vars.get(&key) {
+                            return Ok(HirExpr::Var(var_id));
+                        }
+                    }
+                }
+                Err(EudkitTsError::Compile(format!(
+                    "unsupported expression {:?}",
+                    expr
+                )))
+            }
             _ => Err(EudkitTsError::Compile(format!(
                 "unsupported expression {:?}",
                 expr
             ))),
         }
     }
+
+    pub fn builtin_const(name: &str) -> Option<i32> {
+    match name {
+        "Custom" => Some(7),
+        "Total" => Some(0),
+        "Units" => Some(1),
+        "Buildings" => Some(2),
+        "UnitsAndBuildings" => Some(3),
+        "Kills" => Some(4),
+        "Razings" => Some(5),
+        "KillsAndRazings" => Some(6),
+        "Ore" => Some(0),
+        "Gas" => Some(1),
+        "OreAndGas" => Some(2),
+        "SetTo" => Some(7),
+        "Add" => Some(8),
+        "Subtract" => Some(9),
+        "AtLeast" => Some(0),
+        "AtMost" => Some(1),
+        "Exactly" => Some(10),
+        "Set" => Some(2),
+        "Cleared" => Some(3),
+        "Clear" => Some(5),
+        "Toggle" => Some(6),
+        "Random" => Some(7),
+        "All" => Some(0),
+        "Move" => Some(0),
+        "Patrol" => Some(1),
+        "Attack" => Some(2),
+        "Player1" | "P1" => Some(0),
+        "Player2" | "P2" => Some(1),
+        "Player3" | "P3" => Some(2),
+        "Player4" | "P4" => Some(3),
+        "Player5" | "P5" => Some(4),
+        "Player6" | "P6" => Some(5),
+        "Player7" | "P7" => Some(6),
+        "Player8" | "P8" => Some(7),
+        "Player9" | "P9" => Some(8),
+        "Player10" | "P10" => Some(9),
+        "Player11" | "P11" => Some(10),
+        "Player12" | "P12" => Some(11),
+        "AllPlayers" => Some(17),
+        "Force1" => Some(18),
+        "Force2" => Some(19),
+        "Force3" => Some(20),
+        "Force4" => Some(21),
+        _ => None,
+    }
+}
 
     fn eval_const_expr(&self, expr: &Expression) -> Result<i32> {
         match expr {
@@ -2013,8 +2759,14 @@ impl<'a> TsCompiler<'a> {
                 if let Some(&lval) = self.loop_vars.get(name) {
                     return Ok(lval);
                 }
+                if let Some(&lval) = self.local_constants.get(name) {
+                    return Ok(lval);
+                }
                 if let Some(&cval) = self.constants.get(name) {
                     return Ok(cval);
+                }
+                if let Some(bval) = Self::builtin_const(name) {
+                    return Ok(bval);
                 }
                 Err(EudkitTsError::Compile(format!("unresolved constant {name}")))
             }
@@ -2067,6 +2819,21 @@ impl<'a> TsCompiler<'a> {
                 )))
             }
             Expression::ParenthesizedExpression(paren) => self.eval_const_expr(&paren.expression),
+            Expression::ComputedMemberExpression(comp) => {
+                if let Expression::Identifier(ident) = &comp.object {
+                    let name = ident.name.as_str();
+                    if let Some(arr) = self.array_constants.get(name) {
+                        let idx = self.eval_const_expr(&comp.expression)?;
+                        if (idx as usize) < arr.len() {
+                            return Ok(arr[idx as usize]);
+                        }
+                    }
+                }
+                Err(EudkitTsError::Compile(format!(
+                    "unsupported const computed member {:?}",
+                    comp
+                )))
+            }
             _ => Err(EudkitTsError::Compile(format!(
                 "expected constant expression, got {:?}",
                 expr

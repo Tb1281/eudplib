@@ -1,6 +1,6 @@
 """Automated Legacy vs Modern eudkit (v2) Validation Suite.
 
-Validates all 75 scenarios in `examples/legacy/`:
+Validates all 75 scenarios in `examples/`:
 1. Completeness: ensures each scenario has legacy.py, v2.py, and comparison.md.
 2. Architecture Vocabulary: validates presence of module, interface, seam, adapter, depth, locality, leverage.
 3. Compilation & Budget Gates:
@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shutil
+import subprocess
 import tempfile
 import time
 import unittest
@@ -24,7 +26,7 @@ from eudkit.runner import run_build
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BASEMAP_PATH = REPO_ROOT / "tests" / "outputmap" / "basemap" / "basemap_strx.scx"
-EXAMPLES_DIR = REPO_ROOT / "examples" / "legacy"
+EXAMPLES_DIR = REPO_ROOT / "examples"
 
 ARCHITECTURAL_TERMS = [
     "module",
@@ -46,7 +48,7 @@ class TestLegacyVersusV2(unittest.TestCase):
         assert len(cls.scenario_dirs) == 75, f"Expected 75 scenarios, found {len(cls.scenario_dirs)}"
 
     def test_01_all_75_scenarios_structure(self) -> None:
-        """Every scenario directory from 01 to 75 must have legacy.py, v2.py, and comparison.md."""
+        """Every scenario directory from 01 to 75 must have legacy.py, v2.py, v2.ts, and comparison.md."""
         for sdir in self.scenario_dirs:
             with self.subTest(scenario=sdir.name):
                 self.assertTrue(
@@ -56,6 +58,10 @@ class TestLegacyVersusV2(unittest.TestCase):
                 self.assertTrue(
                     (sdir / "v2.py").exists(),
                     f"{sdir.name} is missing v2.py",
+                )
+                self.assertTrue(
+                    (sdir / "v2.ts").exists(),
+                    f"{sdir.name} is missing v2.ts",
                 )
                 self.assertTrue(
                     (sdir / "comparison.md").exists(),
@@ -136,13 +142,49 @@ class TestLegacyVersusV2(unittest.TestCase):
         print(f"\n[Validation] 75 scenarios compiled in {total_compile_time:.2f}s (avg {avg_ms:.1f}ms/scenario)")
 
     def test_04_no_stray_scx_files(self) -> None:
-        """No temporary or generated .scx files should exist in examples/legacy/."""
+        """No temporary or generated .scx files should exist in examples/."""
         stray_files = list(EXAMPLES_DIR.glob("**/*.scx"))
         self.assertEqual(
             len(stray_files),
             0,
             f"Found stray .scx files in examples directory: {stray_files}",
         )
+
+    def test_05_v2_ts_compilation(self) -> None:
+        """All 75 v2.ts files must compile cleanly using eudkit build."""
+        cli = REPO_ROOT / "src" / "rust" / "target" / "debug" / "eudkit"
+        if not cli.exists():
+            cli = Path(shutil.which("eudkit") or "")
+        self.assertTrue(cli.exists(), "eudkit binary not found for TS compilation testing")
+
+        total_ts_time = 0.0
+        for sdir in self.scenario_dirs:
+            with self.subTest(scenario=sdir.name):
+                ts_file = sdir / "v2.ts"
+                self.assertTrue(ts_file.exists(), f"{sdir.name} is missing v2.ts")
+                t0 = time.perf_counter()
+                with tempfile.NamedTemporaryFile(suffix=".scx", delete=True) as tmp:
+                    cmd = [
+                        str(cli),
+                        "build",
+                        "--entry",
+                        str(ts_file),
+                        "--input",
+                        str(BASEMAP_PATH),
+                        "--output",
+                        tmp.name,
+                    ]
+                    res = subprocess.run(cmd, capture_output=True, text=True)
+                    self.assertEqual(
+                        res.returncode,
+                        0,
+                        f"{sdir.name} TS build failed:\n{res.stderr or res.stdout}",
+                    )
+                dt = time.perf_counter() - t0
+                total_ts_time += dt
+
+        avg_ms = (total_ts_time / len(self.scenario_dirs)) * 1000
+        print(f"\n[Validation] 75 TypeScript scenarios compiled in {total_ts_time:.2f}s (avg {avg_ms:.1f}ms/scenario)")
 
 
 if __name__ == "__main__":

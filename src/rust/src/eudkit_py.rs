@@ -122,11 +122,7 @@ fn decode_bin_op(code: u8) -> PyResult<HirBinOp> {
 }
 
 #[derive(Clone, Debug)]
-#[pyclass(
-    from_py_object,
-    name = "RawExpr",
-    module = "eudkit._rust"
-)]
+#[pyclass(from_py_object, name = "RawExpr", module = "eudkit._rust")]
 pub struct PyExpr(pub HirExpr);
 
 #[pymethods]
@@ -172,11 +168,7 @@ impl PyExpr {
 }
 
 #[derive(Clone, Debug)]
-#[pyclass(
-    from_py_object,
-    name = "RawMapString",
-    module = "eudkit._rust"
-)]
+#[pyclass(from_py_object, name = "RawMapString", module = "eudkit._rust")]
 pub struct PyMapString {
     #[pyo3(get)]
     pub id: u32,
@@ -199,11 +191,7 @@ impl PyMapString {
 }
 
 #[derive(Clone, Debug)]
-#[pyclass(
-    from_py_object,
-    name = "RawCondition",
-    module = "eudkit._rust"
-)]
+#[pyclass(from_py_object, name = "RawCondition", module = "eudkit._rust")]
 pub struct PyCondition(pub StockCondition);
 
 #[pymethods]
@@ -338,13 +326,7 @@ impl PyCondition {
     }
 
     #[staticmethod]
-    fn bring(
-        player: i32,
-        comparison: u8,
-        amount: u32,
-        unit: u16,
-        location: u32,
-    ) -> PyResult<Self> {
+    fn bring(player: i32, comparison: u8, amount: u32, unit: u16, location: u32) -> PyResult<Self> {
         Ok(Self(StockCondition::Bring {
             player: decode_player(player),
             comparison: decode_comparison(comparison)?,
@@ -386,11 +368,7 @@ impl PyCondition {
 }
 
 #[derive(Clone, Debug)]
-#[pyclass(
-    from_py_object,
-    name = "RawAction",
-    module = "eudkit._rust"
-)]
+#[pyclass(from_py_object, name = "RawAction", module = "eudkit._rust")]
 pub struct PyAction(pub StockAction);
 
 #[pymethods]
@@ -406,13 +384,7 @@ impl PyAction {
     }
 
     #[staticmethod]
-    fn set_deaths_x(
-        player: i32,
-        modifier: u8,
-        value: i32,
-        unit: u16,
-        mask: u32,
-    ) -> PyResult<Self> {
+    fn set_deaths_x(player: i32, modifier: u8, value: i32, unit: u16, mask: u32) -> PyResult<Self> {
         Ok(Self(StockAction::SetDeathsX {
             player: decode_player(player),
             modifier: decode_modifier(modifier)?,
@@ -443,12 +415,7 @@ impl PyAction {
 
     #[staticmethod]
     #[pyo3(signature = (var_id, modifier, value, mask=None))]
-    fn set_var_const(
-        var_id: u32,
-        modifier: u8,
-        value: i32,
-        mask: Option<u32>,
-    ) -> PyResult<Self> {
+    fn set_var_const(var_id: u32, modifier: u8, value: i32, mask: Option<u32>) -> PyResult<Self> {
         Ok(Self(StockAction::SetVarConst {
             var: VarId(var_id),
             modifier: decode_modifier(modifier)?,
@@ -527,7 +494,8 @@ impl PyAction {
         always_display: bool,
     ) -> PyResult<Self> {
         let arg_exprs: Vec<HirExpr> = args.unwrap_or_default().into_iter().map(|e| e.0).collect();
-        let parts = parse_format_template(&template, &arg_exprs).map_err(|e| PyValueError::new_err(e))?;
+        let parts =
+            parse_format_template(&template, &arg_exprs).map_err(|e| PyValueError::new_err(e))?;
         Ok(Self(StockAction::FormatPrint {
             target: PrintTarget::DisplayText,
             parts,
@@ -537,17 +505,11 @@ impl PyAction {
 
     #[staticmethod]
     #[pyo3(signature = (line, template, args=None))]
-    fn print_at(
-        line: u8,
-        template: String,
-        args: Option<Vec<PyExpr>>,
-    ) -> PyResult<Self> {
+    fn print_at(line: u8, template: String, args: Option<Vec<PyExpr>>) -> PyResult<Self> {
         let arg_exprs: Vec<HirExpr> = args.unwrap_or_default().into_iter().map(|e| e.0).collect();
-        let parts = parse_format_template(&template, &arg_exprs).map_err(|e| PyValueError::new_err(e))?;
-        Ok(Self(StockAction::PrintAt {
-            line,
-            parts,
-        }))
+        let parts =
+            parse_format_template(&template, &arg_exprs).map_err(|e| PyValueError::new_err(e))?;
+        Ok(Self(StockAction::PrintAt { line, parts }))
     }
 
     #[staticmethod]
@@ -558,7 +520,8 @@ impl PyAction {
         args: Option<Vec<PyExpr>>,
     ) -> PyResult<Self> {
         let arg_exprs: Vec<HirExpr> = args.unwrap_or_default().into_iter().map(|e| e.0).collect();
-        let parts = parse_format_template(&template, &arg_exprs).map_err(|e| PyValueError::new_err(e))?;
+        let parts =
+            parse_format_template(&template, &arg_exprs).map_err(|e| PyValueError::new_err(e))?;
         Ok(Self(StockAction::FormatPrint {
             target: PrintTarget::MapString(string_id),
             parts,
@@ -655,13 +618,7 @@ impl PyAction {
     }
 
     #[staticmethod]
-    fn give_units(
-        count: u8,
-        unit: u16,
-        player: i32,
-        location: u32,
-        new_player: i32,
-    ) -> Self {
+    fn give_units(count: u8, unit: u16, player: i32, location: u32, new_player: i32) -> Self {
         Self(StockAction::GiveUnits {
             count,
             unit,
@@ -719,11 +676,7 @@ impl PyAction {
 }
 
 #[derive(Clone, Debug)]
-#[pyclass(
-    from_py_object,
-    name = "CompilationReport",
-    module = "eudkit._rust"
-)]
+#[pyclass(from_py_object, name = "CompilationReport", module = "eudkit._rust")]
 pub struct PyCompilationReport {
     #[pyo3(get)]
     pub trigger_count: usize,
@@ -743,11 +696,7 @@ pub struct PyCompilationReport {
     pub ort_count: usize,
 }
 
-#[pyclass(
-    unsendable,
-    name = "RawSession",
-    module = "eudkit._rust"
-)]
+#[pyclass(unsendable, name = "RawSession", module = "eudkit._rust")]
 pub struct PyCompilationSession {
     session: CompilationSession,
     builder: HirBuilder,
@@ -1023,7 +972,13 @@ impl PyCompilationSession {
         self.builder.push_var_sub_const(VarId(var_id), value);
     }
 
-    fn push_var_set_mask(&mut self, var_id: u32, modifier: u8, value: i32, mask: u32) -> PyResult<()> {
+    fn push_var_set_mask(
+        &mut self,
+        var_id: u32,
+        modifier: u8,
+        value: i32,
+        mask: u32,
+    ) -> PyResult<()> {
         self.dirty = true;
         let mod_enum = decode_modifier(modifier)?;
         self.builder
@@ -1069,22 +1024,10 @@ impl PyCompilationSession {
     }
 
     #[pyo3(signature = (dst, epd, mask=0xFFFF_FFFF, shift=0, initial_val=0))]
-    fn push_mem_read(
-        &mut self,
-        dst: u32,
-        epd: &PyExpr,
-        mask: u32,
-        shift: i32,
-        initial_val: i32,
-    ) {
+    fn push_mem_read(&mut self, dst: u32, epd: &PyExpr, mask: u32, shift: i32, initial_val: i32) {
         self.dirty = true;
-        self.builder.push_mem_read(
-            VarId(dst),
-            epd.0.clone(),
-            mask,
-            shift,
-            initial_val,
-        );
+        self.builder
+            .push_mem_read(VarId(dst), epd.0.clone(), mask, shift, initial_val);
     }
 
     #[pyo3(signature = (name, param_count=0, return_count=0, initial_target=None))]
@@ -1097,7 +1040,11 @@ impl PyCompilationSession {
     ) -> u32 {
         self.dirty = true;
         self.builder
-            .add_func_ptr(name, (param_count, return_count), initial_target.map(FuncId))
+            .add_func_ptr(
+                name,
+                (param_count, return_count),
+                initial_target.map(FuncId),
+            )
             .0
     }
 

@@ -68,9 +68,28 @@ export const Ore = 0;
 export const Gas = 1;
 export const OreAndGas = 2;
 
-// Switch States
+// Switch States & Actions
 export const Set = 2;
 export const Cleared = 3;
+export const Clear = 5;
+export const Toggle = 6;
+export const Random = 7;
+
+// Unit Counts & Orders
+export const All = 0;
+export const Move = 0;
+export const Patrol = 1;
+export const Attack = 2;
+
+// Score Types
+export const Total = 0;
+export const Units = 1;
+export const Buildings = 2;
+export const UnitsAndBuildings = 3;
+export const Kills = 4;
+export const Razings = 5;
+export const KillsAndRazings = 6;
+export const Custom = 7;
 
 export type ExprLike = number | Var | MaskedVar | Expr;
 
@@ -223,6 +242,19 @@ export function Switch(
   return new Condition("Switch", [switchId, state]);
 }
 
+export function ElapsedTime(comparison: number, time: number): Condition {
+  return new Condition("ElapsedTime", [comparison, time]);
+}
+
+export function Score(
+  player: number,
+  comparison: number,
+  amount: number,
+  scoreType: number = 0
+): Condition {
+  return new Condition("Score", [player, comparison, amount, scoreType]);
+}
+
 // --- Actions ---
 
 export class Action {
@@ -325,6 +357,117 @@ export function Victory(): Action {
 
 export function Defeat(): Action {
   return new Action("Defeat", []);
+}
+
+export function KillUnit(unit: number | string, player: number): Action {
+  return new Action("KillUnit", [unit, player]);
+}
+
+export function KillUnitAt(
+  count: number,
+  unit: number | string,
+  location: number | string,
+  player: number
+): Action {
+  return new Action("KillUnitAt", [count, unit, location, player]);
+}
+
+export function RemoveUnitAt(
+  count: number,
+  unit: number | string,
+  location: number | string,
+  player: number
+): Action {
+  return new Action("RemoveUnitAt", [count, unit, location, player]);
+}
+
+export function MoveLocation(
+  location: number | string,
+  onUnit: number | string,
+  owner: number,
+  destLocation: number | string
+): Action {
+  return new Action("MoveLocation", [location, onUnit, owner, destLocation]);
+}
+
+export function MoveUnit(
+  count: number,
+  unit: number | string,
+  player: number,
+  srcLocation: number | string,
+  destLocation: number | string
+): Action {
+  return new Action("MoveUnit", [count, unit, player, srcLocation, destLocation]);
+}
+
+export function GiveUnits(
+  count: number,
+  unit: number | string,
+  player: number,
+  srcLocation: number | string,
+  toPlayer: number
+): Action {
+  return new Action("GiveUnits", [count, unit, player, srcLocation, toPlayer]);
+}
+
+export function Order(
+  unit: number | string,
+  player: number,
+  srcLocation: number | string,
+  orderType: number,
+  destLocation: number | string
+): Action {
+  return new Action("Order", [unit, player, srcLocation, orderType, destLocation]);
+}
+
+export function PlayWAV(wavFile: string): Action {
+  return new Action("PlayWAV", [wavFile]);
+}
+
+export function MinimapPing(location: number | string): Action {
+  return new Action("MinimapPing", [location]);
+}
+
+export function SetScore(
+  player: number,
+  modifier: number,
+  amount: number,
+  scoreType: number = 0
+): Action {
+  return new Action("SetScore", [player, modifier, amount, scoreType]);
+}
+
+export function SetSwitch(switchId: number | string, action: number = Set): Action {
+  return new Action("SetSwitch", [switchId, action]);
+}
+
+// --- Memory Read/Write Operations ---
+
+export function dwread(ptr: number | Var): number { return 0; }
+export function dwread_epd(epd: number | Var): number { return 0; }
+export function epdread_epd(epd: number | Var): number { return 0; }
+export function bread(ptr: number | Var): number { return 0; }
+export function bread_epd(epd: number | Var): number { return 0; }
+export function wread(ptr: number | Var): number { return 0; }
+export function wread_epd(epd: number | Var): number { return 0; }
+
+export function dwwrite(ptr: number | Var, val: number | Var): Action {
+  return SetMemory(typeof ptr === "number" ? ptr : 0, SetTo, val);
+}
+export function dwwrite_epd(epd: number | Var, val: number | Var): Action {
+  return SetDeaths(epd, SetTo, val, 0);
+}
+export function bwrite(ptr: number | Var, val: number | Var): Action {
+  return SetMemory(typeof ptr === "number" ? ptr : 0, SetTo, val);
+}
+export function bwrite_epd(epd: number | Var, val: number | Var): Action {
+  return SetDeaths(epd, SetTo, val, 0);
+}
+export function wwrite(ptr: number | Var, val: number | Var): Action {
+  return SetMemory(typeof ptr === "number" ? ptr : 0, SetTo, val);
+}
+export function wwrite_epd(epd: number | Var, val: number | Var): Action {
+  return SetDeaths(epd, SetTo, val, 0);
 }
 
 export function DoActions(...actions: Action[]): void {
@@ -474,6 +617,7 @@ export class EUDArray {
     this.data[idx] = val;
   }
 }
+export { EUDArray as Array };
 
 export class MapString {
   public readonly id: number = 0;

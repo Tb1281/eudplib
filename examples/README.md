@@ -22,6 +22,30 @@ Each directory contains:
 
 ---
 
+## 75 Scenario Benchmark Corpus
+
+In addition to the 6 core architecture showcases above, `examples/` contains a comprehensive benchmark corpus of **75 real-world scenario implementations** (`01-kill-counter/` through `75-hero-ping-tracker/`).
+
+Each scenario folder contains:
+- `legacy.py`: The legacy `eudplib` v1 implementation.
+- `v2.py`: The modern `eudkit` v2 Python implementation.
+- `v2.ts`: The modern `eudkit` v2 TypeScript implementation importing from `"eudkit"`.
+- `comparison.md`: Detailed architectural analysis with budget gate metrics comparing trigger counts and payload footprint.
+
+Both Python and TypeScript implementations can be built directly with `eudkit build`:
+
+```bash
+# Build Python implementation
+eudkit build --entry examples/01-kill-counter/v2.py --input tests/unittests/testmap.scx --output build/p01_py.scx
+
+# Build TypeScript implementation
+eudkit build --entry examples/01-kill-counter/v2.ts --input tests/unittests/testmap.scx --output build/p01_ts.scx
+```
+
+All 75 scenarios are verified across both Python and TypeScript runtimes in `tests/test_legacy_versus_v2.py`.
+
+---
+
 ## Language Parity: Python & TypeScript
 
 `eudkit` v2 provides first-class language parity between Python and TypeScript. The reactive primitives and builder APIs adapt naturally to each language's native idioms:
