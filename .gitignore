@@ -21,6 +21,10 @@ src/rust/stormlib-rs/**/*.lock
 
 .idea/
 *.vscode
+# The VS Code extension's F5 launch configuration is source, not local state.
+!editors/vscode/.vscode/
+!editors/vscode/.vscode/launch.json
+!editors/vscode/.vscode/tasks.json
 .DS_Store
 tests/outputmap/
 tests/output.png
