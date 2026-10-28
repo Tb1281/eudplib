@@ -36,8 +36,12 @@ output: build/migrated_out.scx
 [src/main.eps]
 "#;
 
-    let project = parse_edd_or_eds(edd_content, Path::new("project.edd")).expect("should parse .edd");
-    assert_eq!(project.input_map, PathBuf::from("tests/unittests/testmap.scx"));
+    let project =
+        parse_edd_or_eds(edd_content, Path::new("project.edd")).expect("should parse .edd");
+    assert_eq!(
+        project.input_map,
+        PathBuf::from("tests/unittests/testmap.scx")
+    );
     assert_eq!(project.output_map, PathBuf::from("build/migrated_out.scx"));
     assert_eq!(project.entry_eps, Some(PathBuf::from("src/main.eps")));
     assert_eq!(project.entry_ts, PathBuf::from("src/main.ts"));
@@ -288,8 +292,14 @@ output: {}
         .read_all()
         .unwrap();
     let chk = Chk::parse(&raw_chk).unwrap();
-    assert!(!chk.has_isom_footer(), "plain build must not have fake ISOM footer");
-    assert!(chk.section(b"STR ").is_some(), "plain build must retain STR section for editor compatibility");
+    assert!(
+        !chk.has_isom_footer(),
+        "plain build must not have fake ISOM footer"
+    );
+    assert!(
+        chk.section(b"STR ").is_some(),
+        "plain build must retain STR section for editor compatibility"
+    );
     assert!(chk.section(b"STRx").is_some());
     assert!(chk.section(b"TRIG").is_some());
 }
@@ -338,10 +348,17 @@ fn test_migrating_repository_eps_fixtures() {
     ];
 
     for fixture_path in &fixtures {
-        assert!(fixture_path.exists(), "fixture {:?} should exist", fixture_path);
+        assert!(
+            fixture_path.exists(),
+            "fixture {:?} should exist",
+            fixture_path
+        );
         let content = fs::read_to_string(fixture_path).unwrap();
         let ts = convert_eps_to_ts(&content).expect("fixture should convert cleanly");
-        assert!(ts.contains("@eudkit/sdk"), "converted TS should import @eudkit/sdk");
+        assert!(
+            ts.contains("@eudkit/sdk"),
+            "converted TS should import @eudkit/sdk"
+        );
     }
 }
 
@@ -415,13 +432,14 @@ obscurate = false
         .read_all()
         .unwrap();
     let chk = Chk::parse(&raw_chk).unwrap();
-    assert!(!chk.has_isom_footer(), "plain build must not have fake ISOM footer");
-    assert!(chk.section(b"STR ").is_some(), "plain build must retain STR section for editor compatibility");
+    assert!(
+        !chk.has_isom_footer(),
+        "plain build must not have fake ISOM footer"
+    );
+    assert!(
+        chk.section(b"STR ").is_some(),
+        "plain build must retain STR section for editor compatibility"
+    );
     assert!(chk.section(b"STRx").is_some());
     assert!(chk.section(b"TRIG").is_some());
 }
-
-
-
-
-

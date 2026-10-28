@@ -122,10 +122,9 @@ impl CompilationSession {
     }
 
     pub fn lower_to_lir(&mut self) -> Result<&LirModule> {
-        let hir = self
-            .hir_module
-            .as_ref()
-            .ok_or_else(|| EudkitError::Ir("no HIR module set in CompilationSession".to_string()))?;
+        let hir = self.hir_module.as_ref().ok_or_else(|| {
+            EudkitError::Ir("no HIR module set in CompilationSession".to_string())
+        })?;
         let lir = lower_hir_to_lir(hir, &mut self.map_context)?;
         self.lir_module = Some(lir);
         Ok(self.lir_module.as_ref().unwrap())
@@ -216,7 +215,10 @@ impl CompilationSession {
             let mrgn_info = crate::obscurate::protect_chk_sections(&mut out_chk, &mut rng)?;
 
             // 4. Build startup restore triggers for TRIG
-            crate::obscurate::build_obscuration_restore_triggers(mrgn_info.as_ref(), &string_restores)
+            crate::obscurate::build_obscuration_restore_triggers(
+                mrgn_info.as_ref(),
+                &string_restores,
+            )
         } else {
             Vec::new()
         };

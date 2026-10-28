@@ -1,7 +1,7 @@
 use crate::hir::{epd, Comparison, Modifier, CURRENT_PLAYER_ADDR};
 use crate::lir::types::{
-    ActField, FieldRef, LirAction, LirCondition, LirTrigger, ObjectId, TriggerSlotField,
-    ValueExpr, EUDX_SIGNATURE,
+    ActField, FieldRef, LirAction, LirCondition, LirTrigger, ObjectId, TriggerSlotField, ValueExpr,
+    EUDX_SIGNATURE,
 };
 use std::collections::HashMap;
 

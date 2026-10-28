@@ -903,7 +903,8 @@ impl StockCondition {
                         return Self::from_cmp(lhs, CmpOp::Ge, HirExpr::Const(1));
                     }
                     if ru == u32::MAX {
-                        return Self::from_cmp(lhs, CmpOp::Le, HirExpr::Const(-2)); // 0xFFFFFFFE
+                        return Self::from_cmp(lhs, CmpOp::Le, HirExpr::Const(-2));
+                        // 0xFFFFFFFE
                     }
                     let diff = HirExpr::BinOp {
                         op: HirBinOp::Sub,
@@ -1022,10 +1023,7 @@ impl fmt::Display for StockCondition {
                 comparison,
                 value,
                 mask: None,
-            } => write!(
-                f,
-                "MemoryDynamic({address:#010X}, {comparison}, {value})"
-            ),
+            } => write!(f, "MemoryDynamic({address:#010X}, {comparison}, {value})"),
             Self::MemoryDynamic {
                 address,
                 comparison,
@@ -1061,7 +1059,10 @@ impl fmt::Display for StockCondition {
                 comparison,
                 amount,
                 resource,
-            } => write!(f, "Accumulate({player}, {comparison}, {amount}, {resource})"),
+            } => write!(
+                f,
+                "Accumulate({player}, {comparison}, {amount}, {resource})"
+            ),
             Self::Command {
                 player,
                 comparison,
@@ -1079,8 +1080,19 @@ impl fmt::Display for StockCondition {
                 "Bring({player}, {comparison}, {amount}, unit={unit}, loc={location})"
             ),
             Self::Switch { switch, state } => write!(f, "Switch({switch}, {state:?})"),
-            Self::ElapsedTime { comparison, seconds } => write!(f, "ElapsedTime({comparison}, {seconds}s)"),
-            Self::Score { player, score_type, comparison, amount } => write!(f, "Score({player}, type={score_type}, {comparison}, {amount})"),
+            Self::ElapsedTime {
+                comparison,
+                seconds,
+            } => write!(f, "ElapsedTime({comparison}, {seconds}s)"),
+            Self::Score {
+                player,
+                score_type,
+                comparison,
+                amount,
+            } => write!(
+                f,
+                "Score({player}, type={score_type}, {comparison}, {amount})"
+            ),
             Self::IsUserCp => write!(f, "IsUserCP()"),
         }
     }
@@ -1882,7 +1894,12 @@ impl HirModule {
                 let arg_strs: Vec<String> = args.iter().map(ToString::to_string).collect();
                 let ret_strs: Vec<String> = rets.iter().map(|r| format!("@v{}", r.0)).collect();
                 if ret_strs.is_empty() {
-                    let _ = writeln!(out, "{pad}call_indirect @fp{}({})", ptr.0, arg_strs.join(", "));
+                    let _ = writeln!(
+                        out,
+                        "{pad}call_indirect @fp{}({})",
+                        ptr.0,
+                        arg_strs.join(", ")
+                    );
                 } else {
                     let _ = writeln!(
                         out,
@@ -1893,7 +1910,13 @@ impl HirModule {
                     );
                 }
             }
-            HirStmt::MemRead { dst, epd, mask, shift, initial_val } => {
+            HirStmt::MemRead {
+                dst,
+                epd,
+                mask,
+                shift,
+                initial_val,
+            } => {
                 let _ = writeln!(
                     out,
                     "{pad}@v{} = mem_read(epd={epd}, mask={mask:#010X}, shift={shift}, init={initial_val})",
@@ -2043,4 +2066,3 @@ impl HirModule {
         lower_reactive_rules(self)
     }
 }
-

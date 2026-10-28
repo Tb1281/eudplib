@@ -259,8 +259,7 @@ fn inline_caller(
     let mut new_blocks: Vec<HirBasicBlock> = Vec::new();
 
     for block in caller.blocks {
-        let (expanded_stmts, _had_calls) =
-            expand_stmts_inline(&block.stmts, module, inlinable)?;
+        let (expanded_stmts, _had_calls) = expand_stmts_inline(&block.stmts, module, inlinable)?;
         let mut new_block = HirBasicBlock::new(block.label.clone());
         new_block.id = BlockId(new_blocks.len() as u32);
         new_block.stmts = expanded_stmts;
@@ -293,10 +292,8 @@ fn expand_stmts_inline(
                 then_body,
                 else_body,
             } => {
-                let (new_then, inlined_then) =
-                    expand_stmts_inline(then_body, module, inlinable)?;
-                let (new_else, inlined_else) =
-                    expand_stmts_inline(else_body, module, inlinable)?;
+                let (new_then, inlined_then) = expand_stmts_inline(then_body, module, inlinable)?;
+                let (new_else, inlined_else) = expand_stmts_inline(else_body, module, inlinable)?;
                 if inlined_then || inlined_else {
                     any_inlined = true;
                 }
@@ -307,8 +304,7 @@ fn expand_stmts_inline(
                 });
             }
             HirStmt::While { conditions, body } => {
-                let (new_body, inlined_body) =
-                    expand_stmts_inline(body, module, inlinable)?;
+                let (new_body, inlined_body) = expand_stmts_inline(body, module, inlinable)?;
                 if inlined_body {
                     any_inlined = true;
                 }
@@ -540,7 +536,13 @@ fn lower_inlined_stmts(
                     expr: folded,
                 });
             }
-            HirStmt::MemRead { dst, epd, mask, shift, initial_val } => {
+            HirStmt::MemRead {
+                dst,
+                epd,
+                mask,
+                shift,
+                initial_val,
+            } => {
                 let target = current_subst
                     .get(dst)
                     .and_then(|e| match e {

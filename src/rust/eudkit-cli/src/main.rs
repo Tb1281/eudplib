@@ -39,19 +39,25 @@ fn default_tracer_hir(module_name: &str) -> HirModule {
         ],
         preserved: true,
     });
-    main_fn.block_mut(entry_bb).set_terminator(HirTerminator::Branch {
-        conditions: vec![StockCondition::Deaths {
-            player: PlayerId::Player1,
-            comparison: Comparison::AtLeast,
-            amount: 0,
-            unit: 0,
-        }],
-        then_block: body_bb,
-        else_block: exit_bb,
-    });
+    main_fn
+        .block_mut(entry_bb)
+        .set_terminator(HirTerminator::Branch {
+            conditions: vec![StockCondition::Deaths {
+                player: PlayerId::Player1,
+                comparison: Comparison::AtLeast,
+                amount: 0,
+                unit: 0,
+            }],
+            then_block: body_bb,
+            else_block: exit_bb,
+        });
 
-    main_fn.block_mut(body_bb).set_terminator(HirTerminator::Jump(exit_bb));
-    main_fn.block_mut(exit_bb).set_terminator(HirTerminator::Return);
+    main_fn
+        .block_mut(body_bb)
+        .set_terminator(HirTerminator::Jump(exit_bb));
+    main_fn
+        .block_mut(exit_bb)
+        .set_terminator(HirTerminator::Return);
 
     hir.add_function(main_fn);
     hir
@@ -66,9 +72,7 @@ fn cmd_inspect(args: &[String]) -> Result<(), String> {
         match args[i].as_str() {
             "--dts" => {
                 i += 1;
-                dts_out = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --dts")?,
-                ));
+                dts_out = Some(PathBuf::from(args.get(i).ok_or("missing value for --dts")?));
             }
             other if !other.starts_with('-') && map_arg.is_none() => {
                 map_arg = Some(PathBuf::from(other));
@@ -210,9 +214,7 @@ fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
         match args[i].as_str() {
             "--map" | "-m" | "--input" | "-i" => {
                 i += 1;
-                map_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --map")?,
-                ));
+                map_path = Some(PathBuf::from(args.get(i).ok_or("missing value for --map")?));
             }
             "--config" | "-c" => {
                 i += 1;
@@ -260,7 +262,12 @@ fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
         )
     } else {
         let mp = map_path.ok_or("usage: eudkit dump-ir --map <map.scx>")?;
-        (mp, CompilationConfig::default(), "tracer_module".to_string(), entry_path)
+        (
+            mp,
+            CompilationConfig::default(),
+            "tracer_module".to_string(),
+            entry_path,
+        )
     };
 
     if let Some(entry) = &resolved_entry {
@@ -367,8 +374,14 @@ fn execute_python_build(
     let stdout = String::from_utf8_lossy(&output.stdout);
     print!("{stdout}");
 
-    let session = CompilationSession::from_map(&proj_cfg.output_map, proj_cfg.to_compilation_config())
-        .map_err(|e| format!("failed to read generated map {}: {e}", proj_cfg.output_map.display()))?;
+    let session =
+        CompilationSession::from_map(&proj_cfg.output_map, proj_cfg.to_compilation_config())
+            .map_err(|e| {
+                format!(
+                    "failed to read generated map {}: {e}",
+                    proj_cfg.output_map.display()
+                )
+            })?;
 
     Ok(eudkit_core::CompilationReport {
         trigger_count: session.map_context().triggers().len(),
@@ -390,7 +403,10 @@ fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationRep
     }
 
     if let Some(entry_path) = &proj_cfg.entry {
-        let ext = entry_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        let ext = entry_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
         if ext == "py" {
             return execute_python_build(proj_cfg, entry_path);
         }

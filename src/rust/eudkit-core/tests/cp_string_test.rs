@@ -44,7 +44,10 @@ fn cpstring_residue_stride_streaming_groups_mod12_and_respects_n_plus_11_bound()
     }
 
     assert_eq!(write_actions, 48, "Must emit exactly N=48 write actions");
-    assert_eq!(advance_actions, 11, "Must advance 0x6509B0 at most 11 times");
+    assert_eq!(
+        advance_actions, 11,
+        "Must advance 0x6509B0 at most 11 times"
+    );
     assert!(
         actions.len() <= 48 + 11,
         "Total actions ({}) must be <= N + 11 (59)",

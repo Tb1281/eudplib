@@ -47,7 +47,10 @@ fn extracts_typed_map_context_from_real_scx_maps_with_zero_global_state() {
     assert_eq!(ctx_b.location_id("Anywhere"), Some(64));
 
     // UNIT: Placed units parsed into 36-byte records
-    assert!(!ctx_a.placed_units().is_empty(), "basemap should have placed units");
+    assert!(
+        !ctx_a.placed_units().is_empty(),
+        "basemap should have placed units"
+    );
     assert_eq!(ctx_a.placed_units().len(), ctx_b.placed_units().len());
 
     // UPRP: 64 CUWP unit property slots (1-based 1..=64)

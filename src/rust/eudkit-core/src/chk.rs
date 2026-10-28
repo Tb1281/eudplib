@@ -1,10 +1,9 @@
 use crate::error::{EudkitError, Result};
 
 pub const USED_SECTIONS: &[[u8; 4]] = &[
-    *b"VER ", *b"VCOD", *b"OWNR", *b"ERA ", *b"DIM ", *b"SIDE", *b"MTXM",
-    *b"UNIT", *b"THG2", *b"MASK", *b"STR ", *b"STRx", *b"UPRP", *b"MRGN", *b"TRIG",
-    *b"MBRF", *b"SPRP", *b"FORC", *b"COLR", *b"PUNI", *b"PUPx", *b"PTEx",
-    *b"UNIx", *b"UPGx", *b"TECx", *b"CRGB",
+    *b"VER ", *b"VCOD", *b"OWNR", *b"ERA ", *b"DIM ", *b"SIDE", *b"MTXM", *b"UNIT", *b"THG2",
+    *b"MASK", *b"STR ", *b"STRx", *b"UPRP", *b"MRGN", *b"TRIG", *b"MBRF", *b"SPRP", *b"FORC",
+    *b"COLR", *b"PUNI", *b"PUPx", *b"PTEx", *b"UNIx", *b"UPGx", *b"TECx", *b"CRGB",
 ];
 
 pub const DETERMINISTIC_ISOM_LEN: u32 = 0x8000_0000 | 0x1919_43C8;

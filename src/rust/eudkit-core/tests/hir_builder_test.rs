@@ -73,7 +73,8 @@ fn test_hir_builder_unclosed_block_fails_finish() {
 
     let err = builder.finish().unwrap_err();
     assert!(
-        err.to_string().contains("cannot finish HIR while a function or control-flow block is still open"),
+        err.to_string()
+            .contains("cannot finish HIR while a function or control-flow block is still open"),
         "expected unclosed error, got {err:?}"
     );
 }
@@ -112,8 +113,11 @@ fn test_hir_builder_multiple_else_fails() {
     // Second else must fail
     let err = builder.begin_else().unwrap_err();
     assert!(
-        err.to_string().contains("if block already has an else branch")
-            || err.to_string().contains("else must immediately follow an if or elif block"),
+        err.to_string()
+            .contains("if block already has an else branch")
+            || err
+                .to_string()
+                .contains("else must immediately follow an if or elif block"),
         "expected error, got {err:?}"
     );
 }

@@ -12,16 +12,19 @@ use std::collections::{HashMap, HashSet};
 
 fn count_leaf_action_actions(act: &StockAction) -> usize {
     match act {
-        StockAction::PrintAt { parts, .. } => {
-            crate::cp_string::emit_format_parts_actions(
-                ValueExpr::Const(0),
-                parts,
-                None,
-                false,
-                &std::collections::HashMap::new(),
-            ).len()
-        }
-        StockAction::FormatPrint { target, parts, always_display } => {
+        StockAction::PrintAt { parts, .. } => crate::cp_string::emit_format_parts_actions(
+            ValueExpr::Const(0),
+            parts,
+            None,
+            false,
+            &std::collections::HashMap::new(),
+        )
+        .len(),
+        StockAction::FormatPrint {
+            target,
+            parts,
+            always_display,
+        } => {
             let has_disp = matches!(target, crate::hir::PrintTarget::DisplayText);
             crate::cp_string::emit_format_parts_actions(
                 ValueExpr::Const(0),
@@ -29,7 +32,8 @@ fn count_leaf_action_actions(act: &StockAction) -> usize {
                 if has_disp { Some(1) } else { None },
                 *always_display,
                 &std::collections::HashMap::new(),
-            ).len()
+            )
+            .len()
         }
         _ => 1,
     }
@@ -122,7 +126,9 @@ fn count_block_triggers(blk: &ExpandedBlock) -> u32 {
                 let act_count = if rets.is_empty() { 1 } else { rets.len() + 1 };
                 add_pending(act_count, &mut pending_actions, &mut count);
             }
-            ExpandedOp::WriteFuncReturnSlot { src_var, const_val, .. } => {
+            ExpandedOp::WriteFuncReturnSlot {
+                src_var, const_val, ..
+            } => {
                 if const_val.is_some() {
                     add_pending(1, &mut pending_actions, &mut count);
                 } else if src_var.is_some() {
@@ -133,7 +139,9 @@ fn count_block_triggers(blk: &ExpandedBlock) -> u32 {
             ExpandedOp::FuncPtrAssignTarget { .. } => {
                 add_pending(1, &mut pending_actions, &mut count);
             }
-            ExpandedOp::MemReadSetup { epd, initial_val, .. } => {
+            ExpandedOp::MemReadSetup {
+                epd, initial_val, ..
+            } => {
                 let acts = if *initial_val != 0 { 3 } else { 2 };
                 match epd {
                     HirExpr::Const(_) => {
@@ -210,7 +218,11 @@ fn make_vproc_set_modifier(src_storage: VarStorage, modifier: Modifier) -> LirAc
     )
 }
 
-fn make_vproc_set_dest(src_storage: VarStorage, dest_epd: ValueExpr, modifier: Modifier) -> LirAction {
+fn make_vproc_set_dest(
+    src_storage: VarStorage,
+    dest_epd: ValueExpr,
+    modifier: Modifier,
+) -> LirAction {
     let dest_field = src_storage.vproc_field(VProcSlotField::Dest);
     make_set_deaths_action(ValueExpr::FieldEpd(dest_field), modifier, dest_epd, None)
 }
@@ -239,7 +251,6 @@ fn vproc_trigger_addr(src_storage: VarStorage) -> ValueExpr {
     ValueExpr::FieldAddress(src_storage.vproc_field(VProcSlotField::TriggerBase))
 }
 
-
 pub fn emit_lir(
     hir: &HirModule,
     expanded_cfg: ExpandedCfg,
@@ -254,7 +265,10 @@ pub fn emit_lir(
     let fp_trampoline_block = expanded_cfg.fp_trampoline_block;
     let vproc_var_set = collect_vproc_vars(&expanded_blocks);
 
-    let has_ret_slots = hir.functions.iter().any(|f| f.return_count > 0 && fn_entry_block.contains_key(&f.id))
+    let has_ret_slots = hir
+        .functions
+        .iter()
+        .any(|f| f.return_count > 0 && fn_entry_block.contains_key(&f.id))
         || hir.func_ptrs.iter().any(|fp| fp.signature.1 > 0);
     let mut func_ret_slots: HashMap<crate::hir::FuncId, Vec<u32>> = HashMap::new();
     let mut ptr_ret_slots: HashMap<crate::hir::FuncPtrId, Vec<u32>> = HashMap::new();
@@ -354,13 +368,12 @@ pub fn emit_lir(
                 }
                 for i in 0..slots.len().saturating_sub(1) {
                     let next_slot = slots[i + 1];
-                    vproc_slots[slots[i] as usize].next_ptr = ValueExpr::FieldAddress(FieldRef::vproc_slot(
-                        vbuf.0,
-                        next_slot,
-                        VProcSlotField::TriggerBase,
-                    ));
+                    vproc_slots[slots[i] as usize].next_ptr = ValueExpr::FieldAddress(
+                        FieldRef::vproc_slot(vbuf.0, next_slot, VProcSlotField::TriggerBase),
+                    );
                 }
-                vproc_slots[*slots.last().unwrap() as usize].next_ptr = ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32);
+                vproc_slots[*slots.last().unwrap() as usize].next_ptr =
+                    ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32);
                 ptr_ret_slots.insert(fp.id, slots.clone());
 
                 let mut fp_targets = HashSet::new();
@@ -384,7 +397,10 @@ pub fn emit_lir(
 
         // 2. Allocate return slots for remaining non-FuncPtr functions
         for func in &hir.functions {
-            if func.id == main_fn_id || !fn_entry_block.contains_key(&func.id) || func_ret_slots.contains_key(&func.id) {
+            if func.id == main_fn_id
+                || !fn_entry_block.contains_key(&func.id)
+                || func_ret_slots.contains_key(&func.id)
+            {
                 continue;
             }
             if func.return_count > 0 {
@@ -403,13 +419,12 @@ pub fn emit_lir(
                 }
                 for i in 0..slots.len().saturating_sub(1) {
                     let next_slot = slots[i + 1];
-                    vproc_slots[slots[i] as usize].next_ptr = ValueExpr::FieldAddress(FieldRef::vproc_slot(
-                        vbuf.0,
-                        next_slot,
-                        VProcSlotField::TriggerBase,
-                    ));
+                    vproc_slots[slots[i] as usize].next_ptr = ValueExpr::FieldAddress(
+                        FieldRef::vproc_slot(vbuf.0, next_slot, VProcSlotField::TriggerBase),
+                    );
                 }
-                vproc_slots[*slots.last().unwrap() as usize].next_ptr = ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32);
+                vproc_slots[*slots.last().unwrap() as usize].next_ptr =
+                    ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32);
                 func_ret_slots.insert(func.id, slots);
             }
         }
@@ -649,7 +664,7 @@ pub fn emit_lir(
                 amount: ValueExpr::Const(0),
                 unitid: 0,
                 comparison: 10, // Exactly
-                condtype: 15, // Deaths
+                condtype: 15,   // Deaths
                 restype: 0,
                 flags: 0,
                 eudx: 0,
@@ -1016,7 +1031,7 @@ pub fn emit_lir(
                     flags: 4,
                     eudx: 0,
                 }
-            },
+            }
             StockAction::Comment { text } => {
                 let str_id = map_ctx.get_or_insert_string(text.as_bytes());
                 LirAction {
@@ -1090,20 +1105,30 @@ pub fn emit_lir(
                 let dest_epd = ValueExpr::Const(epd(0x640B60 + 218 * (*line as u32)));
                 emit_format_parts_actions(dest_epd, parts, None, false, &var_inits)
             }
-            StockAction::FormatPrint { target, parts, always_display } => {
+            StockAction::FormatPrint {
+                target,
+                parts,
+                always_display,
+            } => {
                 let (dest_epd, display_str_id) = match target {
                     crate::hir::PrintTarget::ScreenLine(line) => {
                         (ValueExpr::Const(epd(0x640B60 + 218 * (*line as u32))), None)
                     }
                     crate::hir::PrintTarget::MapString(str_id) => {
                         let off = map_ctx.string_table().string_offset(*str_id).unwrap_or(0);
-                        (ValueExpr::Const(epd(crate::hir::STRX_BASE_ADDR + off)), None)
+                        (
+                            ValueExpr::Const(epd(crate::hir::STRX_BASE_ADDR + off)),
+                            None,
+                        )
                     }
                     crate::hir::PrintTarget::DisplayText => {
                         let buf_text = "\r\n                                                                                                                        \0";
                         let str_id = map_ctx.get_or_insert_string(buf_text.as_bytes());
                         let off = map_ctx.string_table().string_offset(str_id).unwrap_or(0);
-                        (ValueExpr::Const(epd(crate::hir::STRX_BASE_ADDR + off)), Some(str_id))
+                        (
+                            ValueExpr::Const(epd(crate::hir::STRX_BASE_ADDR + off)),
+                            Some(str_id),
+                        )
                     }
                     crate::hir::PrintTarget::Memory(epd_expr) => {
                         let target_val = match epd_expr.fold_constants() {
@@ -1114,7 +1139,13 @@ pub fn emit_lir(
                         (target_val, None)
                     }
                 };
-                emit_format_parts_actions(dest_epd, parts, display_str_id, *always_display, &var_inits)
+                emit_format_parts_actions(
+                    dest_epd,
+                    parts,
+                    display_str_id,
+                    *always_display,
+                    &var_inits,
+                )
             }
             other => vec![lower_single_act(other, map_ctx)],
         }
@@ -1363,11 +1394,8 @@ pub fn emit_lir(
                         &block.label,
                     );
                     let mask_trig_id = ObjectId(cur_obj_id + 1);
-                    let mask_field_epd = ValueExpr::FieldEpd(FieldRef::action(
-                        mask_trig_id.0,
-                        0,
-                        ActField::LocId1,
-                    ));
+                    let mask_field_epd =
+                        ValueExpr::FieldEpd(FieldRef::action(mask_trig_id.0, 0, ActField::LocId1));
                     // mask_field = ~0; mask_field -= src
                     pending_actions.push(make_set_deaths_action(
                         mask_field_epd,
@@ -1426,11 +1454,8 @@ pub fn emit_lir(
                         &block.label,
                     );
                     let mask_trig_id = ObjectId(cur_obj_id + 1);
-                    let mask_field_epd = ValueExpr::FieldEpd(FieldRef::action(
-                        mask_trig_id.0,
-                        0,
-                        ActField::LocId1,
-                    ));
+                    let mask_field_epd =
+                        ValueExpr::FieldEpd(FieldRef::action(mask_trig_id.0, 0, ActField::LocId1));
                     pending_actions.push(make_vproc_set_dest(
                         src_st,
                         mask_field_epd,
@@ -1555,10 +1580,8 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                     );
                     debug_assert_eq!(ObjectId(cur_obj_id), loopstart_id);
-                    let loopstart_nptr_epd = ValueExpr::FieldEpd(FieldRef::new(
-                        loopstart_id,
-                        TriggerSlotField::NextPtr,
-                    ));
+                    let loopstart_nptr_epd =
+                        ValueExpr::FieldEpd(FieldRef::new(loopstart_id, TriggerSlotField::NextPtr));
                     emit_custom_trigger(
                         format!("{}_dyn_shl_loopstart_{}", block.label, cur_obj_id),
                         loopend_addr,
@@ -1595,12 +1618,15 @@ pub fn emit_lir(
                         },
                         Vec::new(),
                         vec![
-                            lower_single_act(&StockAction::SetVarConst {
-                                var: *shift,
-                                modifier: Modifier::Subtract,
-                                value: 1,
-                                mask: None,
-                            }, map_ctx),
+                            lower_single_act(
+                                &StockAction::SetVarConst {
+                                    var: *shift,
+                                    modifier: Modifier::Subtract,
+                                    value: 1,
+                                    mask: None,
+                                },
+                                map_ctx,
+                            ),
                             make_set_deaths_action(
                                 loopstart_nptr_epd,
                                 Modifier::SetTo,
@@ -1627,16 +1653,10 @@ pub fn emit_lir(
 
                     // Total triggers emitted by DynamicMul: 1 + 32*2 + 31*2 + 1 = 128
                     let endmul_id = ObjectId(cur_obj_id + 127);
-                    let reset_p1_epd = ValueExpr::FieldEpd(FieldRef::action(
-                        endmul_id.0,
-                        0,
-                        ActField::Player1,
-                    ));
-                    let reset_p2_epd = ValueExpr::FieldEpd(FieldRef::action(
-                        endmul_id.0,
-                        0,
-                        ActField::Player2,
-                    ));
+                    let reset_p1_epd =
+                        ValueExpr::FieldEpd(FieldRef::action(endmul_id.0, 0, ActField::Player1));
+                    let reset_p2_epd =
+                        ValueExpr::FieldEpd(FieldRef::action(endmul_id.0, 0, ActField::Player2));
 
                     // 1. Init trigger
                     emit_custom_trigger(
@@ -1674,10 +1694,8 @@ pub fn emit_lir(
                             first_p1 = p1_id;
                             first_p2 = p2_id;
                         }
-                        let p1_nptr_epd = ValueExpr::FieldEpd(FieldRef::new(
-                            p1_id,
-                            TriggerSlotField::NextPtr,
-                        ));
+                        let p1_nptr_epd =
+                            ValueExpr::FieldEpd(FieldRef::new(p1_id, TriggerSlotField::NextPtr));
                         // p1: if lhs & (1<<i), jump to p3 else p2
                         emit_custom_trigger(
                             format!("{}_mul_p1_{i}_{}", block.label, cur_obj_id),
@@ -1807,10 +1825,8 @@ pub fn emit_lir(
 
                     debug_assert_eq!(ObjectId(cur_obj_id), endmul_id);
                     let ret_addr = next_return_addr(cur_obj_id + 1);
-                    let first_p1_nptr_epd = ValueExpr::FieldEpd(FieldRef::new(
-                        first_p1,
-                        TriggerSlotField::NextPtr,
-                    ));
+                    let first_p1_nptr_epd =
+                        ValueExpr::FieldEpd(FieldRef::new(first_p1, TriggerSlotField::NextPtr));
                     emit_custom_trigger(
                         format!("{}_mul_end_{}", block.label, cur_obj_id),
                         ret_addr,
@@ -2144,7 +2160,10 @@ pub fn emit_lir(
                                 &mut cur_obj_id,
                                 &block.label,
                             );
-                            let next_field_epd = ValueExpr::FieldEpd(FieldRef::new(void_trig, TriggerSlotField::NextPtr));
+                            let next_field_epd = ValueExpr::FieldEpd(FieldRef::new(
+                                void_trig,
+                                TriggerSlotField::NextPtr,
+                            ));
                             pending_actions.push(make_set_deaths_action(
                                 next_field_epd,
                                 Modifier::SetTo,
@@ -2160,7 +2179,10 @@ pub fn emit_lir(
                             &mut cur_obj_id,
                             &block.label,
                         );
-                        let next_field_epd = ValueExpr::FieldEpd(FieldRef::new(void_trig, TriggerSlotField::NextPtr));
+                        let next_field_epd = ValueExpr::FieldEpd(FieldRef::new(
+                            void_trig,
+                            TriggerSlotField::NextPtr,
+                        ));
                         pending_actions.push(make_set_deaths_action(
                             next_field_epd,
                             Modifier::SetTo,
@@ -2261,7 +2283,11 @@ pub fn emit_lir(
                         );
                         let next_id = cur_obj_id + 1;
                         let ret_addr = next_return_addr(next_id);
-                        pending_actions.push(make_vproc_set_dest(src_st, val_field_epd, Modifier::SetTo));
+                        pending_actions.push(make_vproc_set_dest(
+                            src_st,
+                            val_field_epd,
+                            Modifier::SetTo,
+                        ));
                         pending_actions.push(make_vproc_set_modifier(src_st, Modifier::SetTo));
                         pending_actions.push(make_vproc_set_nextptr(src_st, ret_addr));
                         let acts = std::mem::take(&mut pending_actions);
@@ -2286,7 +2312,8 @@ pub fn emit_lir(
                     );
                     let tramp_block = fp_trampoline_block[ptr];
                     let tramp_trig = block_first_trigger[&tramp_block];
-                    let next_field_epd = ValueExpr::FieldEpd(FieldRef::new(tramp_trig, TriggerSlotField::NextPtr));
+                    let next_field_epd =
+                        ValueExpr::FieldEpd(FieldRef::new(tramp_trig, TriggerSlotField::NextPtr));
                     let target_entry_block = fn_entry_block[target];
                     let target_trig = block_first_trigger[&target_entry_block];
                     let target_addr = ValueExpr::ObjectAddress {
@@ -2670,9 +2697,10 @@ pub fn emit_lir(
             let target_id = block_triggers[i + 1..]
                 .iter()
                 .find(|t| {
-                    let is_patch = t.label.as_deref().is_some_and(|l| {
-                        l.contains("_patch_cond_") || l.contains("_patch_act_")
-                    });
+                    let is_patch = t
+                        .label
+                        .as_deref()
+                        .is_some_and(|l| l.contains("_patch_cond_") || l.contains("_patch_act_"));
                     if is_patch {
                         return false;
                     }

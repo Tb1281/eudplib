@@ -118,8 +118,7 @@ impl ProjectConfig {
                 | ("project", "obscurate_seed") => {
                     cfg.obscurate_seed = Some(parse_toml_u64(val, line_no + 1)?);
                 }
-                ("", "preserve_classic_triggers")
-                | ("build", "preserve_classic_triggers") => {
+                ("", "preserve_classic_triggers") | ("build", "preserve_classic_triggers") => {
                     cfg.preserve_classic_triggers = parse_toml_bool(val, line_no + 1)?;
                 }
                 _ => {}
@@ -206,7 +205,10 @@ fn parse_toml_bool(val: &str, line_no: usize) -> Result<bool> {
 
 fn parse_toml_u64(val: &str, line_no: usize) -> Result<u64> {
     let clean = val.replace('_', "");
-    if let Some(hex) = clean.strip_prefix("0x").or_else(|| clean.strip_prefix("0X")) {
+    if let Some(hex) = clean
+        .strip_prefix("0x")
+        .or_else(|| clean.strip_prefix("0X"))
+    {
         u64::from_str_radix(hex, 16)
     } else {
         clean.parse::<u64>()

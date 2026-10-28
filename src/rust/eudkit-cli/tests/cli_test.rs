@@ -66,7 +66,10 @@ obscurate_seed = 42
     assert!(inspect_stdout.contains("CUWP Slots:"));
     assert!(inspect_stdout.contains("Switches:"));
     assert!(inspect_stdout.contains("Players:"));
-    assert!(inspect_dts_path.exists(), "inspect --dts should generate .d.ts");
+    assert!(
+        inspect_dts_path.exists(),
+        "inspect --dts should generate .d.ts"
+    );
     let dts_content = fs::read_to_string(&inspect_dts_path).unwrap();
     assert!(dts_content.contains("export type LocationId ="));
     assert!(dts_content.contains("export type UnitId ="));
@@ -132,7 +135,10 @@ obscurate_seed = 42
 
     let b1 = fs::read(&out1).unwrap();
     let b2 = fs::read(&out2).unwrap();
-    assert_eq!(b1, b2, "CLI build output must be byte-for-byte deterministic");
+    assert_eq!(
+        b1, b2,
+        "CLI build output must be byte-for-byte deterministic"
+    );
 
     let mut archive = Archive::open(&out1, OpenArchiveFlags::empty()).unwrap();
     let raw_chk = archive
@@ -141,8 +147,14 @@ obscurate_seed = 42
         .read_all()
         .unwrap();
     let chk = Chk::parse(&raw_chk).unwrap();
-    assert!(!chk.has_isom_footer(), "plain build must not have fake ISOM footer");
-    assert!(chk.section(b"STR ").is_some(), "plain build must retain STR section for editor compatibility");
+    assert!(
+        !chk.has_isom_footer(),
+        "plain build must not have fake ISOM footer"
+    );
+    assert!(
+        chk.section(b"STR ").is_some(),
+        "plain build must retain STR section for editor compatibility"
+    );
     assert!(chk.section(b"STRx").is_some());
     assert!(chk.section(b"TRIG").is_some());
 }
@@ -232,7 +244,10 @@ obscurate = false
     assert!(build1_stdout.contains("triggers="));
 
     // Verify .d.ts was generated
-    assert!(dts_file.exists(), ".d.ts file should have been generated during build");
+    assert!(
+        dts_file.exists(),
+        ".d.ts file should have been generated during build"
+    );
     let dts_content = fs::read_to_string(&dts_file).unwrap();
     assert!(dts_content.contains("export type UnitId ="));
     assert!(dts_content.contains("export interface MapContext"));
@@ -254,7 +269,10 @@ obscurate = false
 
     let b1 = fs::read(&out1).unwrap();
     let b2 = fs::read(&out2).unwrap();
-    assert_eq!(b1, b2, "TS build output must be byte-for-byte deterministic");
+    assert_eq!(
+        b1, b2,
+        "TS build output must be byte-for-byte deterministic"
+    );
 
     // 4. Validate output archive with StormLib and Chk
     let mut archive = Archive::open(&out1, OpenArchiveFlags::empty()).unwrap();
@@ -264,8 +282,14 @@ obscurate = false
         .read_all()
         .unwrap();
     let chk = Chk::parse(&raw_chk).unwrap();
-    assert!(!chk.has_isom_footer(), "plain build must not have fake ISOM footer");
-    assert!(chk.section(b"STR ").is_some(), "plain build must retain STR section for editor compatibility");
+    assert!(
+        !chk.has_isom_footer(),
+        "plain build must not have fake ISOM footer"
+    );
+    assert!(
+        chk.section(b"STR ").is_some(),
+        "plain build must retain STR section for editor compatibility"
+    );
     assert!(chk.section(b"STRx").is_some());
     assert!(chk.section(b"TRIG").is_some());
 }
@@ -348,7 +372,10 @@ fn cli_build_with_obscurate_flag_and_seed_produces_deterministic_scx() {
     let b_diff = fs::read(&out_diff_seed).unwrap();
 
     // Determinism: seed 42 runs must be byte-for-byte identical
-    assert_eq!(b1, b2, "repeated --obscurate builds with same --seed must be byte-for-byte identical");
+    assert_eq!(
+        b1, b2,
+        "repeated --obscurate builds with same --seed must be byte-for-byte identical"
+    );
 
     // Divergence: obscured build must differ from plain and from different seed
     assert_ne!(b1, b_plain, "obscured build must differ from plain build");
@@ -362,7 +389,10 @@ fn cli_build_with_obscurate_flag_and_seed_produces_deterministic_scx() {
         .read_all()
         .unwrap();
     let chk = Chk::parse(&raw_chk).unwrap();
-    assert!(chk.has_isom_footer(), "obscured build must have fake ISOM footer");
+    assert!(
+        chk.has_isom_footer(),
+        "obscured build must have fake ISOM footer"
+    );
     assert!(chk.section(b"STRx").is_some());
     assert!(chk.section(b"TRIG").is_some());
     assert!(chk.section(b"MRGN").is_some());
@@ -412,7 +442,10 @@ fn cli_watch_command_and_build_with_watch_flag() {
         "build --watch failed: {}",
         String::from_utf8_lossy(&build_watch_run.stderr)
     );
-    assert!(out_build_watch.exists(), "build --watch --once should produce output map");
+    assert!(
+        out_build_watch.exists(),
+        "build --watch --once should produce output map"
+    );
 }
 
 #[test]
@@ -508,7 +541,10 @@ def game_loop():
         .arg("build")
         .output()
         .expect("should execute eudkit build in empty directory");
-    assert!(!err_run.status.success(), "should fail without config or args");
+    assert!(
+        !err_run.status.success(),
+        "should fail without config or args"
+    );
     let err_stderr = String::from_utf8_lossy(&err_run.stderr);
     assert!(err_stderr.contains("usage: eudkit build"));
 }
@@ -530,7 +566,11 @@ fn cli_builds_all_typescript_showcase_examples_cleanly() {
 
     for (idx, rel_path) in example_entries.iter().enumerate() {
         let entry = root.join(rel_path);
-        assert!(entry.exists(), "showcase entry must exist: {}", entry.display());
+        assert!(
+            entry.exists(),
+            "showcase entry must exist: {}",
+            entry.display()
+        );
 
         let out_scx = temp.path().join(format!("showcase_0{}.scx", idx + 1));
         let build = Command::new(eudkit_bin())

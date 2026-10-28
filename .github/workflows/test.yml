@@ -87,22 +87,24 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install libpython for embedding tests
-        run: sudo apt-get update && sudo apt-get install -y python3-dev
+        with:
+          workspaces: src/rust
+      - name: Install Rust test dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build python3-dev
       - name: Format check
         working-directory: src/rust
-        run: cargo fmt -p eudplib-epscript -- --check
+        run: cargo fmt --all -- --check
       - name: Clippy
         working-directory: src/rust
-        run: cargo clippy -p eudplib-epscript --all-targets
+        run: cargo clippy --workspace --all-targets
       - name: Test
         working-directory: src/rust
-        run: cargo test -p eudplib-epscript
+        run: cargo test --workspace
       - name: MSRV check
         working-directory: src/rust
         run: |
-          rustup toolchain install 1.83.0 --profile minimal
-          cargo +1.83.0 check -p eudplib-epscript
+          rustup toolchain install 1.97.0 --profile minimal
+          cargo +1.97.0 check --workspace --all-targets
 
   mypy:
     name: mypy

@@ -60,13 +60,18 @@ fn non_inlined_function_uses_direct_return_convention_without_double_copy() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let output_map = temp_dir.path().join("direct_return_output.scx");
 
-    let mut session = CompilationSession::from_map(&basemap_path(), eudkit_core::CompilationConfig::default()).expect("open session");
+    let mut session =
+        CompilationSession::from_map(&basemap_path(), eudkit_core::CompilationConfig::default())
+            .expect("open session");
     session.set_hir_module(module);
     let lir = session.lower_to_lir().expect("lower to lir");
 
     // The non-inlined function must be present in LIR and not inlined away
     // It should have return VProc slots in the unified VProc buffer
-    assert!(lir.vproc_count() > 0, "non-inlined function with returns requires return VProc slots");
+    assert!(
+        lir.vproc_count() > 0,
+        "non-inlined function with returns requires return VProc slots"
+    );
 
     let report = session.compile_map(&output_map).expect("compile map");
     assert!(output_map.exists());

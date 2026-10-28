@@ -6,8 +6,8 @@ use crate::hir::{
 use crate::lir::cp_scheduler::schedule_cp_cursor;
 use crate::lir::expr_lowerer::{eval_expr_to_var_or_const, lower_expr_into};
 use crate::lir::types::{
-    alloc_block, ActField, CondField, ExpandedBlock, ExpandedCfg, ExpandedOp,
-    ExpandedTerminator, ScratchAllocator,
+    alloc_block, ActField, CondField, ExpandedBlock, ExpandedCfg, ExpandedOp, ExpandedTerminator,
+    ScratchAllocator,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -569,12 +569,14 @@ pub fn lower_and_expand_cfg(
                     let mut pre_ops = Vec::new();
                     let lowered_conds = prepare_conditions(conditions, hir, scratch, &mut pre_ops);
                     out_blocks[cur_block.0 as usize].ops.extend(pre_ops);
-                    out_blocks[cur_block.0 as usize].ops.push(ExpandedOp::Trigger {
-                        label: label.clone(),
-                        conditions: lowered_conds,
-                        actions: actions.clone(),
-                        preserved: *preserved,
-                    });
+                    out_blocks[cur_block.0 as usize]
+                        .ops
+                        .push(ExpandedOp::Trigger {
+                            label: label.clone(),
+                            conditions: lowered_conds,
+                            actions: actions.clone(),
+                            preserved: *preserved,
+                        });
                 }
                 HirStmt::Action(act) => {
                     lower_action_into_ops(
@@ -601,17 +603,29 @@ pub fn lower_and_expand_cfg(
                     let callee_params = hir.functions[callee.0 as usize].params.clone();
                     for (i, arg) in args.iter().enumerate() {
                         if i < callee_params.len() {
-                            lower_expr_into(arg, callee_params[i], hir, scratch, &mut out_blocks[cur_block.0 as usize].ops);
+                            lower_expr_into(
+                                arg,
+                                callee_params[i],
+                                hir,
+                                scratch,
+                                &mut out_blocks[cur_block.0 as usize].ops,
+                            );
                         }
                     }
-                    let return_block = alloc_block(out_blocks, format!("{}_call_ret", out_blocks[cur_block.0 as usize].label));
-                    out_blocks[cur_block.0 as usize].ops.push(ExpandedOp::CallSetup {
-                        callee: *callee,
-                        rets: rets.clone(),
-                        return_block,
-                    });
+                    let return_block = alloc_block(
+                        out_blocks,
+                        format!("{}_call_ret", out_blocks[cur_block.0 as usize].label),
+                    );
+                    out_blocks[cur_block.0 as usize]
+                        .ops
+                        .push(ExpandedOp::CallSetup {
+                            callee: *callee,
+                            rets: rets.clone(),
+                            return_block,
+                        });
                     let callee_entry = fn_entry_block[callee];
-                    out_blocks[cur_block.0 as usize].terminator = ExpandedTerminator::Jump(callee_entry);
+                    out_blocks[cur_block.0 as usize].terminator =
+                        ExpandedTerminator::Jump(callee_entry);
                     cur_block = return_block;
                 }
                 HirStmt::CallIndirect { ptr, args, rets } => {
@@ -620,85 +634,130 @@ pub fn lower_and_expand_cfg(
                         let target_params = hir.functions[target_fn.0 as usize].params.clone();
                         for (i, arg) in args.iter().enumerate() {
                             if i < target_params.len() {
-                                lower_expr_into(arg, target_params[i], hir, scratch, &mut out_blocks[cur_block.0 as usize].ops);
+                                lower_expr_into(
+                                    arg,
+                                    target_params[i],
+                                    hir,
+                                    scratch,
+                                    &mut out_blocks[cur_block.0 as usize].ops,
+                                );
                             }
                         }
                     }
-                    let return_block = alloc_block(out_blocks, format!("{}_icall_ret", out_blocks[cur_block.0 as usize].label));
-                    out_blocks[cur_block.0 as usize].ops.push(ExpandedOp::CallIndirectSetup {
-                        ptr: *ptr,
-                        rets: rets.clone(),
-                        return_block,
-                    });
+                    let return_block = alloc_block(
+                        out_blocks,
+                        format!("{}_icall_ret", out_blocks[cur_block.0 as usize].label),
+                    );
+                    out_blocks[cur_block.0 as usize]
+                        .ops
+                        .push(ExpandedOp::CallIndirectSetup {
+                            ptr: *ptr,
+                            rets: rets.clone(),
+                            return_block,
+                        });
                     let tramp_entry = fp_trampoline_block[ptr];
-                    out_blocks[cur_block.0 as usize].terminator = ExpandedTerminator::Jump(tramp_entry);
+                    out_blocks[cur_block.0 as usize].terminator =
+                        ExpandedTerminator::Jump(tramp_entry);
                     cur_block = return_block;
                 }
-                HirStmt::MemRead { dst, epd, mask, shift, initial_val } => {
+                HirStmt::MemRead {
+                    dst,
+                    epd,
+                    mask,
+                    shift,
+                    initial_val,
+                } => {
                     let epd_lowered = if let HirExpr::Const(_) = epd {
                         epd.clone()
                     } else if let HirExpr::Var(_) = epd {
                         epd.clone()
                     } else {
                         let epd_scratch = scratch.acquire(hir);
-                        lower_expr_into(epd, epd_scratch, hir, scratch, &mut out_blocks[cur_block.0 as usize].ops);
+                        lower_expr_into(
+                            epd,
+                            epd_scratch,
+                            hir,
+                            scratch,
+                            &mut out_blocks[cur_block.0 as usize].ops,
+                        );
                         HirExpr::Var(epd_scratch)
                     };
-                    let return_block = alloc_block(out_blocks, format!("{}_memread_ret", out_blocks[cur_block.0 as usize].label));
-                    out_blocks[cur_block.0 as usize].ops.push(ExpandedOp::MemReadSetup {
-                        dst: *dst,
-                        epd: epd_lowered,
-                        mask: *mask,
-                        shift: *shift,
-                        initial_val: *initial_val,
-                        return_block,
-                    });
-                    out_blocks[cur_block.0 as usize].terminator = ExpandedTerminator::ReadTableJump {
-                        mask: *mask,
-                        shift: *shift,
-                    };
+                    let return_block = alloc_block(
+                        out_blocks,
+                        format!("{}_memread_ret", out_blocks[cur_block.0 as usize].label),
+                    );
+                    out_blocks[cur_block.0 as usize]
+                        .ops
+                        .push(ExpandedOp::MemReadSetup {
+                            dst: *dst,
+                            epd: epd_lowered,
+                            mask: *mask,
+                            shift: *shift,
+                            initial_val: *initial_val,
+                            return_block,
+                        });
+                    out_blocks[cur_block.0 as usize].terminator =
+                        ExpandedTerminator::ReadTableJump {
+                            mask: *mask,
+                            shift: *shift,
+                        };
                     cur_block = return_block;
                 }
                 HirStmt::FuncPtrAssign { ptr, target } => {
-                    out_blocks[cur_block.0 as usize].ops.push(ExpandedOp::FuncPtrAssignTarget {
-                        ptr: *ptr,
-                        target: *target,
-                    });
+                    out_blocks[cur_block.0 as usize]
+                        .ops
+                        .push(ExpandedOp::FuncPtrAssignTarget {
+                            ptr: *ptr,
+                            target: *target,
+                        });
                 }
                 HirStmt::ReturnValues(exprs) => {
                     for (slot_idx, expr) in exprs.iter().enumerate() {
                         let folded = expr.fold_constants();
                         match folded {
                             HirExpr::Const(c) => {
-                                out_blocks[cur_block.0 as usize].ops.push(ExpandedOp::WriteFuncReturnSlot {
-                                    func: current_fn_id,
-                                    slot_idx: slot_idx as u32,
-                                    src_var: None,
-                                    const_val: Some(c),
-                                });
+                                out_blocks[cur_block.0 as usize].ops.push(
+                                    ExpandedOp::WriteFuncReturnSlot {
+                                        func: current_fn_id,
+                                        slot_idx: slot_idx as u32,
+                                        src_var: None,
+                                        const_val: Some(c),
+                                    },
+                                );
                             }
                             HirExpr::Var(v) => {
-                                out_blocks[cur_block.0 as usize].ops.push(ExpandedOp::WriteFuncReturnSlot {
-                                    func: current_fn_id,
-                                    slot_idx: slot_idx as u32,
-                                    src_var: Some(v),
-                                    const_val: None,
-                                });
+                                out_blocks[cur_block.0 as usize].ops.push(
+                                    ExpandedOp::WriteFuncReturnSlot {
+                                        func: current_fn_id,
+                                        slot_idx: slot_idx as u32,
+                                        src_var: Some(v),
+                                        const_val: None,
+                                    },
+                                );
                             }
                             _ => {
                                 let tmp = scratch.acquire(hir);
-                                lower_expr_into(&folded, tmp, hir, scratch, &mut out_blocks[cur_block.0 as usize].ops);
-                                out_blocks[cur_block.0 as usize].ops.push(ExpandedOp::WriteFuncReturnSlot {
-                                    func: current_fn_id,
-                                    slot_idx: slot_idx as u32,
-                                    src_var: Some(tmp),
-                                    const_val: None,
-                                });
+                                lower_expr_into(
+                                    &folded,
+                                    tmp,
+                                    hir,
+                                    scratch,
+                                    &mut out_blocks[cur_block.0 as usize].ops,
+                                );
+                                out_blocks[cur_block.0 as usize].ops.push(
+                                    ExpandedOp::WriteFuncReturnSlot {
+                                        func: current_fn_id,
+                                        slot_idx: slot_idx as u32,
+                                        src_var: Some(tmp),
+                                        const_val: None,
+                                    },
+                                );
                                 scratch.release(tmp);
                             }
                         }
                     }
-                    out_blocks[cur_block.0 as usize].terminator = ExpandedTerminator::FunctionReturn(current_fn_id);
+                    out_blocks[cur_block.0 as usize].terminator =
+                        ExpandedTerminator::FunctionReturn(current_fn_id);
                     return Ok(None);
                 }
                 HirStmt::Break => {
@@ -739,12 +798,14 @@ pub fn lower_and_expand_cfg(
                                 continue;
                             }
                             if leaf_actions.len() <= 64 {
-                                out_blocks[cur_block.0 as usize].ops.push(ExpandedOp::Trigger {
-                                    label: Some("if_then".to_string()),
-                                    conditions: static_conds,
-                                    actions: leaf_actions,
-                                    preserved: true,
-                                });
+                                out_blocks[cur_block.0 as usize]
+                                    .ops
+                                    .push(ExpandedOp::Trigger {
+                                        label: Some("if_then".to_string()),
+                                        conditions: static_conds,
+                                        actions: leaf_actions,
+                                        preserved: true,
+                                    });
                                 continue;
                             }
                         }
@@ -795,9 +856,17 @@ pub fn lower_and_expand_cfg(
                             then_block,
                             else_block: merge_block,
                         };
-                        if let Some(then_end) =
-                            lower_stmts(then_body, then_block, out_blocks, hir, scratch, loop_ctx, current_fn_id, fn_entry_block, fp_trampoline_block)?
-                        {
+                        if let Some(then_end) = lower_stmts(
+                            then_body,
+                            then_block,
+                            out_blocks,
+                            hir,
+                            scratch,
+                            loop_ctx,
+                            current_fn_id,
+                            fn_entry_block,
+                            fp_trampoline_block,
+                        )? {
                             out_blocks[then_end.0 as usize].terminator =
                                 ExpandedTerminator::Jump(merge_block);
                         }
@@ -809,10 +878,28 @@ pub fn lower_and_expand_cfg(
                             then_block,
                             else_block,
                         };
-                        let then_end =
-                            lower_stmts(then_body, then_block, out_blocks, hir, scratch, loop_ctx, current_fn_id, fn_entry_block, fp_trampoline_block)?;
-                        let else_end =
-                            lower_stmts(else_body, else_block, out_blocks, hir, scratch, loop_ctx, current_fn_id, fn_entry_block, fp_trampoline_block)?;
+                        let then_end = lower_stmts(
+                            then_body,
+                            then_block,
+                            out_blocks,
+                            hir,
+                            scratch,
+                            loop_ctx,
+                            current_fn_id,
+                            fn_entry_block,
+                            fp_trampoline_block,
+                        )?;
+                        let else_end = lower_stmts(
+                            else_body,
+                            else_block,
+                            out_blocks,
+                            hir,
+                            scratch,
+                            loop_ctx,
+                            current_fn_id,
+                            fn_entry_block,
+                            fp_trampoline_block,
+                        )?;
                         match (then_end, else_end) {
                             (None, None) => return Ok(None),
                             _ => {
@@ -947,11 +1034,13 @@ pub fn lower_and_expand_cfg(
                 match &orig_block.terminator {
                     HirTerminator::Jump(target) => {
                         let target_b = block_map[&(func.id, *target)];
-                        out_blocks[end_block.0 as usize].terminator = ExpandedTerminator::Jump(target_b);
+                        out_blocks[end_block.0 as usize].terminator =
+                            ExpandedTerminator::Jump(target_b);
                     }
                     HirTerminator::Return => {
                         if func.id == main_fn_id {
-                            out_blocks[end_block.0 as usize].terminator = ExpandedTerminator::Return;
+                            out_blocks[end_block.0 as usize].terminator =
+                                ExpandedTerminator::Return;
                         } else {
                             out_blocks[end_block.0 as usize].terminator =
                                 ExpandedTerminator::FunctionReturn(func.id);
@@ -963,7 +1052,8 @@ pub fn lower_and_expand_cfg(
                         else_block,
                     } => {
                         let mut pre_ops = Vec::new();
-                        let static_conds = prepare_conditions(conditions, hir, scratch, &mut pre_ops);
+                        let static_conds =
+                            prepare_conditions(conditions, hir, scratch, &mut pre_ops);
                         out_blocks[end_block.0 as usize].ops.extend(pre_ops);
                         let then_b = block_map[&(func.id, *then_block)];
                         let else_b = block_map[&(func.id, *else_block)];
@@ -1144,4 +1234,3 @@ pub fn lower_and_expand_cfg(
         fp_trampoline_block: new_fp_trampoline_block,
     })
 }
-

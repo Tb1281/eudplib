@@ -159,8 +159,7 @@ pub fn encrypt_static_strings(
 
         for j in 0..num_dwords {
             if j * 4 + 4 <= orig_bytes.len() {
-                let orig_val =
-                    u32::from_le_bytes(orig_bytes[j * 4..j * 4 + 4].try_into().unwrap());
+                let orig_val = u32::from_le_bytes(orig_bytes[j * 4..j * 4 + 4].try_into().unwrap());
                 let mask_val = rng.next_u32();
                 let scrambled_val = orig_val.wrapping_sub(mask_val);
                 target_str[j * 4..j * 4 + 4].copy_from_slice(&scrambled_val.to_le_bytes());
@@ -198,7 +197,10 @@ pub struct MrgnRestoreInfo {
 
 /// Protects CHK sections: scrambles `MRGN`, strips switch names in `SWNM`,
 /// and strips debug comment actions (`acttype == 47`) from existing `TRIG` triggers.
-pub fn protect_chk_sections(chk: &mut Chk, rng: &mut ObscureRng) -> Result<Option<MrgnRestoreInfo>> {
+pub fn protect_chk_sections(
+    chk: &mut Chk,
+    rng: &mut ObscureRng,
+) -> Result<Option<MrgnRestoreInfo>> {
     let mut mrgn_info = None;
 
     // 1. Scramble MRGN
@@ -310,9 +312,15 @@ pub fn build_obscuration_restore_triggers(
     let mut act_idx = 0;
 
     // First trigger: guard on Deaths(11, Exactly, 0, unit=65535) and set to 1
-    let guard_cond_0 = pack_chk_condition(0, 11, 0, 65535, 10 /* Exactly */, 15 /* Deaths */, 0, 0, 0);
+    let guard_cond_0 = pack_chk_condition(
+        0, 11, 0, 65535, 10, /* Exactly */
+        15, /* Deaths */
+        0, 0, 0,
+    );
     let mut first_acts = vec![pack_chk_action(
-        0, 0, 0, 0, 11, 1, 65535, 45 /* SetDeaths */, 7 /* SetTo */, 20, 0,
+        0, 0, 0, 0, 11, 1, 65535, 45, /* SetDeaths */
+        7,  /* SetTo */
+        20, 0,
     )];
     let take_first = 63.min(actions.len());
     first_acts.extend_from_slice(&actions[..take_first]);
@@ -321,7 +329,11 @@ pub fn build_obscuration_restore_triggers(
     triggers.push(pack_chk_trigger(&[17], &[guard_cond_0], &first_acts, 0));
 
     // Subsequent triggers
-    let guard_cond_1 = pack_chk_condition(0, 11, 1, 65535, 10 /* Exactly */, 15 /* Deaths */, 0, 0, 0);
+    let guard_cond_1 = pack_chk_condition(
+        0, 11, 1, 65535, 10, /* Exactly */
+        15, /* Deaths */
+        0, 0, 0,
+    );
     while act_idx < actions.len() {
         let remaining = actions.len() - act_idx;
         let chunk_size = 64.min(remaining);
@@ -332,9 +344,7 @@ pub fn build_obscuration_restore_triggers(
         // If this is the last chunk, set guard to 2 so triggers never run again
         if act_idx == actions.len() {
             if trigger_acts.len() < 64 {
-                trigger_acts.push(pack_chk_action(
-                    0, 0, 0, 0, 11, 2, 65535, 45, 7, 20, 0,
-                ));
+                trigger_acts.push(pack_chk_action(0, 0, 0, 0, 11, 2, 65535, 45, 7, 20, 0));
             }
         }
         triggers.push(pack_chk_trigger(&[17], &[guard_cond_1], &trigger_acts, 0));

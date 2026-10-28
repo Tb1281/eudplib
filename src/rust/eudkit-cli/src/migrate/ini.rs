@@ -43,7 +43,11 @@ pub fn parse_edd_or_eds(content: &str, file_path: &Path) -> Result<MigratedProje
 
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') || trimmed.starts_with("//") {
+        if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with(';')
+            || trimmed.starts_with("//")
+        {
             continue;
         }
 
@@ -55,7 +59,9 @@ pub fn parse_edd_or_eds(content: &str, file_path: &Path) -> Result<MigratedProje
                 if entry_eps.is_none() {
                     entry_eps = Some(PathBuf::from(section));
                 }
-            } else if !section.eq_ignore_ascii_case("main") && !section.eq_ignore_ascii_case("plugins") {
+            } else if !section.eq_ignore_ascii_case("main")
+                && !section.eq_ignore_ascii_case("plugins")
+            {
                 plugins.push(section.to_string());
             }
             continue;

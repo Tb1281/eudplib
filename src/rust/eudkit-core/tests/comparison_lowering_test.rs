@@ -1,6 +1,4 @@
-use eudkit_core::hir::{
-    CmpOp, Comparison, HirBinOp, HirExpr, StockCondition, VarId,
-};
+use eudkit_core::hir::{CmpOp, Comparison, HirBinOp, HirExpr, StockCondition, VarId};
 
 #[test]
 fn test_comparison_zero_bound_checks() {

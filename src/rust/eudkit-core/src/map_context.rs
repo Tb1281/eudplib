@@ -329,7 +329,8 @@ impl StringTable {
 
     /// Returns the virtual memory address in StarCraft for string `id1` (`0x191943C8 + offset`).
     pub fn string_address(&self, id1: u32) -> Option<u32> {
-        self.string_offset(id1).map(|off| crate::hir::STRX_BASE_ADDR.wrapping_add(off))
+        self.string_offset(id1)
+            .map(|off| crate::hir::STRX_BASE_ADDR.wrapping_add(off))
     }
 
     /// Returns the EPD address for string `id1`.
@@ -622,7 +623,8 @@ impl MapContext {
                     let gas_off = 2736 + i * 2;
                     let str_off = 3192 + i * 2;
 
-                    let hitpoints = u32::from_le_bytes(unix[hp_off..hp_off + 4].try_into().unwrap());
+                    let hitpoints =
+                        u32::from_le_bytes(unix[hp_off..hp_off + 4].try_into().unwrap());
                     let shields = u16::from_le_bytes(unix[sh_off..sh_off + 2].try_into().unwrap());
                     let armor = unix[ar_off];
                     let build_time =
@@ -800,10 +802,9 @@ impl MapContext {
     /// and resolves its static offset, virtual address, and EPD without post-collection callbacks.
     pub fn register_map_string(&mut self, text: &str) -> Result<MapString> {
         let id = self.string_table.get_or_insert(text.as_bytes());
-        let offset = self
-            .string_table
-            .string_offset(id)
-            .ok_or_else(|| EudkitError::Ir(format!("failed to compute offset for string ID {id}")))?;
+        let offset = self.string_table.string_offset(id).ok_or_else(|| {
+            EudkitError::Ir(format!("failed to compute offset for string ID {id}"))
+        })?;
         let address = crate::hir::STRX_BASE_ADDR.wrapping_add(offset);
         let epd = crate::hir::epd(address);
         Ok(MapString {

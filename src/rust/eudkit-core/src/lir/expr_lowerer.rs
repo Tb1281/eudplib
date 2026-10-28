@@ -4,7 +4,13 @@ use crate::hir::{
 };
 use crate::lir::types::{ExpandedOp, ScratchAllocator};
 
-pub(crate) fn push_var_const(out: &mut Vec<ExpandedOp>, var: VarId, modifier: Modifier, value: i32, mask: Option<u32>) {
+pub(crate) fn push_var_const(
+    out: &mut Vec<ExpandedOp>,
+    var: VarId,
+    modifier: Modifier,
+    value: i32,
+    mask: Option<u32>,
+) {
     out.push(ExpandedOp::LeafAction(StockAction::SetVarConst {
         var,
         modifier,
@@ -936,8 +942,6 @@ pub(crate) fn eval_expr_to_var_or_const(
         }
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

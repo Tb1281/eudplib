@@ -3,8 +3,8 @@ version = "0.1.0"
 authors = ["Armoha <kein0011@naver.com>"]
 edition = "2021"
 publish = false
-# This specifies the MSRV
-rust-version = "1.83.0"
+# This specifies the MSRV. oxc_parser 0.156 requires Rust 1.97.
+rust-version = "1.97.0"
 
 [package]
 name = "eudkit-rust"

@@ -261,10 +261,8 @@ pub fn convert_eps_to_ts(source: &str) -> Result<String, String> {
                             line_end += 1;
                         }
 
-                        let import_line: String = tokens[i..=line_end]
-                            .iter()
-                            .map(|t| t.as_str())
-                            .collect();
+                        let import_line: String =
+                            tokens[i..=line_end].iter().map(|t| t.as_str()).collect();
 
                         // E.g. `import .foo;` or `import .foo as bar;`
                         if import_line.contains("py_") {
@@ -356,7 +354,11 @@ pub fn convert_eps_to_ts(source: &str) -> Result<String, String> {
                         let vals: Vec<String> = rhs
                             .split(|t| t.as_str() == ",")
                             .map(|slice| {
-                                slice.iter().map(|t| t.as_str()).collect::<Vec<_>>().join(" ")
+                                slice
+                                    .iter()
+                                    .map(|t| t.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
                             })
                             .collect();
 
@@ -367,7 +369,9 @@ pub fn convert_eps_to_ts(source: &str) -> Result<String, String> {
                             let init_val = vals.get(idx).unwrap_or(&default_val);
 
                             // Detect EUDArray initialization
-                            if init_val.starts_with("EUDArray(") || init_val.starts_with("new EUDArray(") {
+                            if init_val.starts_with("EUDArray(")
+                                || init_val.starts_with("new EUDArray(")
+                            {
                                 declared_arrays.insert(clean_name.to_string());
                             }
 
@@ -429,7 +433,11 @@ pub fn convert_eps_to_ts(source: &str) -> Result<String, String> {
                         let vals: Vec<String> = rhs
                             .split(|t| t.as_str() == ",")
                             .map(|slice| {
-                                slice.iter().map(|t| t.as_str()).collect::<Vec<_>>().join(" ")
+                                slice
+                                    .iter()
+                                    .map(|t| t.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
                             })
                             .collect();
 
@@ -512,7 +520,11 @@ pub fn convert_eps_to_ts(source: &str) -> Result<String, String> {
                                     let mut typed_params = Vec::new();
                                     for p in params {
                                         if p.iter().any(|t| t.as_str() == ":") {
-                                            let s: String = p.iter().map(|t| t.as_str()).collect::<Vec<_>>().join(" ");
+                                            let s: String = p
+                                                .iter()
+                                                .map(|t| t.as_str())
+                                                .collect::<Vec<_>>()
+                                                .join(" ");
                                             typed_params.push(s);
                                         } else if let Some(first) = p.first() {
                                             typed_params.push(format!("{}: Var", first.as_str()));
@@ -528,7 +540,10 @@ pub fn convert_eps_to_ts(source: &str) -> Result<String, String> {
                                         if tokens[next_tok].as_str() == ":" {
                                             // Skip return type up to `{` or `;`
                                             let mut r_idx = next_tok + 1;
-                                            while r_idx < len && tokens[r_idx].as_str() != "{" && tokens[r_idx].as_str() != ";" {
+                                            while r_idx < len
+                                                && tokens[r_idx].as_str() != "{"
+                                                && tokens[r_idx].as_str() != ";"
+                                            {
                                                 r_idx += 1;
                                             }
                                             if r_idx < len && tokens[r_idx].as_str() == ";" {
@@ -740,10 +755,19 @@ pub fn convert_eps_to_ts(source: &str) -> Result<String, String> {
                                 args_raw.push(&tokens[p_idx]);
                                 p_idx += 1;
                             }
-                            if let Some(comma_pos) = args_raw.iter().position(|t| t.as_str() == ",") {
-                                let epd_str: String = args_raw[..comma_pos].iter().map(|t| t.as_str()).collect();
-                                let val_str: String = args_raw[comma_pos + 1..].iter().map(|t| t.as_str()).collect();
-                                out.push_str(&format!("SetMemory({}, SetTo, {})", epd_str.trim(), val_str.trim()));
+                            if let Some(comma_pos) = args_raw.iter().position(|t| t.as_str() == ",")
+                            {
+                                let epd_str: String =
+                                    args_raw[..comma_pos].iter().map(|t| t.as_str()).collect();
+                                let val_str: String = args_raw[comma_pos + 1..]
+                                    .iter()
+                                    .map(|t| t.as_str())
+                                    .collect();
+                                out.push_str(&format!(
+                                    "SetMemory({}, SetTo, {})",
+                                    epd_str.trim(),
+                                    val_str.trim()
+                                ));
                                 i = p_idx + 1;
                                 continue;
                             }
@@ -782,7 +806,8 @@ pub fn convert_eps_to_ts(source: &str) -> Result<String, String> {
                                 b_idx += 1;
                             }
 
-                            let index_str: String = index_tokens.iter().map(|t| t.as_str()).collect();
+                            let index_str: String =
+                                index_tokens.iter().map(|t| t.as_str()).collect();
 
                             if let Some(after_bracket) = next_non_trivia(b_idx + 1) {
                                 if tokens[after_bracket].as_str() == "=" {
@@ -793,7 +818,8 @@ pub fn convert_eps_to_ts(source: &str) -> Result<String, String> {
                                         val_tokens.push(&tokens[semi_pos]);
                                         semi_pos += 1;
                                     }
-                                    let val_str: String = val_tokens.iter().map(|t| t.as_str()).collect();
+                                    let val_str: String =
+                                        val_tokens.iter().map(|t| t.as_str()).collect();
                                     out.push_str(&format!("{id_str}.set({index_str}, {val_str})"));
                                     i = semi_pos;
                                     continue;

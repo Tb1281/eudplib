@@ -1,8 +1,8 @@
 use crate::error::{EudkitTsError, Result};
 use eudkit_core::hir::{
-    epd, parse_format_template, CmpOp, Comparison, HirBinOp, HirBuilder, HirExpr,
-    HirModule, HirStmt, HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget,
-    ReactiveRule, ResourceType, StockAction, StockCondition, SwitchAction, VarId,
+    epd, parse_format_template, CmpOp, Comparison, HirBinOp, HirBuilder, HirExpr, HirModule,
+    HirStmt, HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget, ReactiveRule, ResourceType,
+    StockAction, StockCondition, SwitchAction, VarId,
 };
 use eudkit_core::map_context::MapContext;
 use oxc_allocator::Allocator;
@@ -119,8 +119,11 @@ impl<'a> TsCompiler<'a> {
 
         // If no main function exists, ensure main loop exists
         if !self.function_decls.iter().any(|d| d.1) {
-            self.builder.begin_function("main", true, Vec::new(), 0, Some(false));
-            self.builder.end_function().map_err(|e| EudkitTsError::Compile(e.to_string()))?;
+            self.builder
+                .begin_function("main", true, Vec::new(), 0, Some(false));
+            self.builder
+                .end_function()
+                .map_err(|e| EudkitTsError::Compile(e.to_string()))?;
         }
 
         self.builder
@@ -353,7 +356,8 @@ impl<'a> TsCompiler<'a> {
             .as_ref()
             .map(|id| id.name.as_str())
             .unwrap_or("anon");
-        let is_main_loop = is_main || name == "main" || name == "onPluginStart" || name == "beforeTriggerExec";
+        let is_main_loop =
+            is_main || name == "main" || name == "onPluginStart" || name == "beforeTriggerExec";
         let return_count = if fdecl.return_type.is_some() { 1 } else { 0 };
         let inline_opt = match name {
             "onPluginStart" | "beforeTriggerExec" | "main" => Some(false),
@@ -415,8 +419,13 @@ impl<'a> TsCompiler<'a> {
 
         let (ref fn_name, is_main_loop, ref params, return_count, inline_opt) =
             self.function_decls[fn_idx].clone();
-        self.builder
-            .begin_function(fn_name, is_main_loop, params.clone(), return_count, inline_opt);
+        self.builder.begin_function(
+            fn_name,
+            is_main_loop,
+            params.clone(),
+            return_count,
+            inline_opt,
+        );
 
         let mut stmts = Vec::new();
         if let Some(body) = &fdecl.body {
@@ -591,7 +600,9 @@ impl<'a> TsCompiler<'a> {
 
                         if let Expression::CallExpression(call) = init {
                             let fn_name = match &call.callee {
-                                Expression::Identifier(call_ident) => Some(call_ident.name.as_str()),
+                                Expression::Identifier(call_ident) => {
+                                    Some(call_ident.name.as_str())
+                                }
                                 Expression::StaticMemberExpression(mem) => {
                                     if let Expression::Identifier(obj) = &mem.object {
                                         if obj.name.as_str() == "eudkit" {
@@ -608,7 +619,9 @@ impl<'a> TsCompiler<'a> {
                             if let Some(fname) = fn_name {
                                 match fname {
                                     "dwread_epd" => {
-                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                        if let Some(arg0) =
+                                            call.arguments.first().and_then(|a| a.as_expression())
+                                        {
                                             let epd = self.lower_expr(arg0)?;
                                             let vid = self.builder.add_var(var_name, 0);
                                             self.vars.insert(var_name.to_string(), vid);
@@ -623,7 +636,9 @@ impl<'a> TsCompiler<'a> {
                                         }
                                     }
                                     "dwread" => {
-                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                        if let Some(arg0) =
+                                            call.arguments.first().and_then(|a| a.as_expression())
+                                        {
                                             let ptr = self.lower_expr(arg0)?;
                                             let epd = HirExpr::BinOp {
                                                 op: HirBinOp::Div,
@@ -633,7 +648,8 @@ impl<'a> TsCompiler<'a> {
                                                     rhs: Box::new(HirExpr::Const(0x0058A364)),
                                                 }),
                                                 rhs: Box::new(HirExpr::Const(4)),
-                                            }.fold_constants();
+                                            }
+                                            .fold_constants();
                                             let vid = self.builder.add_var(var_name, 0);
                                             self.vars.insert(var_name.to_string(), vid);
                                             out.push(HirStmt::MemRead {
@@ -647,7 +663,9 @@ impl<'a> TsCompiler<'a> {
                                         }
                                     }
                                     "epdread_epd" => {
-                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                        if let Some(arg0) =
+                                            call.arguments.first().and_then(|a| a.as_expression())
+                                        {
                                             let epd = self.lower_expr(arg0)?;
                                             let vid = self.builder.add_var(var_name, 0);
                                             self.vars.insert(var_name.to_string(), vid);
@@ -662,7 +680,9 @@ impl<'a> TsCompiler<'a> {
                                         }
                                     }
                                     "bread_epd" => {
-                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                        if let Some(arg0) =
+                                            call.arguments.first().and_then(|a| a.as_expression())
+                                        {
                                             let epd = self.lower_expr(arg0)?;
                                             let vid = self.builder.add_var(var_name, 0);
                                             self.vars.insert(var_name.to_string(), vid);
@@ -677,7 +697,9 @@ impl<'a> TsCompiler<'a> {
                                         }
                                     }
                                     "bread" => {
-                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                        if let Some(arg0) =
+                                            call.arguments.first().and_then(|a| a.as_expression())
+                                        {
                                             let ptr = self.lower_expr(arg0)?;
                                             let epd = HirExpr::BinOp {
                                                 op: HirBinOp::Div,
@@ -687,7 +709,8 @@ impl<'a> TsCompiler<'a> {
                                                     rhs: Box::new(HirExpr::Const(0x0058A364)),
                                                 }),
                                                 rhs: Box::new(HirExpr::Const(4)),
-                                            }.fold_constants();
+                                            }
+                                            .fold_constants();
                                             let vid = self.builder.add_var(var_name, 0);
                                             self.vars.insert(var_name.to_string(), vid);
                                             out.push(HirStmt::MemRead {
@@ -701,7 +724,9 @@ impl<'a> TsCompiler<'a> {
                                         }
                                     }
                                     "wread_epd" => {
-                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                        if let Some(arg0) =
+                                            call.arguments.first().and_then(|a| a.as_expression())
+                                        {
                                             let epd = self.lower_expr(arg0)?;
                                             let vid = self.builder.add_var(var_name, 0);
                                             self.vars.insert(var_name.to_string(), vid);
@@ -716,7 +741,9 @@ impl<'a> TsCompiler<'a> {
                                         }
                                     }
                                     "wread" => {
-                                        if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                        if let Some(arg0) =
+                                            call.arguments.first().and_then(|a| a.as_expression())
+                                        {
                                             let ptr = self.lower_expr(arg0)?;
                                             let epd = HirExpr::BinOp {
                                                 op: HirBinOp::Div,
@@ -726,7 +753,8 @@ impl<'a> TsCompiler<'a> {
                                                     rhs: Box::new(HirExpr::Const(0x0058A364)),
                                                 }),
                                                 rhs: Box::new(HirExpr::Const(4)),
-                                            }.fold_constants();
+                                            }
+                                            .fold_constants();
                                             let vid = self.builder.add_var(var_name, 0);
                                             self.vars.insert(var_name.to_string(), vid);
                                             out.push(HirStmt::MemRead {
@@ -931,7 +959,10 @@ impl<'a> TsCompiler<'a> {
                                 "add" => {
                                     if let Some(a) = arg {
                                         if let Ok(c) = self.eval_const_expr(a) {
-                                            out.push(HirStmt::VarAddConst { var: var_id, value: c });
+                                            out.push(HirStmt::VarAddConst {
+                                                var: var_id,
+                                                value: c,
+                                            });
                                         } else {
                                             let rhs = HirExpr::BinOp {
                                                 op: HirBinOp::Add,
@@ -939,14 +970,20 @@ impl<'a> TsCompiler<'a> {
                                                 rhs: Box::new(self.lower_expr(a)?),
                                             }
                                             .fold_constants();
-                                            out.push(HirStmt::VarAssignExpr { var: var_id, expr: rhs });
+                                            out.push(HirStmt::VarAssignExpr {
+                                                var: var_id,
+                                                expr: rhs,
+                                            });
                                         }
                                     }
                                 }
                                 "subtract" | "sub" => {
                                     if let Some(a) = arg {
                                         if let Ok(c) = self.eval_const_expr(a) {
-                                            out.push(HirStmt::VarSubConst { var: var_id, value: c });
+                                            out.push(HirStmt::VarSubConst {
+                                                var: var_id,
+                                                value: c,
+                                            });
                                         } else {
                                             let rhs = HirExpr::BinOp {
                                                 op: HirBinOp::Sub,
@@ -954,7 +991,10 @@ impl<'a> TsCompiler<'a> {
                                                 rhs: Box::new(self.lower_expr(a)?),
                                             }
                                             .fold_constants();
-                                            out.push(HirStmt::VarAssignExpr { var: var_id, expr: rhs });
+                                            out.push(HirStmt::VarAssignExpr {
+                                                var: var_id,
+                                                expr: rhs,
+                                            });
                                         }
                                     }
                                 }
@@ -963,7 +1003,9 @@ impl<'a> TsCompiler<'a> {
                                         let mut handled_call = false;
                                         if let Expression::CallExpression(call) = a {
                                             if let Expression::Identifier(ident) = &call.callee {
-                                                if let Some(&fn_idx) = self.functions.get(ident.name.as_str()) {
+                                                if let Some(&fn_idx) =
+                                                    self.functions.get(ident.name.as_str())
+                                                {
                                                     let mut args = Vec::new();
                                                     for arg_item in &call.arguments {
                                                         if let Some(e) = arg_item.as_expression() {
@@ -971,7 +1013,9 @@ impl<'a> TsCompiler<'a> {
                                                         }
                                                     }
                                                     out.push(HirStmt::Call {
-                                                        callee: eudkit_core::hir::FuncId(fn_idx as u32),
+                                                        callee: eudkit_core::hir::FuncId(
+                                                            fn_idx as u32,
+                                                        ),
                                                         args,
                                                         rets: vec![var_id],
                                                     });
@@ -981,10 +1025,16 @@ impl<'a> TsCompiler<'a> {
                                         }
                                         if !handled_call {
                                             if let Ok(c) = self.eval_const_expr(a) {
-                                                out.push(HirStmt::VarAssignConst { var: var_id, value: c });
+                                                out.push(HirStmt::VarAssignConst {
+                                                    var: var_id,
+                                                    value: c,
+                                                });
                                             } else {
                                                 let rhs = self.lower_expr(a)?;
-                                                out.push(HirStmt::VarAssignExpr { var: var_id, expr: rhs });
+                                                out.push(HirStmt::VarAssignExpr {
+                                                    var: var_id,
+                                                    expr: rhs,
+                                                });
                                             }
                                         }
                                     }
@@ -1060,7 +1110,9 @@ impl<'a> TsCompiler<'a> {
                     if let Some(fname) = fn_name {
                         match fname {
                             "dwread_epd" => {
-                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                if let Some(arg0) =
+                                    call.arguments.first().and_then(|a| a.as_expression())
+                                {
                                     let epd = self.lower_expr(arg0)?;
                                     out.push(HirStmt::MemRead {
                                         dst: var_id,
@@ -1073,7 +1125,9 @@ impl<'a> TsCompiler<'a> {
                                 }
                             }
                             "dwread" => {
-                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                if let Some(arg0) =
+                                    call.arguments.first().and_then(|a| a.as_expression())
+                                {
                                     let ptr = self.lower_expr(arg0)?;
                                     let epd = HirExpr::BinOp {
                                         op: HirBinOp::Div,
@@ -1083,7 +1137,8 @@ impl<'a> TsCompiler<'a> {
                                             rhs: Box::new(HirExpr::Const(0x0058A364)),
                                         }),
                                         rhs: Box::new(HirExpr::Const(4)),
-                                    }.fold_constants();
+                                    }
+                                    .fold_constants();
                                     out.push(HirStmt::MemRead {
                                         dst: var_id,
                                         epd,
@@ -1095,7 +1150,9 @@ impl<'a> TsCompiler<'a> {
                                 }
                             }
                             "epdread_epd" => {
-                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                if let Some(arg0) =
+                                    call.arguments.first().and_then(|a| a.as_expression())
+                                {
                                     let epd = self.lower_expr(arg0)?;
                                     out.push(HirStmt::MemRead {
                                         dst: var_id,
@@ -1108,7 +1165,9 @@ impl<'a> TsCompiler<'a> {
                                 }
                             }
                             "bread_epd" => {
-                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                if let Some(arg0) =
+                                    call.arguments.first().and_then(|a| a.as_expression())
+                                {
                                     let epd = self.lower_expr(arg0)?;
                                     out.push(HirStmt::MemRead {
                                         dst: var_id,
@@ -1121,7 +1180,9 @@ impl<'a> TsCompiler<'a> {
                                 }
                             }
                             "bread" => {
-                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                if let Some(arg0) =
+                                    call.arguments.first().and_then(|a| a.as_expression())
+                                {
                                     let ptr = self.lower_expr(arg0)?;
                                     let epd = HirExpr::BinOp {
                                         op: HirBinOp::Div,
@@ -1131,7 +1192,8 @@ impl<'a> TsCompiler<'a> {
                                             rhs: Box::new(HirExpr::Const(0x0058A364)),
                                         }),
                                         rhs: Box::new(HirExpr::Const(4)),
-                                    }.fold_constants();
+                                    }
+                                    .fold_constants();
                                     out.push(HirStmt::MemRead {
                                         dst: var_id,
                                         epd,
@@ -1143,7 +1205,9 @@ impl<'a> TsCompiler<'a> {
                                 }
                             }
                             "wread_epd" => {
-                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                if let Some(arg0) =
+                                    call.arguments.first().and_then(|a| a.as_expression())
+                                {
                                     let epd = self.lower_expr(arg0)?;
                                     out.push(HirStmt::MemRead {
                                         dst: var_id,
@@ -1156,7 +1220,9 @@ impl<'a> TsCompiler<'a> {
                                 }
                             }
                             "wread" => {
-                                if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                                if let Some(arg0) =
+                                    call.arguments.first().and_then(|a| a.as_expression())
+                                {
                                     let ptr = self.lower_expr(arg0)?;
                                     let epd = HirExpr::BinOp {
                                         op: HirBinOp::Div,
@@ -1166,7 +1232,8 @@ impl<'a> TsCompiler<'a> {
                                             rhs: Box::new(HirExpr::Const(0x0058A364)),
                                         }),
                                         rhs: Box::new(HirExpr::Const(4)),
-                                    }.fold_constants();
+                                    }
+                                    .fold_constants();
                                     out.push(HirStmt::MemRead {
                                         dst: var_id,
                                         epd,
@@ -1270,10 +1337,7 @@ impl<'a> TsCompiler<'a> {
                             rhs: Box::new(rhs_expr),
                         }
                         .fold_constants();
-                        out.push(HirStmt::VarAssignExpr {
-                            var: var_id,
-                            expr,
-                        });
+                        out.push(HirStmt::VarAssignExpr { var: var_id, expr });
                     } else {
                         return Err(EudkitTsError::Compile(format!(
                             "unsupported assignment operator {:?}",
@@ -1355,10 +1419,7 @@ impl<'a> TsCompiler<'a> {
                             rhs: Box::new(rhs_expr),
                         }
                         .fold_constants();
-                        out.push(HirStmt::VarAssignExpr {
-                            var: var_id,
-                            expr,
-                        });
+                        out.push(HirStmt::VarAssignExpr { var: var_id, expr });
                     }
                     AssignmentOperator::BitwiseOR => {
                         let expr = HirExpr::BinOp {
@@ -1367,10 +1428,7 @@ impl<'a> TsCompiler<'a> {
                             rhs: Box::new(rhs_expr),
                         }
                         .fold_constants();
-                        out.push(HirStmt::VarAssignExpr {
-                            var: var_id,
-                            expr,
-                        });
+                        out.push(HirStmt::VarAssignExpr { var: var_id, expr });
                     }
                     AssignmentOperator::BitwiseXOR => {
                         let expr = HirExpr::BinOp {
@@ -1379,10 +1437,7 @@ impl<'a> TsCompiler<'a> {
                             rhs: Box::new(rhs_expr),
                         }
                         .fold_constants();
-                        out.push(HirStmt::VarAssignExpr {
-                            var: var_id,
-                            expr,
-                        });
+                        out.push(HirStmt::VarAssignExpr { var: var_id, expr });
                     }
                     _ => {
                         return Err(EudkitTsError::Compile(format!(
@@ -1407,9 +1462,9 @@ impl<'a> TsCompiler<'a> {
 
                 let (offset, _is_word) = match prop_name {
                     "hitPoints" | "hp" => (2, false), // EPD + 2 (0x008)
-                    "shields" => (24, false),          // EPD + 24 (0x060)
-                    "energy" => (40, true),            // EPD + 40 (0x0A2)
-                    "unitType" => (25, true),          // EPD + 25 (0x064)
+                    "shields" => (24, false),         // EPD + 24 (0x060)
+                    "energy" => (40, true),           // EPD + 40 (0x0A2)
+                    "unitType" => (25, true),         // EPD + 25 (0x064)
                     _ => {
                         return Err(EudkitTsError::Compile(format!(
                             "unsupported property assignment on struct: {prop_name}"
@@ -1728,7 +1783,11 @@ impl<'a> TsCompiler<'a> {
                                 EudkitTsError::Compile(format!("{fn_name} requires 1 argument"))
                             })?;
                         let rhs = self.lower_expr(arg)?;
-                        return Ok(Some(StockCondition::from_cmp(HirExpr::Var(var_id), op, rhs)));
+                        return Ok(Some(StockCondition::from_cmp(
+                            HirExpr::Var(var_id),
+                            op,
+                            rhs,
+                        )));
                     }
                 }
                 return Ok(None);
@@ -1811,9 +1870,7 @@ impl<'a> TsCompiler<'a> {
                     .arguments
                     .first()
                     .and_then(|a| a.as_expression())
-                    .ok_or_else(|| {
-                        EudkitTsError::Compile("Memory requires address".to_string())
-                    })?;
+                    .ok_or_else(|| EudkitTsError::Compile("Memory requires address".to_string()))?;
                 let cmp_arg = call
                     .arguments
                     .get(1)
@@ -1832,13 +1889,12 @@ impl<'a> TsCompiler<'a> {
                 let val_expr = self.lower_expr(val_arg)?;
 
                 if fn_name == "MemoryX" {
-                    let mask = if let Some(arg3) =
-                        call.arguments.get(3).and_then(|a| a.as_expression())
-                    {
-                        self.eval_const_expr(arg3)? as u32
-                    } else {
-                        0xFFFF_FFFF
-                    };
+                    let mask =
+                        if let Some(arg3) = call.arguments.get(3).and_then(|a| a.as_expression()) {
+                            self.eval_const_expr(arg3)? as u32
+                        } else {
+                            0xFFFF_FFFF
+                        };
                     if let HirExpr::Const(c) = val_expr {
                         Ok(Some(StockCondition::MemoryX {
                             address,
@@ -1871,12 +1927,9 @@ impl<'a> TsCompiler<'a> {
             }
             "Accumulate" => {
                 let p = self.eval_const_expr(call.arguments[0].as_expression().unwrap())?;
-                let cmp =
-                    self.resolve_comparison(call.arguments[1].as_expression().unwrap())?;
-                let amt =
-                    self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u32;
-                let res = if let Some(arg3) =
-                    call.arguments.get(3).and_then(|a| a.as_expression())
+                let cmp = self.resolve_comparison(call.arguments[1].as_expression().unwrap())?;
+                let amt = self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u32;
+                let res = if let Some(arg3) = call.arguments.get(3).and_then(|a| a.as_expression())
                 {
                     self.resolve_resource(arg3)?
                 } else {
@@ -1893,7 +1946,8 @@ impl<'a> TsCompiler<'a> {
                 let p = self.eval_const_expr(call.arguments[0].as_expression().unwrap())?;
                 let cmp = self.resolve_comparison(call.arguments[1].as_expression().unwrap())?;
                 let amt = self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u32;
-                let unit = if let Some(arg3) = call.arguments.get(3).and_then(|a| a.as_expression()) {
+                let unit = if let Some(arg3) = call.arguments.get(3).and_then(|a| a.as_expression())
+                {
                     self.resolve_unit_id(arg3)?
                 } else {
                     0
@@ -1921,7 +1975,8 @@ impl<'a> TsCompiler<'a> {
             }
             "ElapsedTime" => {
                 let cmp = self.resolve_comparison(call.arguments[0].as_expression().unwrap())?;
-                let seconds = self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u32;
+                let seconds =
+                    self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u32;
                 Ok(Some(StockCondition::ElapsedTime {
                     comparison: cmp,
                     seconds,
@@ -1929,7 +1984,8 @@ impl<'a> TsCompiler<'a> {
             }
             "Score" => {
                 let p = self.eval_const_expr(call.arguments[0].as_expression().unwrap())?;
-                let score_type = self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u8;
+                let score_type =
+                    self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u8;
                 let cmp = self.resolve_comparison(call.arguments[2].as_expression().unwrap())?;
                 let amt = self.eval_const_expr(call.arguments[3].as_expression().unwrap())? as u32;
                 Ok(Some(StockCondition::Score {
@@ -1944,7 +2000,9 @@ impl<'a> TsCompiler<'a> {
                     .arguments
                     .first()
                     .and_then(|a| a.as_expression())
-                    .ok_or_else(|| EudkitTsError::Compile("Switch requires switch id".to_string()))?;
+                    .ok_or_else(|| {
+                        EudkitTsError::Compile("Switch requires switch id".to_string())
+                    })?;
                 let state_arg = call
                     .arguments
                     .get(1)
@@ -1955,7 +2013,11 @@ impl<'a> TsCompiler<'a> {
                 let state = match state_val {
                     2 | 1 => eudkit_core::hir::SwitchState::Set,
                     3 | 0 => eudkit_core::hir::SwitchState::Cleared,
-                    _ => return Err(EudkitTsError::Compile(format!("invalid switch state {state_val}"))),
+                    _ => {
+                        return Err(EudkitTsError::Compile(format!(
+                            "invalid switch state {state_val}"
+                        )))
+                    }
                 };
                 Ok(Some(StockCondition::Switch { switch, state }))
             }
@@ -2002,7 +2064,9 @@ impl<'a> TsCompiler<'a> {
                         }
                     }
                     "display_at" | "displayAt" | "print_at" | "PrintAt" | "DisplayTextAt" => {
-                        let line = if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                        let line = if let Some(arg0) =
+                            call.arguments.first().and_then(|a| a.as_expression())
+                        {
                             self.eval_const_expr(arg0)? as u8
                         } else {
                             0
@@ -2015,10 +2079,7 @@ impl<'a> TsCompiler<'a> {
                         }
                         let parts = parse_format_template(&template, &args)
                             .map_err(|e| EudkitTsError::Compile(e))?;
-                        return Ok(Some(StockAction::PrintAt {
-                            line,
-                            parts,
-                        }));
+                        return Ok(Some(StockAction::PrintAt { line, parts }));
                     }
                     _ => {}
                 }
@@ -2034,12 +2095,16 @@ impl<'a> TsCompiler<'a> {
                     .arguments
                     .first()
                     .and_then(|a| a.as_expression())
-                    .ok_or_else(|| EudkitTsError::Compile("dwwrite_epd requires epd".to_string()))?;
+                    .ok_or_else(|| {
+                        EudkitTsError::Compile("dwwrite_epd requires epd".to_string())
+                    })?;
                 let val_arg = call
                     .arguments
                     .get(1)
                     .and_then(|a| a.as_expression())
-                    .ok_or_else(|| EudkitTsError::Compile("dwwrite_epd requires value".to_string()))?;
+                    .ok_or_else(|| {
+                        EudkitTsError::Compile("dwwrite_epd requires value".to_string())
+                    })?;
                 let epd_expr = self.lower_expr(epd_arg)?;
                 let val_expr = self.lower_expr(val_arg)?;
                 if let (HirExpr::Const(p), HirExpr::Const(v)) = (&epd_expr, &val_expr) {
@@ -2070,7 +2135,9 @@ impl<'a> TsCompiler<'a> {
                     .arguments
                     .get(1)
                     .and_then(|a| a.as_expression())
-                    .ok_or_else(|| EudkitTsError::Compile("bwrite_epd requires value".to_string()))?;
+                    .ok_or_else(|| {
+                        EudkitTsError::Compile("bwrite_epd requires value".to_string())
+                    })?;
                 let epd_expr = self.lower_expr(epd_arg)?;
                 let val_expr = self.lower_expr(val_arg)?;
                 Ok(Some(StockAction::SetDeathsDynamic {
@@ -2091,7 +2158,9 @@ impl<'a> TsCompiler<'a> {
                     .arguments
                     .get(1)
                     .and_then(|a| a.as_expression())
-                    .ok_or_else(|| EudkitTsError::Compile("wwrite_epd requires value".to_string()))?;
+                    .ok_or_else(|| {
+                        EudkitTsError::Compile("wwrite_epd requires value".to_string())
+                    })?;
                 let epd_expr = self.lower_expr(epd_arg)?;
                 let val_expr = self.lower_expr(val_arg)?;
                 Ok(Some(StockAction::SetDeathsDynamic {
@@ -2107,7 +2176,9 @@ impl<'a> TsCompiler<'a> {
                     .arguments
                     .first()
                     .and_then(|a| a.as_expression())
-                    .ok_or_else(|| EudkitTsError::Compile("dwwrite requires address".to_string()))?;
+                    .ok_or_else(|| {
+                        EudkitTsError::Compile("dwwrite requires address".to_string())
+                    })?;
                 let val_arg = call
                     .arguments
                     .get(1)
@@ -2229,13 +2300,12 @@ impl<'a> TsCompiler<'a> {
                 let val_expr = self.lower_expr(val_arg)?;
 
                 if fn_name == "SetMemoryX" {
-                    let mask = if let Some(arg3) =
-                        call.arguments.get(3).and_then(|a| a.as_expression())
-                    {
-                        self.eval_const_expr(arg3)? as u32
-                    } else {
-                        0xFFFF_FFFF
-                    };
+                    let mask =
+                        if let Some(arg3) = call.arguments.get(3).and_then(|a| a.as_expression()) {
+                            self.eval_const_expr(arg3)? as u32
+                        } else {
+                            0xFFFF_FFFF
+                        };
                     if let HirExpr::Const(c) = val_expr {
                         Ok(Some(StockAction::SetMemoryX {
                             address,
@@ -2268,17 +2338,15 @@ impl<'a> TsCompiler<'a> {
             }
             "SetResources" => {
                 let p_arg = self.eval_const_expr(call.arguments[0].as_expression().unwrap())?;
-                let mod_arg =
-                    self.resolve_modifier(call.arguments[1].as_expression().unwrap())?;
+                let mod_arg = self.resolve_modifier(call.arguments[1].as_expression().unwrap())?;
                 let amt_arg =
                     self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u32;
-                let res_arg = if let Some(arg3) =
-                    call.arguments.get(3).and_then(|a| a.as_expression())
-                {
-                    self.resolve_resource(arg3)?
-                } else {
-                    ResourceType::Ore
-                };
+                let res_arg =
+                    if let Some(arg3) = call.arguments.get(3).and_then(|a| a.as_expression()) {
+                        self.resolve_resource(arg3)?
+                    } else {
+                        ResourceType::Ore
+                    };
                 Ok(Some(StockAction::SetResources {
                     player: PlayerId::from_player_slot(p_arg as u8),
                     modifier: mod_arg,
@@ -2294,17 +2362,16 @@ impl<'a> TsCompiler<'a> {
                 } else {
                     "".to_string()
                 };
-                let always = if let Some(arg1) =
-                    call.arguments.get(1).and_then(|a| a.as_expression())
-                {
-                    if let Expression::BooleanLiteral(blit) = arg1 {
-                        blit.value
+                let always =
+                    if let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) {
+                        if let Expression::BooleanLiteral(blit) = arg1 {
+                            blit.value
+                        } else {
+                            true
+                        }
                     } else {
                         true
-                    }
-                } else {
-                    true
-                };
+                    };
                 Ok(Some(StockAction::DisplayText {
                     text,
                     always_display: always,
@@ -2324,8 +2391,8 @@ impl<'a> TsCompiler<'a> {
                         args.push(self.lower_expr(expr)?);
                     }
                 }
-                let parts = parse_format_template(&text, &args)
-                    .map_err(|e| EudkitTsError::Compile(e))?;
+                let parts =
+                    parse_format_template(&text, &args).map_err(|e| EudkitTsError::Compile(e))?;
                 Ok(Some(StockAction::FormatPrint {
                     target: PrintTarget::DisplayText,
                     parts,
@@ -2333,11 +2400,12 @@ impl<'a> TsCompiler<'a> {
                 }))
             }
             "print_at" | "PrintAt" | "display_at" | "displayAt" | "DisplayTextAt" => {
-                let line = if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
-                    self.eval_const_expr(arg0)? as u8
-                } else {
-                    0
-                };
+                let line =
+                    if let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) {
+                        self.eval_const_expr(arg0)? as u8
+                    } else {
+                        0
+                    };
                 let text = if let Some(Expression::StringLiteral(slit)) =
                     call.arguments.get(1).and_then(|a| a.as_expression())
                 {
@@ -2351,19 +2419,14 @@ impl<'a> TsCompiler<'a> {
                         args.push(self.lower_expr(expr)?);
                     }
                 }
-                let parts = parse_format_template(&text, &args)
-                    .map_err(|e| EudkitTsError::Compile(e))?;
-                Ok(Some(StockAction::PrintAt {
-                    line,
-                    parts,
-                }))
+                let parts =
+                    parse_format_template(&text, &args).map_err(|e| EudkitTsError::Compile(e))?;
+                Ok(Some(StockAction::PrintAt { line, parts }))
             }
             "CreateUnit" => {
-                let count =
-                    self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
+                let count = self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
                 let unit = self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
-                let loc =
-                    self.resolve_location_id(call.arguments[2].as_expression().unwrap())?;
+                let loc = self.resolve_location_id(call.arguments[2].as_expression().unwrap())?;
                 let player =
                     self.eval_const_expr(call.arguments[3].as_expression().unwrap())? as u8;
                 Ok(Some(StockAction::CreateUnit {
@@ -2374,12 +2437,9 @@ impl<'a> TsCompiler<'a> {
                 }))
             }
             "KillUnitAt" => {
-                let count =
-                    self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
-                let unit =
-                    self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
-                let loc =
-                    self.resolve_location_id(call.arguments[2].as_expression().unwrap())?;
+                let count = self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
+                let unit = self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
+                let loc = self.resolve_location_id(call.arguments[2].as_expression().unwrap())?;
                 let player =
                     self.eval_const_expr(call.arguments[3].as_expression().unwrap())? as u8;
                 Ok(Some(StockAction::KillUnitAt {
@@ -2390,19 +2450,20 @@ impl<'a> TsCompiler<'a> {
                 }))
             }
             "MinimapPing" => {
-                let loc =
-                    self.resolve_location_id(call.arguments[0].as_expression().unwrap())?;
+                let loc = self.resolve_location_id(call.arguments[0].as_expression().unwrap())?;
                 Ok(Some(StockAction::MinimapPing { location: loc }))
             }
             "SetScore" => {
                 let p = self.eval_const_expr(call.arguments[0].as_expression().unwrap())?;
                 let modifier = self.resolve_modifier(call.arguments[1].as_expression().unwrap())?;
-                let amount = self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u32;
-                let score_type = if let Some(arg3) = call.arguments.get(3).and_then(|a| a.as_expression()) {
-                    self.eval_const_expr(arg3)? as u8
-                } else {
-                    0
-                };
+                let amount =
+                    self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u32;
+                let score_type =
+                    if let Some(arg3) = call.arguments.get(3).and_then(|a| a.as_expression()) {
+                        self.eval_const_expr(arg3)? as u8
+                    } else {
+                        0
+                    };
                 Ok(Some(StockAction::SetScore {
                     player: PlayerId::from_player_slot(p as u8),
                     modifier,
@@ -2412,7 +2473,8 @@ impl<'a> TsCompiler<'a> {
             }
             "SetSwitch" => {
                 let sw = self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
-                let action_code = self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u8;
+                let action_code =
+                    self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u8;
                 let action = match action_code {
                     4 | 2 => SwitchAction::Set,
                     5 | 3 => SwitchAction::Clear,
@@ -2425,8 +2487,10 @@ impl<'a> TsCompiler<'a> {
             "MoveLocation" => {
                 let loc = self.resolve_location_id(call.arguments[0].as_expression().unwrap())?;
                 let unit = self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
-                let player = self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u8;
-                let dest_loc = self.resolve_location_id(call.arguments[3].as_expression().unwrap())?;
+                let player =
+                    self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u8;
+                let dest_loc =
+                    self.resolve_location_id(call.arguments[3].as_expression().unwrap())?;
                 Ok(Some(StockAction::MoveLocation {
                     location: loc,
                     unit,
@@ -2435,12 +2499,9 @@ impl<'a> TsCompiler<'a> {
                 }))
             }
             "RemoveUnitAt" => {
-                let count =
-                    self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
-                let unit =
-                    self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
-                let loc =
-                    self.resolve_location_id(call.arguments[2].as_expression().unwrap())?;
+                let count = self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
+                let unit = self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
+                let loc = self.resolve_location_id(call.arguments[2].as_expression().unwrap())?;
                 let player =
                     self.eval_const_expr(call.arguments[3].as_expression().unwrap())? as u8;
                 Ok(Some(StockAction::RemoveUnitAt {
@@ -2451,8 +2512,7 @@ impl<'a> TsCompiler<'a> {
                 }))
             }
             "KillUnit" => {
-                let unit =
-                    self.resolve_unit_id(call.arguments[0].as_expression().unwrap())?;
+                let unit = self.resolve_unit_id(call.arguments[0].as_expression().unwrap())?;
                 let player =
                     self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u8;
                 Ok(Some(StockAction::KillUnit {
@@ -2461,10 +2521,8 @@ impl<'a> TsCompiler<'a> {
                 }))
             }
             "MoveUnit" => {
-                let count =
-                    self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
-                let unit =
-                    self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
+                let count = self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
+                let unit = self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
                 let player =
                     self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u8;
                 let start_loc =
@@ -2480,14 +2538,11 @@ impl<'a> TsCompiler<'a> {
                 }))
             }
             "GiveUnits" => {
-                let count =
-                    self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
-                let unit =
-                    self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
+                let count = self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
+                let unit = self.resolve_unit_id(call.arguments[1].as_expression().unwrap())?;
                 let player =
                     self.eval_const_expr(call.arguments[2].as_expression().unwrap())? as u8;
-                let loc =
-                    self.resolve_location_id(call.arguments[3].as_expression().unwrap())?;
+                let loc = self.resolve_location_id(call.arguments[3].as_expression().unwrap())?;
                 let new_player =
                     self.eval_const_expr(call.arguments[4].as_expression().unwrap())? as u8;
                 Ok(Some(StockAction::GiveUnits {
@@ -2499,8 +2554,7 @@ impl<'a> TsCompiler<'a> {
                 }))
             }
             "Order" => {
-                let unit =
-                    self.resolve_unit_id(call.arguments[0].as_expression().unwrap())?;
+                let unit = self.resolve_unit_id(call.arguments[0].as_expression().unwrap())?;
                 let player =
                     self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u8;
                 let start_loc =
@@ -2686,53 +2740,53 @@ impl<'a> TsCompiler<'a> {
     }
 
     pub fn builtin_const(name: &str) -> Option<i32> {
-    match name {
-        "Custom" => Some(7),
-        "Total" => Some(0),
-        "Units" => Some(1),
-        "Buildings" => Some(2),
-        "UnitsAndBuildings" => Some(3),
-        "Kills" => Some(4),
-        "Razings" => Some(5),
-        "KillsAndRazings" => Some(6),
-        "Ore" => Some(0),
-        "Gas" => Some(1),
-        "OreAndGas" => Some(2),
-        "SetTo" => Some(7),
-        "Add" => Some(8),
-        "Subtract" => Some(9),
-        "AtLeast" => Some(0),
-        "AtMost" => Some(1),
-        "Exactly" => Some(10),
-        "Set" => Some(2),
-        "Cleared" => Some(3),
-        "Clear" => Some(5),
-        "Toggle" => Some(6),
-        "Random" => Some(7),
-        "All" => Some(0),
-        "Move" => Some(0),
-        "Patrol" => Some(1),
-        "Attack" => Some(2),
-        "Player1" | "P1" => Some(0),
-        "Player2" | "P2" => Some(1),
-        "Player3" | "P3" => Some(2),
-        "Player4" | "P4" => Some(3),
-        "Player5" | "P5" => Some(4),
-        "Player6" | "P6" => Some(5),
-        "Player7" | "P7" => Some(6),
-        "Player8" | "P8" => Some(7),
-        "Player9" | "P9" => Some(8),
-        "Player10" | "P10" => Some(9),
-        "Player11" | "P11" => Some(10),
-        "Player12" | "P12" => Some(11),
-        "AllPlayers" => Some(17),
-        "Force1" => Some(18),
-        "Force2" => Some(19),
-        "Force3" => Some(20),
-        "Force4" => Some(21),
-        _ => None,
+        match name {
+            "Custom" => Some(7),
+            "Total" => Some(0),
+            "Units" => Some(1),
+            "Buildings" => Some(2),
+            "UnitsAndBuildings" => Some(3),
+            "Kills" => Some(4),
+            "Razings" => Some(5),
+            "KillsAndRazings" => Some(6),
+            "Ore" => Some(0),
+            "Gas" => Some(1),
+            "OreAndGas" => Some(2),
+            "SetTo" => Some(7),
+            "Add" => Some(8),
+            "Subtract" => Some(9),
+            "AtLeast" => Some(0),
+            "AtMost" => Some(1),
+            "Exactly" => Some(10),
+            "Set" => Some(2),
+            "Cleared" => Some(3),
+            "Clear" => Some(5),
+            "Toggle" => Some(6),
+            "Random" => Some(7),
+            "All" => Some(0),
+            "Move" => Some(0),
+            "Patrol" => Some(1),
+            "Attack" => Some(2),
+            "Player1" | "P1" => Some(0),
+            "Player2" | "P2" => Some(1),
+            "Player3" | "P3" => Some(2),
+            "Player4" | "P4" => Some(3),
+            "Player5" | "P5" => Some(4),
+            "Player6" | "P6" => Some(5),
+            "Player7" | "P7" => Some(6),
+            "Player8" | "P8" => Some(7),
+            "Player9" | "P9" => Some(8),
+            "Player10" | "P10" => Some(9),
+            "Player11" | "P11" => Some(10),
+            "Player12" | "P12" => Some(11),
+            "AllPlayers" => Some(17),
+            "Force1" => Some(18),
+            "Force2" => Some(19),
+            "Force3" => Some(20),
+            "Force4" => Some(21),
+            _ => None,
+        }
     }
-}
 
     fn eval_const_expr(&self, expr: &Expression) -> Result<i32> {
         match expr {
@@ -2768,7 +2822,9 @@ impl<'a> TsCompiler<'a> {
                 if let Some(bval) = Self::builtin_const(name) {
                     return Ok(bval);
                 }
-                Err(EudkitTsError::Compile(format!("unresolved constant {name}")))
+                Err(EudkitTsError::Compile(format!(
+                    "unresolved constant {name}"
+                )))
             }
             Expression::UnaryExpression(unary) => {
                 let val = self.eval_const_expr(&unary.argument)?;
@@ -2808,7 +2864,9 @@ impl<'a> TsCompiler<'a> {
                             .arguments
                             .first()
                             .and_then(|a| a.as_expression())
-                            .ok_or_else(|| EudkitTsError::Compile("EPD requires address".to_string()))?;
+                            .ok_or_else(|| {
+                                EudkitTsError::Compile("EPD requires address".to_string())
+                            })?;
                         let addr = self.eval_const_expr(arg)?;
                         return Ok(epd(addr as u32));
                     }
@@ -2883,10 +2941,7 @@ impl<'a> TsCompiler<'a> {
             if let Some(id) = self.map_ctx.unit_id(s) {
                 return Ok(id);
             }
-            return Err(EudkitTsError::Compile(format!(
-                "unknown unit name {:?}",
-                s
-            )));
+            return Err(EudkitTsError::Compile(format!("unknown unit name {:?}", s)));
         }
         let val = self.eval_const_expr(expr)?;
         Ok(val as u16)
