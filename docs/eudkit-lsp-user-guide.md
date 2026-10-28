@@ -6,10 +6,9 @@ It covers VS Code and Zed, Python/TypeScript/JavaScript, projects with and
 without `eudkit.toml`, the warnings the server publishes, hover and signature
 help, and what is deliberately not included yet.
 
-Hover and signature help were added on the development branch after `v0.1.1`.
-They are **not** part of the published `v0.1.1` VSIX, Zed archive, or
-`eudkit-lsp` binaries; the next release will ship them. The rest of this guide
-describes the current development tree.
+Hover and signature help shipped in `v0.1.2`. They are **not** part of the
+`v0.1.1` VSIX, Zed archive, or `eudkit-lsp` binaries; use the `v0.1.2` or later
+packages to get them. The rest of this guide describes the current release.
 
 Terms such as **Map Context**, **Map Symbol**, **Canonical Symbol**, and
 **Stock Unit Filter** are defined in [`GLOSSARY.md`](../GLOSSARY.md).
@@ -259,9 +258,8 @@ works without the package installed.
 Hover and signature help are available in Python, TypeScript, TSX, JavaScript,
 and JSX. They use the same shared server, so both editors receive the same
 responses. Zed's UI rendering was not independently driven; see the
-[acceptance matrix](eudkit-lsp-acceptance-matrix.md). This support is on the
-development branch after `v0.1.1`; none of the released `v0.1.1` assets contain
-it.
+[acceptance matrix](eudkit-lsp-acceptance-matrix.md). This support is available
+in `v0.1.2` and later; the `v0.1.1` assets do not contain it.
 
 ### Symbol hover
 
@@ -491,8 +489,8 @@ hover and signature help described above.
   not produce eudkit hover.
 - Signature help is available only inside the supported calls, after `(` or
   `,`. A `DisplayText(...)` or other unsupported call returns nothing.
-- Confirm the `eudkit-lsp` version is from the development branch or a release
-  after `v0.1.1`. The published `v0.1.1` assets do not contain hover or
+- Confirm the `eudkit-lsp` version is `0.1.2` or later, or a local build from
+  the development branch. The published `v0.1.1` assets do not contain hover or
   signature help.
 - Pylance and tsserver may show their own hover and signature results on the
   same symbol. That is expected.
@@ -551,14 +549,15 @@ The following are explicitly outside the `0.1.x` editor MVP:
 - Editor-specific completion, hover, signature, or diagnostic logic. Both
   editors share the server.
 
-Hover and signature help are post-`v0.1.1` development work and are not present
-in the published `v0.1.1` artifacts. The release notes stay historical; the next
-release will include this support.
+Hover and signature help shipped in `v0.1.2`. They are not present in the
+`v0.1.1` artifacts; that release's notes remain the historical record of what
+`v0.1.1` contained.
 
 ## Related documentation
 
 - [Acceptance matrix](eudkit-lsp-acceptance-matrix.md)
-- [v0.1.1 release notes](releases/v0.1.1.md)
+- [v0.1.2 release notes](releases/v0.1.2.md)
+- [v0.1.1 release notes](releases/v0.1.1.md) (historical)
 - [Clean-machine editor install smoke test](editor-install-smoke-test.md)
 - [VS Code extension README](../editors/vscode/README.md)
 - [VS Code testing](../editors/vscode/TESTING.md)

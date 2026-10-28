@@ -2,7 +2,7 @@
   "name": "eudkit-vscode",
   "displayName": "eudkit LSP",
   "description": "Canonical unit completion for eudplib Python, TypeScript, and JavaScript Frontend files from eudkit-lsp.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "eudkit",
   "license": "MIT",
   "repository": {

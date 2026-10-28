@@ -9,8 +9,8 @@ completion for the 228 canonical unit names in the `KillUnit` unit argument, for
 example after typing `KillUnit("`, plus hover and signature help for supported
 eudkit calls and canonical/Map Context symbols.
 
-Hover and signature help are post-`v0.1.1` development work. They are not in
-the published `v0.1.1` VSIX or server assets and will ship in the next release.
+Hover and signature help shipped in `v0.1.2`. They are not in the `v0.1.1`
+VSIX or server assets; install `v0.1.2` or later to get them.
 
 The extension is intentionally narrow:
 
@@ -63,11 +63,11 @@ A version mismatch is an actionable error, not a silent start.
 
 ### Release downloads
 
-Downloads are pinned to the extension's own package version. An `0.1.1`
+Downloads are pinned to the extension's own package version. An `0.1.2`
 extension fetches:
 
 ```text
-https://github.com/Tb1281/eudplib/releases/download/v0.1.1/<asset>
+https://github.com/Tb1281/eudplib/releases/download/v0.1.2/<asset>
 ```
 
 The published `<asset>.sha256` companion is mandatory. The extension downloads

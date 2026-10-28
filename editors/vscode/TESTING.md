@@ -57,14 +57,14 @@ The debug binary is at `../../src/rust/target/debug/eudkit-lsp`
 
 ```bash
 ../../src/rust/target/debug/eudkit-lsp --version
-# eudkit-lsp 0.1.1
+# eudkit-lsp 0.1.2
 ```
 
 You can also run the protocol smoke test against it:
 
 ```bash
 python3 ../../scripts/smoke_eudkit_lsp.py \
-  ../../src/rust/target/debug/eudkit-lsp --expected-version 0.1.1
+  ../../src/rust/target/debug/eudkit-lsp --expected-version 0.1.2
 ```
 
 ## 3. Start the Extension Development Host
@@ -153,7 +153,7 @@ Warnings are advisory; they must not block `eudkit build`.
 ## 8. Test the release-download path
 
 Use this after a release containing the `eudkit-lsp-*` assets exists. The
-extension version is `0.1.1`, so the tag must be `v0.1.1`.
+extension version is `0.1.2`, so the tag must be `v0.1.2`.
 
 1. Clear all local overrides:
 
@@ -168,30 +168,30 @@ extension version is `0.1.1`, so the tag must be `v0.1.1`.
 2. Delete the extension's cached download. The exact path is under VS Code's
    global storage for `eudkit.eudkit-vscode`:
 
-   - Linux: `~/.config/Code/User/globalStorage/eudkit.eudkit-vscode/eudkit-lsp/0.1.1/`
-   - macOS: `~/Library/Application Support/Code/User/globalStorage/eudkit.eudkit-vscode/eudkit-lsp/0.1.1/`
-   - Windows: `%APPDATA%\Code\User\globalStorage\eudkit.eudkit-vscode\eudkit-lsp\0.1.1\`
+   - Linux: `~/.config/Code/User/globalStorage/eudkit.eudkit-vscode/eudkit-lsp/0.1.2/`
+   - macOS: `~/Library/Application Support/Code/User/globalStorage/eudkit.eudkit-vscode/eudkit-lsp/0.1.2/`
+   - Windows: `%APPDATA%\Code\User\globalStorage\eudkit.eudkit-vscode\eudkit-lsp\0.1.2\`
 
 3. Start the Extension Development Host (or use the installed VSIX) and open a
    Python file. The output channel should show:
 
-   - `Downloading required checksum https://github.com/Tb1281/eudplib/releases/download/v0.1.1/<asset>.sha256`
-   - `Downloading https://github.com/Tb1281/eudplib/releases/download/v0.1.1/<asset>`
+   - `Downloading required checksum https://github.com/Tb1281/eudplib/releases/download/v0.1.2/<asset>.sha256`
+   - `Downloading https://github.com/Tb1281/eudplib/releases/download/v0.1.2/<asset>`
    - `Verified SHA-256 checksum`
-   - `Installed eudkit-lsp 0.1.1`
+   - `Installed eudkit-lsp 0.1.2`
    - `Starting eudkit-lsp from GitHub release download`
 
 4. Inspect the cache. It contains the platform asset and its checksum:
 
    ```text
-   eudkit-lsp/0.1.1/eudkit-lsp-linux-x86_64
-   eudkit-lsp/0.1.1/eudkit-lsp-linux-x86_64.sha256
+   eudkit-lsp/0.1.2/eudkit-lsp-linux-x86_64
+   eudkit-lsp/0.1.2/eudkit-lsp-linux-x86_64.sha256
    ```
 
 5. Verify the checksum manually:
 
    ```bash
-   cd ~/.config/Code/User/globalStorage/eudkit.eudkit-vscode/eudkit-lsp/0.1.1
+   cd ~/.config/Code/User/globalStorage/eudkit.eudkit-vscode/eudkit-lsp/0.1.2
    sha256sum -c eudkit-lsp-linux-x86_64.sha256
    ```
 
@@ -214,7 +214,7 @@ npm run package
 npm run verify:vsix
 ```
 
-The VSIX is written to `dist/eudkit-vscode-0.1.1.vsix`. It contains:
+The VSIX is written to `dist/eudkit-vscode-0.1.2.vsix`. It contains:
 
 ```text
 extension/package.json
@@ -232,5 +232,5 @@ for later Marketplace publication.
 Inspect the archive directly if needed:
 
 ```bash
-unzip -l dist/eudkit-vscode-0.1.1.vsix
+unzip -l dist/eudkit-vscode-0.1.2.vsix
 ```

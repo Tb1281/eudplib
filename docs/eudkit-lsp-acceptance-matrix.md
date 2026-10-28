@@ -8,9 +8,11 @@ This is the reference verification record for the user guide at
 
 The released `v0.1.1` assets contain the completion, diagnostics, and Map Context
 behavior described in this matrix; they do not contain hover or signature help.
-That support was added on the development branch after the release, so rows
-marked **post-`v0.1.1`** are verified against the development tree, not the
-published `v0.1.1` binaries.
+That support was added on the development branch after the release and shipped
+in `v0.1.2`, so rows marked **post-`v0.1.1`** are verified against the
+development tree, not the published `v0.1.1` binaries. The `v0.1.2` packages
+were not re-run through the UI matrix; their hover/signature evidence remains
+the protocol matrix below.
 
 ## Environment
 
@@ -40,7 +42,7 @@ The Zed pass loaded the extension in a dev profile and started the same
 | Area | Result | Evidence |
 | --- | --- | --- |
 | Shared LSP behavior, all languages and contexts | **PASS** | 89 Rust tests, including 35 protocol tests |
-| Hover and signature help (post-`v0.1.1` development branch) | **PASS at protocol level** | 8 protocol tests and unit coverage; not present in the published `v0.1.1` assets |
+| Hover and signature help (shipped in `v0.1.2`) | **PASS at protocol level** | 8 protocol tests and unit coverage; not present in the `v0.1.1` assets |
 | VS Code reference UX, Python/TypeScript/JavaScript, with and without `eudkit.toml` | **PASS** | all reference checks below |
 | VS Code release download, checksum, cache, version probe | **PASS** | Output channel record; cached asset and `.sha256` present |
 | Zed extension load and server start, Python/TypeScript/JavaScript | **PASS** | Extension host log: 2 extensions loaded; 3 `eudkit-lsp` process starts |
@@ -104,10 +106,10 @@ are covered by the same suite.
 | EUD group-player warning above stock boundary | PASS | PASS | PASS | `warns_when_group_players_use_eud_offsets_*` |
 | Concrete players, stock units, variables stay silent | PASS | PASS | PASS | `accepts_stock_and_ambiguous_arguments_*` |
 
-### Hover and signature help (post-`v0.1.1`)
+### Hover and signature help (shipped in `v0.1.2`)
 
-These rows were verified on the development tree after `v0.1.1`. The published
-`v0.1.1` binaries do not advertise or implement these methods.
+These rows were verified on the development tree after `v0.1.1` and shipped in
+`v0.1.2`. The `v0.1.1` binaries do not advertise or implement these methods.
 
 | Case | Python | TypeScript | JavaScript | Protocol tests |
 | --- | --- | --- | --- | --- |
@@ -157,13 +159,14 @@ protocol matrix and not by this VS Code UI pass.
 | Group player + offset `300` produces the EUD warning | PASS | PASS | PASS |
 | Concrete player + offset `300` stays silent | PASS | PASS | PASS |
 | Warnings clear when the document is fixed | PASS | PASS | PASS |
-| Hover and signature help UI (post-`v0.1.1`) | Not executed in this VSIX pass | Not executed in this VSIX pass | Not executed in this VSIX pass |
+| Hover and signature help UI | Not executed in this VSIX pass | Not executed in this VSIX pass | Not executed in this VSIX pass |
 | No `eudkit.inputMap` setting; default `eudkit.lsp.path` is empty | PASS | PASS | PASS |
 
 The hover/signature row is intentionally not a release-UI claim: the installed
 VSIX in this pass was the published `v0.1.1` bundle, whose server does not
-implement those methods. Their shared server behavior is covered by the
-protocol matrix above.
+implement those methods. The `v0.1.2` packages ship them, but no separate UI
+pass was run; their shared server behavior is covered by the protocol matrix
+above.
 
 Observed release-download record:
 

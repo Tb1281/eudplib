@@ -66,7 +66,7 @@ Confirm the version contract:
 
 ```sh
 src/rust/target/release/eudkit-lsp --version
-# eudkit-lsp 0.1.1
+# eudkit-lsp 0.1.2
 ```
 
 Verify the LSP itself returns all 228 units before involving Zed. The
@@ -74,13 +74,13 @@ repository script works on Linux, macOS, and Windows:
 
 ```sh
 python scripts/smoke_eudkit_lsp.py \
-  src/rust/target/release/eudkit-lsp --expected-version 0.1.1
+  src/rust/target/release/eudkit-lsp --expected-version 0.1.2
 ```
 
 The last lines should read:
 
 ```text
-... reports eudkit-lsp 0.1.1
+... reports eudkit-lsp 0.1.2
 eudkit-lsp returned 228 canonical units
 eudkit-lsp smoke test passed for ...
 ```
@@ -98,8 +98,8 @@ If compilation fails, inspect `zed: open log`; the build runs
 `cargo build --target wasm32-wasip2` in `editors/zed`.
 
 You can also use the published source archive
-`eudkit-zed-0.1.1.tar.gz` from a GitHub Release. Extract it and select the
-extracted `eudkit-zed-0.1.1` directory. It contains `extension.toml`,
+`eudkit-zed-0.1.2.tar.gz` from a GitHub Release. Extract it and select the
+extracted `eudkit-zed-0.1.2` directory. It contains `extension.toml`,
 `Cargo.toml`, `Cargo.lock`, `src/`, `README.md`, `TESTING.md`, and `LICENSE`,
 with no `target/` or `extension.wasm`.
 
@@ -346,8 +346,8 @@ the extension returns an error naming the asset and checksum URLs and the
 ## 9. Release-download path and mandatory checksum
 
 Use this after a release containing the `eudkit-lsp-*` assets exists. The
-extension package version is `0.1.1`, so the download is pinned to tag
-`v0.1.1` and the cache directory `eudkit-lsp-0.1.1/`.
+extension package version is `0.1.2`, so the download is pinned to tag
+`v0.1.2` and the cache directory `eudkit-lsp-0.1.2/`.
 
 1. Remove the local override and make sure no `eudkit-lsp` is on `PATH`:
 
@@ -370,7 +370,7 @@ extension package version is `0.1.1`, so the download is pinned to tag
    JavaScript file. The log should show a download from:
 
    ```text
-   https://github.com/Tb1281/eudplib/releases/download/v0.1.1/<asset>
+   https://github.com/Tb1281/eudplib/releases/download/v0.1.2/<asset>
    ```
 
    followed by `verified SHA-256 checksum` and `installed`. The version in the
@@ -381,14 +381,14 @@ extension package version is `0.1.1`, so the download is pinned to tag
    companion, for example on Linux:
 
    ```text
-   ~/.local/share/zed/extensions/work/eudkit-lsp/eudkit-lsp-0.1.1/eudkit-lsp-linux-x86_64
-   ~/.local/share/zed/extensions/work/eudkit-lsp/eudkit-lsp-0.1.1/eudkit-lsp-linux-x86_64.sha256
+   ~/.local/share/zed/extensions/work/eudkit-lsp/eudkit-lsp-0.1.2/eudkit-lsp-linux-x86_64
+   ~/.local/share/zed/extensions/work/eudkit-lsp/eudkit-lsp-0.1.2/eudkit-lsp-linux-x86_64.sha256
    ```
 
 5. Verify the checksum manually:
 
    ```sh
-   cd ~/.local/share/zed/extensions/work/eudkit-lsp/eudkit-lsp-0.1.1
+   cd ~/.local/share/zed/extensions/work/eudkit-lsp/eudkit-lsp-0.1.2
    sha256sum -c eudkit-lsp-linux-x86_64.sha256
    # or: sha256sum eudkit-lsp-linux-x86_64 && cat eudkit-lsp-linux-x86_64.sha256
    ```
