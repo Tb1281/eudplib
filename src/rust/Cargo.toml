@@ -29,6 +29,7 @@ crate-type = ["cdylib"]
 
 [profile.release]
 overflow-checks = false
+strip = true
 
 [workspace]
 members = [
