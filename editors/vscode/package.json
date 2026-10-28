@@ -1,0 +1,66 @@
+{
+  "name": "eudkit-vscode",
+  "displayName": "eudkit LSP",
+  "description": "Canonical unit completion for eudplib Python Frontend files from eudkit-lsp.",
+  "version": "0.1.0",
+  "publisher": "eudkit",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/armoha/eudplib.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "eudplib",
+    "starcraft",
+    "python",
+    "lsp"
+  ],
+  "activationEvents": [
+    "onLanguage:python"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "eudkit.restartLanguageServer",
+        "title": "Restart Language Server",
+        "category": "eudkit"
+      }
+    ],
+    "configuration": {
+      "title": "eudkit",
+      "properties": {
+        "eudkit.lsp.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Path to the `eudkit-lsp` executable. May be absolute or relative to the first workspace folder. When empty, `EUDKIT_LSP_PATH`, `PATH`, and `bin/<platform>-<arch>/eudkit-lsp` are tried in that order."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "esbuild test/serverPath.test.ts --bundle --platform=node --format=cjs --outfile=dist-test/serverPath.test.cjs && node --test dist-test/serverPath.test.cjs",
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "npm run check && npm run build -- --production && vsce package --no-dependencies --out dist/eudkit-vscode-0.1.0.vsix"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/vscode": "^1.91.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3"
+  }
+}
