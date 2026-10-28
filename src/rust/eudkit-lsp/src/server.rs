@@ -110,18 +110,18 @@ fn completion_response(
     let uri = params.text_document_position.text_document.uri.as_str();
     let document = state.documents.get(uri)?;
     let offset = position_to_offset(&document.text, position)?;
+    let map_context = Url::parse(uri)
+        .ok()
+        .and_then(|url| url.to_file_path().ok())
+        .and_then(|path| state.projects.map_context_for_document(&path));
     let items = match document.language_id.as_str() {
         "python" => {
-            let map_context = Url::parse(uri)
-                .ok()
-                .and_then(|url| url.to_file_path().ok())
-                .and_then(|path| state.projects.map_context_for_document(&path));
             let parsed = ParsedDocument::parse(&document.text);
             completions_at_with_context(&parsed, offset, map_context.as_deref())
         }
         language_id => {
             let language = TsLanguage::from_language_id(language_id)?;
-            ts_completions_at(&document.text, language, offset)
+            ts_completions_at(&document.text, language, offset, map_context.as_deref())
         }
     }?;
     Some(CompletionResponse::Array(items))

@@ -11,4 +11,4 @@ pub use symbol_slot::{
     function_symbols, symbol_slot_at, FunctionSymbols, SymbolArgument, SymbolKind, SymbolSlot,
     PYTHON_SYMBOLS,
 };
-pub use ts::{ts_symbol_slot_at, TsLanguage, TsUnitNameSlot};
+pub use ts::{ts_symbol_slot_at, TsLanguage, TsSymbolSlot};
