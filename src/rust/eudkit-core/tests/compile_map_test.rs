@@ -141,17 +141,12 @@ fn compiles_scx_map_with_object_stacking_static_strx_relocation_and_byte_determi
         .read_all()
         .expect("should read scenario.chk");
 
-    // Verify trailing ISOM footer in raw scenario.chk
-    assert!(raw_chk.len() >= 8);
-    assert_eq!(&raw_chk[raw_chk.len() - 8..raw_chk.len() - 4], b"ISOM");
-    let isom_len = i32::from_le_bytes(raw_chk[raw_chk.len() - 4..].try_into().unwrap());
-    assert!(isom_len < 0, "ISOM footer must have negative jump length");
-
+    // Standard non-obscurated builds must NOT emit fake negative ISOM footers so map editors can open the map
     let out_chk = Chk::parse(&raw_chk).expect("output scenario.chk must parse cleanly");
-    assert!(out_chk.has_isom_footer());
+    assert!(!out_chk.has_isom_footer(), "standard builds must not append fake negative ISOM footers");
     assert!(
-        out_chk.section(b"STR ").is_none(),
-        "legacy STR section must be removed after upgrading to STRx"
+        out_chk.section(b"STR ").is_some(),
+        "classic STR section must be preserved alongside STRx for map editor compatibility"
     );
 
     // 4. Verify STRx section & static 0x191943C8 relocations
@@ -227,7 +222,7 @@ fn preserves_classic_trig_triggers_and_upgrades_legacy_str_to_strx() {
         .read_all()
         .unwrap();
     let chk_legacy = Chk::parse(&chk_legacy_bytes).unwrap();
-    assert!(chk_legacy.section(b"STR ").is_none());
+    assert!(chk_legacy.section(b"STR ").is_some(), "STR section must be emitted alongside STRx for map editor compatibility");
     let strx_legacy = chk_legacy.section(b"STRx").unwrap();
     assert_eq!(
         strx_legacy.len(),

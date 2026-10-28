@@ -337,6 +337,39 @@ impl StringTable {
         self.string_address(id1).map(|addr| crate::hir::epd(addr))
     }
 
+    /// Serializes into classic `STR` format (16-bit offsets) for map editor compatibility.
+    pub fn serialize_str(&self) -> Vec<u8> {
+        let count = self.dataindextb.len().min(65535);
+        let table_size = 2 * (count + 1);
+        let mut out_index = table_size;
+        let mut str_offsets = Vec::with_capacity(self.datatb.len());
+
+        for s in &self.datatb {
+            if out_index + s.len() + 1 > 65535 {
+                str_offsets.push(0u16);
+            } else {
+                str_offsets.push(out_index as u16);
+                out_index += s.len() + 1;
+            }
+        }
+
+        let mut out = Vec::with_capacity(out_index.min(65535));
+        out.extend_from_slice(&(count as u16).to_le_bytes());
+        for &data_idx in &self.dataindextb[..count] {
+            let off = str_offsets.get(data_idx).copied().unwrap_or(0);
+            out.extend_from_slice(&off.to_le_bytes());
+        }
+
+        for s in &self.datatb {
+            if out.len() + s.len() + 1 > 65535 {
+                break;
+            }
+            out.extend_from_slice(s);
+            out.push(0);
+        }
+        out
+    }
+
     /// Serializes into Remastered `STRx` format (32-bit offsets, 4-byte aligned entries).
     pub fn serialize_strx(&self) -> Vec<u8> {
         let count = self.dataindextb.len();

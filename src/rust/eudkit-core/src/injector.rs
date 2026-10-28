@@ -70,6 +70,9 @@ pub fn inject_payload_into_chk_with_restores(
     strx_bytes.extend_from_slice(&relocated);
     chk.set_section(b"STRx", strx_bytes)?;
 
+    let str_bytes = map_ctx.string_table().serialize_str();
+    chk.set_section(b"STR ", str_bytes)?;
+
     let trig_bytes = build_trig_section(payload_entry_addr, map_ctx.triggers(), restore_triggers);
     chk.set_section(b"TRIG", trig_bytes)?;
 

@@ -200,6 +200,7 @@ impl CompilationSession {
         };
 
         let mut out_chk = self.chk.clone();
+        out_chk.set_has_isom_footer(obscurate);
         let mut map_ctx = self.map_context.clone();
 
         let restore_triggers = if let Some(s) = seed {

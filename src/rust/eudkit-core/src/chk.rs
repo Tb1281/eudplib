@@ -2,7 +2,7 @@ use crate::error::{EudkitError, Result};
 
 pub const USED_SECTIONS: &[[u8; 4]] = &[
     *b"VER ", *b"VCOD", *b"OWNR", *b"ERA ", *b"DIM ", *b"SIDE", *b"MTXM",
-    *b"UNIT", *b"THG2", *b"MASK", *b"STRx", *b"UPRP", *b"MRGN", *b"TRIG",
+    *b"UNIT", *b"THG2", *b"MASK", *b"STR ", *b"STRx", *b"UPRP", *b"MRGN", *b"TRIG",
     *b"MBRF", *b"SPRP", *b"FORC", *b"COLR", *b"PUNI", *b"PUPx", *b"PTEx",
     *b"UNIx", *b"UPGx", *b"TECx", *b"CRGB",
 ];
@@ -70,6 +70,10 @@ impl Chk {
 
     pub fn has_isom_footer(&self) -> bool {
         self.has_isom_footer
+    }
+
+    pub fn set_has_isom_footer(&mut self, val: bool) {
+        self.has_isom_footer = val;
     }
 
     pub fn sections(&self) -> &[([u8; 4], Vec<u8>)] {
@@ -202,15 +206,17 @@ impl Chk {
             .iter()
             .map(|(_, data)| 8 + data.len())
             .sum::<usize>()
-            + 8;
+            + if self.has_isom_footer { 8 } else { 0 };
         let mut out = Vec::with_capacity(total_len);
         for (name, data) in &self.sections {
             out.extend_from_slice(name);
             out.extend_from_slice(&(data.len() as u32).to_le_bytes());
             out.extend_from_slice(data);
         }
-        out.extend_from_slice(b"ISOM");
-        out.extend_from_slice(&DETERMINISTIC_ISOM_LEN.to_le_bytes());
+        if self.has_isom_footer {
+            out.extend_from_slice(b"ISOM");
+            out.extend_from_slice(&DETERMINISTIC_ISOM_LEN.to_le_bytes());
+        }
         out
     }
 }
