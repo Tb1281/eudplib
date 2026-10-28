@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Any, overload
+from typing import TYPE_CHECKING, Any, overload
 
 from eudkit import _rust as _rust_eudkit
 
@@ -421,4 +421,7 @@ class AmbientSessionProxy:
         return f"<AmbientSessionProxy active={sess!r}>"
 
 
-session = AmbientSessionProxy()
+if TYPE_CHECKING:
+    session: Session
+else:
+    session = AmbientSessionProxy()
