@@ -22,7 +22,7 @@ the protocol matrix below.
 | OS | Ubuntu 26.04.1 LTS, x86_64 |
 | VS Code | 1.143.1 |
 | Zed | 1.25.3 |
-| `eudkit-lsp` | 0.1.1 (GitHub Release asset, checksum verified) for release rows; development build for post-`v0.1.1` rows |
+| `eudkit-lsp` | 0.1.1 (GitHub Release asset, checksum verified) for release rows; development build for post-`v0.1.1` rows. The published `0.1.2` asset was separately re-verified after release. |
 | Python | 3.14.4 |
 | Rust | 1.99.0 |
 
@@ -43,6 +43,7 @@ The Zed pass loaded the extension in a dev profile and started the same
 | --- | --- | --- |
 | Shared LSP behavior, all languages and contexts | **PASS** | 89 Rust tests, including 35 protocol tests |
 | Hover and signature help (shipped in `v0.1.2`) | **PASS at protocol level** | 8 protocol tests and unit coverage; not present in the `v0.1.1` assets |
+| `v0.1.2` release assets | **PASS for publication, install, and protocol** | 20 assets and every SHA-256 companion verified; release `eudkit-lsp` answers hover/signature; VSIX installs as `0.1.2`; Zed archive loads as `0.1.2`; UI not driven |
 | VS Code reference UX, Python/TypeScript/JavaScript, with and without `eudkit.toml` | **PASS** | all reference checks below |
 | VS Code release download, checksum, cache, version probe | **PASS** | Output channel record; cached asset and `.sha256` present |
 | Zed extension load and server start, Python/TypeScript/JavaScript | **PASS** | Extension host log: 2 extensions loaded; 3 `eudkit-lsp` process starts |
@@ -50,6 +51,25 @@ The Zed pass loaded the extension in a dev profile and started the same
 | No-Rust VSIX installation | **PASS** | Release `eudkit-vscode-0.1.1.vsix` checksum verified and installed in a clean profile with `code --install-extension`; the installed bundle then passed the VS Code behavior matrix; no Rust used. |
 | Fresh-user walkthrough (clean profile, no source edits, no map path) | **PASS for clean-VSIX first run/completion** | Same clean-profile VSIX install, then an empty-folder `plain/` workspace with a `.py`/`.ts`/`.js` file: canonical completion worked with no source edit and no map path. Hover and signature steps are covered by the protocol matrix, not by the released `v0.1.1` VSIX. Pylance and tsserver were not installed in that profile. |
 | Windows/macOS execution | **Not executed here** | Assets were built and checksum/format verified in the `v0.1.1` release workflow |
+
+### `v0.1.2` release verification
+
+`v0.1.2` is the release that first ships hover and signature help. It was
+published from `bc30d746`:
+<https://github.com/Tb1281/eudplib/releases/tag/v0.1.2>.
+
+| Check | Result |
+| --- | --- |
+| Release workflow | **PASS after rerun.** The first run failed only because the macOS x86_64 `eudkit` CLI build was cancelled; `gh run rerun --failed` succeeded. |
+| Asset set and checksums | **PASS.** All 20 assets and every `.sha256` companion are present; every downloaded asset passed `sha256sum -c`. |
+| Release `eudkit-lsp-linux-x86_64` | **PASS.** Reports `eudkit-lsp 0.1.2`; 228-unit smoke test passes for bare and `--stdio` invocation. |
+| Release hover/signature | **PASS at protocol level.** Initialize advertises both providers; hover on `Terran Marine` resolves the canonical symbol; `KillUnit(` returns `KillUnit(unit, player)`. |
+| VS Code VSIX | **PASS for install.** `eudkit-vscode-0.1.2.vsix` installs and `code --list-extensions --show-versions` reports `eudkit.eudkit-vscode@0.1.2`. A window reload is required before the new extension host loads it. |
+| Zed dev extension | **PASS for load.** The release archive builds for `wasm32-wasip2` and loads from Zed's installed-extensions directory; the index reports version `0.1.2` with Python, TypeScript, TSX, and JavaScript registrations. |
+
+This pass verifies publication, installation, and shared-server protocol
+behavior. It does **not** drive the VS Code or Zed hover/signature UI; the Zed
+UI row above remains **NOT EXECUTED**.
 
 ### How Zed runs the extension
 
@@ -196,7 +216,7 @@ record verifies server startup and language registration, not Zed's rendering.
 
 Zed version compatibility is structural rather than a runtime `--version`
 probe: the extension pins the release URL and cache to `CARGO_PKG_VERSION`
-(`0.1.1` → `v0.1.1`) and requires the published checksum. The `0.1.x`
+(`0.1.2` → `v0.1.2`) and requires the published checksum. The `0.1.x`
 compatibility rule for the VS Code client is enforced at runtime.
 
 ## Commands run
