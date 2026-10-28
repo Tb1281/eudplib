@@ -11,6 +11,11 @@ use crate::analysis::function_docs::function_doc;
 use crate::analysis::validation::{canonical_location_id, canonical_switch_id};
 use crate::analysis::SymbolKind;
 
+/// First canonical Stock Unit Filter ID (`Any unit`).
+const STOCK_UNIT_FILTER_START: u16 = 229;
+/// Last canonical Stock Unit Filter ID (`Factories`).
+const STOCK_UNIT_FILTER_END: u16 = 232;
+
 /// Markdown hover text for a symbol string, or `None` when it cannot be
 /// resolved.
 pub fn symbol_hover(
@@ -35,7 +40,7 @@ fn unit_hover(value: &str, map_context: Option<&MapContext>) -> Option<String> {
     let stock_id = stock_unit_id(value);
     let id = map_id.or(stock_id)?;
 
-    if (229..=232).contains(&id) {
+    if (STOCK_UNIT_FILTER_START..=STOCK_UNIT_FILTER_END).contains(&id) {
         return Some(format!("**{value}**\n\nStock Unit Filter · ID {id}"));
     }
 
@@ -79,9 +84,8 @@ fn location_hover(value: &str, map_context: Option<&MapContext>) -> Option<Strin
         ));
     }
 
-    let name = if id == 64 { "Anywhere" } else { value };
     Some(format!(
-        "**{value}**\n\nCanonical location · ID {id} (`{name}`)"
+        "**{value}**\n\nCanonical location · ID {id} (`{value}`)"
     ))
 }
 

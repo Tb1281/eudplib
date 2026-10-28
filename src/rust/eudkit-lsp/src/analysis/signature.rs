@@ -148,7 +148,7 @@ fn fallback_ts_call_context(source: &str, offset: usize) -> Option<CallContext> 
     }
 
     let frame = frames.last()?;
-    let name_start = identifier_start(source, frame.open)?;
+    let name_start = identifier_start_before(source, frame.open)?;
     let name = source.get(name_start..frame.open)?.trim();
     if name.is_empty() {
         return None;
@@ -188,7 +188,7 @@ fn skip_block_comment(bytes: &[u8], start: usize) -> usize {
         .map_or(bytes.len(), |end| start + end + 2)
 }
 
-fn identifier_start(source: &str, end: usize) -> Option<usize> {
+fn identifier_start_before(source: &str, end: usize) -> Option<usize> {
     let bytes = source.as_bytes();
     let mut index = end;
     while index > 0 && bytes[index - 1].is_ascii_whitespace() {

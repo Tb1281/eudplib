@@ -264,25 +264,23 @@ fn signature_help_response(
         }
     }?;
     let doc = function_doc(&context.name)?;
+    let language_id = document.language_id.as_str();
+    let parameters = doc.parameters_for(language_id);
     let active_parameter = context
         .keyword
         .as_deref()
-        .and_then(|keyword| doc.parameters.iter().position(|name| *name == keyword))
+        .and_then(|keyword| parameters.iter().position(|name| *name == keyword))
         .unwrap_or(context.active_parameter)
-        .min(doc.parameters.len().saturating_sub(1));
+        .min(parameters.len().saturating_sub(1));
 
     let signature = SignatureInformation {
-        label: doc.signature(),
+        label: doc.signature(language_id),
         documentation: Some(Documentation::MarkupContent(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: format!(
-                "{}\n\nReturns `{}`.",
-                doc.summary,
-                doc.result.name_for_language(&document.language_id)
-            ),
+            value: format!("{}\n\n{}", doc.summary, doc.returns_markdown(language_id)),
         })),
         parameters: Some(
-            doc.parameters
+            parameters
                 .iter()
                 .map(|name| ParameterInformation {
                     label: ParameterLabel::Simple((*name).to_string()),

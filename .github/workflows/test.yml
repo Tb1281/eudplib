@@ -73,6 +73,8 @@ jobs:
           cd tests
           python test_unittest.py
           cd ..
+      - name: Check public API documentation
+        run: python -m unittest tests.test_eudkit_api_docs
 
   rust:
     name: Rust (fmt, clippy, test)
@@ -133,6 +135,21 @@ jobs:
         run: |
           npm run package
           npm run verify:vsix
+
+  ts-sdk:
+    name: TypeScript SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check TSDoc coverage
+        working-directory: packages/ts-sdk
+        run: npm test
 
   zed-extension:
     name: Zed extension

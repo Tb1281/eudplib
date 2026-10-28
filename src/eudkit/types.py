@@ -1344,7 +1344,8 @@ def DisplayTextId(string_id: int, always_display: bool = True) -> ActionSpec:
     """Displays a map string by its STRx string ID in the chat log.
 
     Use this for strings already registered in the map's string table; for new
-    text prefer :func:`displayText` or :class:`StringBuffer`.
+    text prefer :func:`displayText` or the dynamic string API
+    (``session.string``).
     """
     return ActionSpec(
         lambda _s: _rust_eudkit.RawAction.display_text_id(
