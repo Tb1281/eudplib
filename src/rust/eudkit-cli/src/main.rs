@@ -901,6 +901,10 @@ fn main() {
             println!("eudkit <inspect|dump-ir|build|watch|migrate>");
             Ok(())
         }
+        "--version" | "-v" | "version" => {
+            println!("eudkit {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         other => Err(format!("unknown subcommand '{other}'")),
     };
 
