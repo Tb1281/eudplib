@@ -31,6 +31,13 @@ from maturin import (
 )
 
 
+def _build_epscript() -> None:
+    root = Path(__file__).parent
+    script = root / "src" / "epscript" / "build_epscript.py"
+    env = {**os.environ}
+    subprocess.run([sys.executable, str(script)], cwd=root, check=True, env=env)
+
+
 def _compile_locale() -> None:
     """Compile .po files to .mo files for all locales."""
     root = Path(__file__).parent
@@ -61,6 +68,7 @@ def _compile_locale() -> None:
 
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+    _build_epscript()
     _compile_locale()
     return _build_wheel(wheel_directory, config_settings, metadata_directory)
 
@@ -72,5 +80,6 @@ def build_sdist(sdist_directory, config_settings=None):
 
 
 def build_editable(wheel_directory, config_settings=None, metadata_directory=None):
+    _build_epscript()
     _compile_locale()
     return _build_editable(wheel_directory, config_settings, metadata_directory)

@@ -29,8 +29,3 @@ tests/output.pstats
 .venv
 uv.lock
 *.mo
-examples/**/output_*.scx
-.agents/
-skills-lock.json
-eud-domain-knowledge/
-

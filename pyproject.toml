@@ -59,9 +59,9 @@ changelog = "https://github.com/armoha/euddraft/blob/master/CHANGELOG.md"
 
 [tool.maturin]
 python-source = "src"
-python-packages = ["eudplib", "eudkit"]
+python-packages = ["eudplib"]
 manifest-path = "src/rust/Cargo.toml"
-module-name = "eudkit._rust"
+module-name = "eudplib.bindings._rust"
 locked = true
 sdist-generator = "cargo"
 features = ["pyo3/abi3-py310"]

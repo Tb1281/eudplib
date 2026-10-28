@@ -1,0 +1,174 @@
+use crate::allocator::constexpr::evaluate;
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::{PyIterator, PyList};
+
+/// Buffer where EUDObject should write to.
+#[pyclass(module = "eudplib.core.allocator")]
+pub struct PayloadBuffer {
+    datastart: usize,
+    datacur: usize,
+    data: Vec<u8>,
+    prttable: Vec<usize>,
+    orttable: Vec<usize>,
+}
+
+impl PayloadBuffer {
+    pub(crate) fn new(totlen: usize) -> Self {
+        Self {
+            datastart: 0,
+            datacur: 0,
+            data: vec![0; totlen],
+            prttable: Vec::new(),
+            orttable: Vec::new(),
+        }
+    }
+
+    pub(crate) fn start_write(&mut self, writeaddr: usize) {
+        self.datastart = writeaddr;
+        self.datacur = writeaddr;
+    }
+
+    pub(crate) fn end_write(&self) -> usize {
+        self.datacur - self.datastart
+    }
+
+    pub(crate) fn create_payload(&mut self) -> (Vec<u8>, Vec<usize>, Vec<usize>) {
+        (
+            std::mem::take(&mut self.data),
+            std::mem::take(&mut self.prttable),
+            std::mem::take(&mut self.orttable),
+        )
+    }
+}
+
+#[pymethods]
+impl PayloadBuffer {
+    #[allow(non_snake_case)]
+    fn WriteByte(&mut self, number: i32) {
+        self.data[self.datacur] = number as u8;
+        self.datacur += 1;
+    }
+
+    #[allow(non_snake_case)]
+    fn WriteWord(&mut self, number: i32) {
+        self.data[self.datacur..self.datacur + 2].copy_from_slice(&number.to_le_bytes()[..2]);
+        self.datacur += 2;
+    }
+
+    #[allow(non_snake_case)]
+    fn WriteDword(&mut self, number: &Bound<'_, PyAny>) -> PyResult<()> {
+        let rlocint = evaluate(number)?;
+        let rlocmode = rlocint.0.rlocmode;
+        let offset = rlocint.0.offset;
+
+        if rlocmode != 0 {
+            assert_eq!(self.datacur % 4, 0, "Non-const dwords must be aligned to 4byte");
+            if rlocmode == 1 {
+                self.prttable.push(self.datacur);
+            } else if rlocmode == 4 {
+                self.orttable.push(self.datacur);
+            } else {
+                let template = crate::localize::tr("rlocmode should be 1 or 4, not {rlocmode}");
+                return Err(PyValueError::new_err(template.replace("{rlocmode}", &rlocmode.to_string())));
+            }
+        }
+
+        self.data[self.datacur..self.datacur + 4].copy_from_slice(&offset.to_le_bytes()[0..4]);
+        self.datacur += 4;
+        Ok(())
+    }
+
+    #[allow(non_snake_case)]
+    fn WritePack(&mut self, structformat: &str, arglist: &Bound<'_, PyList>) -> PyResult<()> {
+        for (b, number) in structformat.bytes().zip(arglist.iter()) {
+            let argsize = match b {
+                66 => 1, // 'B'
+                72 => 2, // 'H'
+                73 => 4, // 'I'
+                _ => panic!("Unknown struct format: {b}"),
+            };
+            let rlocint = evaluate(&number)?;
+            let rlocmode = rlocint.0.rlocmode;
+            let offset = rlocint.0.offset;
+
+            if !(rlocmode == 0 || (argsize == 4 && self.datacur % 4 == 0)) {
+                return Err(PyValueError::new_err(crate::localize::tr(
+                    "Cannot write non-const in byte/word/nonalligned dword.",
+                )));
+            }
+
+            if rlocmode == 1 {
+                self.prttable.push(self.datacur);
+            } else if rlocmode == 4 {
+                self.orttable.push(self.datacur);
+            }
+
+            if argsize == 1 {
+                self.data[self.datacur] = offset.to_le_bytes()[0];
+                self.datacur += 1;
+            } else if argsize == 2 {
+                self.data[self.datacur..self.datacur + 2]
+                    .copy_from_slice(&offset.to_le_bytes()[0..2]);
+                self.datacur += 2;
+            } else {
+                self.data[self.datacur..self.datacur + 4]
+                    .copy_from_slice(&offset.to_le_bytes()[0..4]);
+                self.datacur += 4;
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(non_snake_case)]
+    fn WriteBytes(&mut self, b: &[u8]) {
+        self.data[self.datacur..self.datacur + b.len()].copy_from_slice(b);
+        self.datacur += b.len();
+    }
+
+    #[allow(non_snake_case)]
+    fn WriteSpace(&mut self, spacesize: usize) {
+        self.datacur += spacesize;
+    }
+
+    fn _write_trigger(
+        &mut self,
+        prevptr: &Bound<'_, PyAny>,
+        nextptr: &Bound<'_, PyAny>,
+        conditions: &Bound<'_, PyIterator>,
+        actions: &Bound<'_, PyIterator>,
+        flags: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        self.WriteDword(prevptr)?;
+        self.WriteDword(nextptr)?;
+
+        // Conditions
+        let mut condition_count = 0;
+        for condition in conditions {
+            self.WritePack("IIIHBBBBH", condition?.cast()?)?;
+            condition_count += 1;
+        }
+        if condition_count < 16 {
+            self.WriteBytes(&[0; 20]);
+            self.WriteSpace(20 * (15 - condition_count));
+        }
+
+        // Actions
+        let mut action_count = 0;
+        for action in actions {
+            self.WritePack("IIIIIIHBBBBH", action?.cast()?)?;
+            action_count += 1;
+        }
+        if action_count < 64 {
+            self.WriteBytes(&[0; 32]);
+            self.WriteSpace(32 * (63 - action_count));
+        }
+
+        // Preserved flag
+        self.WriteDword(flags)?;
+
+        self.WriteSpace(27);
+        self.WriteByte(0);
+        Ok(())
+    }
+}

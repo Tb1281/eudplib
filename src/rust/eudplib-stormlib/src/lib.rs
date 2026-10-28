@@ -113,7 +113,7 @@ impl Archive {
     }
 
     /// Opens a file from MPQ archive
-    pub fn open_file(&mut self, path: &str) -> Result<File<'_>> {
+    pub fn open_file(&mut self, path: &str) -> Result<File> {
         let mut file_handle: HANDLE = ptr::null_mut();
         let cpath = CString::new(path)?;
         unsafe_try_call!(SFileOpenFileEx(

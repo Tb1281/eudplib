@@ -1,0 +1,333 @@
+use crate::allocator::rlocint::{DivFloor, PyRlocInt, RlocInt};
+use crate::types::EXPRPROXY;
+use pyo3::exceptions::{PyAttributeError, PyRuntimeError, PyValueError};
+use pyo3::{intern, IntoPyObjectExt};
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyInt, PyNone, PyString, PyTuple};
+
+#[derive(Debug)]
+pub(crate) struct ConstExpr {
+    baseobj: Py<PyAny>,
+    offset: i32,
+    rlocmode: i32,
+}
+
+impl ConstExpr {
+    pub(crate) fn new(baseobj: Py<PyAny>, offset: i32, rlocmode: i32) -> Self {
+        Self {
+            baseobj,
+            offset,
+            rlocmode,
+        }
+    }
+}
+
+/// Class for general expression with rlocints.
+#[pyclass(
+    frozen,
+    subclass,
+    name = "ConstExpr",
+    module = "eudplib.core.allocator"
+)]
+pub struct PyConstExpr(pub(crate) ConstExpr);
+
+#[pymethods]
+impl PyConstExpr {
+    #[new]
+    #[pyo3(signature = (baseobj, offset=0, rlocmode=4))]
+    fn new(baseobj: Py<PyAny>, offset: i32, rlocmode: i32) -> PyResult<Self> {
+        Ok(Self(ConstExpr::new(baseobj, offset, rlocmode)))
+    }
+
+    #[allow(non_snake_case)]
+    fn Evaluate(&self, py: Python) -> PyResult<PyRlocInt> {
+        let rlocint = if self.0.rlocmode == 0 {
+            RlocInt::new(self.0.offset, 0)
+        } else {
+            self.0
+                .baseobj
+                .call_method0(py, intern!(py, "Evaluate"))?
+                .extract::<PyRlocInt>(py)?
+                .0
+                * self.0.rlocmode
+                / 4
+                + self.0.offset
+        };
+        Ok(PyRlocInt(rlocint))
+    }
+
+    fn __str__(&self) -> String {
+        format!("{:?}", self.0)
+    }
+
+    fn __repr__(&self) -> String {
+        self.__str__()
+    }
+
+    fn __int__(&self, py: Python) -> PyResult<i32> {
+        if self.0.rlocmode == 0 && self.0.baseobj.is_none(py) {
+            Ok(self.0.offset)
+        } else {
+            Err(PyValueError::new_err(crate::localize::tr(
+                "int(ConstExpr) failed because ConstExpr has baseobj",
+            )))
+        }
+    }
+
+    fn __add__(slf: PyRef<Self>, py: Python, rhs: i64) -> PyResult<Self> {
+        let offset = slf.0.offset + rhs as i32;
+        let rlocmode = slf.0.rlocmode;
+        Ok(Self(ConstExpr {
+            baseobj: if rlocmode != 0 && slf.0.baseobj.is_none(py) {
+                slf.into_py_any(py)?
+            } else {
+                slf.0.baseobj.clone_ref(py)
+            },
+            offset,
+            rlocmode,
+        }))
+    }
+
+    fn __radd__(slf: PyRef<Self>, py: Python, rhs: i64) -> PyResult<Self> {
+        Self::__add__(slf, py, rhs)
+    }
+
+    fn __sub__(slf: PyRef<Self>, py: Python, rhs: i64) -> PyResult<Self> {
+        let offset = slf.0.offset - rhs as i32;
+        let rlocmode = slf.0.rlocmode;
+        Ok(Self(ConstExpr {
+            baseobj: if rlocmode != 0 && slf.0.baseobj.is_none(py) {
+                slf.into_py_any(py)?
+            } else {
+                slf.0.baseobj.clone_ref(py)
+            },
+            offset,
+            rlocmode,
+        }))
+    }
+
+    fn __rsub__(slf: PyRef<Self>, py: Python, rhs: i64) -> PyResult<Self> {
+        let offset = rhs as i32 - slf.0.offset;
+        let rlocmode = -slf.0.rlocmode;
+        Ok(Self(ConstExpr {
+            baseobj: if rlocmode != 0 && slf.0.baseobj.is_none(py) {
+                slf.into_py_any(py)?
+            } else {
+                slf.0.baseobj.clone_ref(py)
+            },
+            offset,
+            rlocmode,
+        }))
+    }
+
+    fn __mul__(slf: PyRef<Self>, py: Python, rhs: i32) -> PyResult<Self> {
+        let offset = slf.0.offset * rhs;
+        let rlocmode = slf.0.rlocmode * rhs;
+        Ok(Self(ConstExpr {
+            baseobj: if rlocmode != 0 && slf.0.baseobj.is_none(py) {
+                slf.into_py_any(py)?
+            } else if rlocmode == 0 {
+                PyNone::get(py).into_py_any(py)?
+            } else {
+                slf.0.baseobj.clone_ref(py)
+            },
+            offset,
+            rlocmode,
+        }))
+    }
+
+    fn __rmul__(slf: PyRef<Self>, py: Python, rhs: i32) -> PyResult<Self> {
+        Self::__mul__(slf, py, rhs)
+    }
+
+    fn __floordiv__(slf: PyRef<Self>, py: Python, rhs: i32) -> PyResult<Self> {
+        if slf.0.rlocmode != 0 && slf.0.rlocmode % rhs != 0 {
+            let template = crate::localize::tr("Address not divisible: {dividend} ÷ {divisor}");
+            let msg = template
+                .replace("{dividend}", &slf.__str__())
+                .replace("{divisor}", &rhs.to_string());
+            return Err(PyValueError::new_err(msg));
+        }
+        let offset = DivFloor::div_floor(slf.0.offset, rhs);
+        let rlocmode = DivFloor::div_floor(slf.0.rlocmode, rhs);
+        Ok(Self(ConstExpr {
+            baseobj: if rlocmode != 0 && slf.0.baseobj.is_none(py) {
+                slf.into_py_any(py)?
+            } else {
+                slf.0.baseobj.clone_ref(py)
+            },
+            offset,
+            rlocmode,
+        }))
+    }
+
+    fn __mod__(&self, rhs: i32) -> PyResult<i32> {
+        if self.0.rlocmode != 4 || 4 % rhs != 0 {
+            let template = crate::localize::tr("Address not divisible: {dividend} ÷ {divisor}");
+            let msg = template
+                .replace("{dividend}", &self.__str__())
+                .replace("{divisor}", &rhs.to_string());
+            return Err(PyValueError::new_err(msg));
+        }
+        Ok(DivFloor::rem_floor(self.0.offset, rhs))
+    }
+
+    fn __divmod__(slf: PyRef<Self>, py: Python, rhs: i32) -> PyResult<(Self, i32)> {
+        if slf.0.rlocmode != 4 || 4 % rhs != 0 {
+            let template = crate::localize::tr("Address not divisible: {dividend} ÷ {divisor}");
+            let msg = template
+                .replace("{dividend}", &slf.__str__())
+                .replace("{divisor}", &rhs.to_string());
+            return Err(PyValueError::new_err(msg));
+        }
+        let (offset, modulo) = slf.0.offset.divrem_floor(rhs);
+        let rlocmode = slf.0.rlocmode / rhs;
+        Ok((
+            Self(ConstExpr {
+                baseobj: if rlocmode != 0 && slf.0.baseobj.is_none(py) {
+                    slf.into_py_any(py)?
+                } else {
+                    slf.0.baseobj.clone_ref(py)
+                },
+                offset,
+                rlocmode,
+            }),
+            modulo,
+        ))
+    }
+
+    fn __neg__(&self, py: Python) -> Self {
+        Self(ConstExpr {
+            baseobj: self.0.baseobj.clone_ref(py),
+            offset: -self.0.offset,
+            rlocmode: -self.0.rlocmode,
+        })
+    }
+
+    fn _is_aligned_ptr(&self) -> bool {
+        self.0.rlocmode == 4 && self.0.offset % 4 == 0
+    }
+
+    fn _is_epd(&self) -> bool {
+        self.0.rlocmode == 1
+    }
+}
+
+/// Class for forward definition.
+#[pyclass(extends = PyConstExpr, module = "eudplib.core.allocator")]
+pub struct Forward {
+    expr: Py<PyAny>,
+}
+
+#[pymethods]
+impl Forward {
+    #[new]
+    fn new(py: Python) -> PyResult<PyClassInitializer<Self>> {
+        let expr = ConstExpr::new(PyNone::get(py).into_py_any(py)?, 0, 4);
+        Ok(PyClassInitializer::from(PyConstExpr(expr)).add_subclass(Self {
+            expr: PyNone::get(py).into_py_any(py)?,
+        }))
+    }
+
+    #[getter]
+    fn get_expr(&self, py: Python) -> PyResult<Py<PyAny>> {
+        Ok(self.expr.clone_ref(py))
+    }
+
+    fn __lshift__<'a>(&mut self, py: Python<'a>, mut expr: Bound<'a, PyAny>) -> PyResult<Py<PyAny>> {
+        if !self.expr.is_none(py) {
+            return Err(PyAttributeError::new_err(crate::localize::tr(
+                "Reforwarding without reset is not allowed",
+            )));
+        }
+        if expr.is_none() {
+            return Err(PyValueError::new_err(crate::localize::tr("Cannot forward to None")));
+        }
+        let exprproxy = EXPRPROXY.get(py)?;
+        while expr.is_instance(&exprproxy)? {
+            expr = expr.getattr(intern!(py, "_value"))?;
+        }
+        let expr: Py<PyAny> = if let Ok(offset) = expr.extract::<i32>() {
+            PyConstExpr(ConstExpr::new(PyNone::get(py).into_py_any(py)?, offset, 0)).into_py_any(py)?
+        } else {
+            expr.into_py_any(py)?
+        };
+        self.expr = expr.clone_ref(py);
+        Ok(expr)
+    }
+
+    #[allow(non_snake_case)]
+    fn IsSet(&self, py: Python) -> bool {
+        !self.expr.is_none(py)
+    }
+
+    #[allow(non_snake_case)]
+    fn Reset(&mut self, py: Python) -> PyResult<()> {
+        self.expr = PyNone::get(py).into_py_any(py)?;
+        Ok(())
+    }
+
+    #[allow(non_snake_case)]
+    fn Evaluate(&self, py: Python) -> PyResult<PyRlocInt> {
+        if self.expr.is_none(py) {
+            return Err(PyRuntimeError::new_err(crate::localize::tr("Forward not initialized")));
+        }
+        Ok(self
+            .expr
+            .call_method0(py, intern!(py, "Evaluate"))?
+            .extract::<PyRlocInt>(py)?)
+    }
+
+    #[pyo3(signature = (*py_args, **py_kwargs))]
+    fn __call__(
+        &self,
+        py: Python,
+        py_args: &Bound<'_, PyTuple>,
+        py_kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        self.expr.call(py, py_args, py_kwargs)
+    }
+
+    fn __getattr__(&self, py: Python, name: &Bound<'_, PyString>) -> PyResult<Py<PyAny>> {
+        self.expr.getattr(py, name)
+    }
+
+    fn __getitem__(&self, py: Python, name: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        Ok(self.expr.bind(py).get_item(name)?.into_py_any(py)?)
+    }
+
+    fn __setitem__(
+        &self,
+        py: Python,
+        name: &Bound<'_, PyAny>,
+        new_value: Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        self.expr.bind(py).set_item(name, new_value)
+    }
+}
+
+/// Evaluate expressions
+#[pyfunction]
+#[pyo3(name = "Evaluate")]
+pub fn evaluate(x: &Bound<'_, PyAny>) -> PyResult<PyRlocInt> {
+    if let Ok(expr) = x.extract::<PyRlocInt>() {
+        Ok(PyRlocInt(expr.0))
+    } else if let Ok(expr) = x.extract::<i64>() {
+        Ok(PyRlocInt(RlocInt::new(expr as i32, 0)))
+    } else {
+        let expr = x.call_method0(intern!(x.py(), "Evaluate"))?;
+        evaluate(&expr)
+    }
+}
+
+#[pyfunction]
+#[pyo3(name = "IsConstExpr")]
+pub fn is_constexpr(mut x: Bound<'_, PyAny>) -> PyResult<bool> {
+    let exprproxy = EXPRPROXY.get(x.py())?;
+    while x.is_instance(&exprproxy)? {
+        x = x.getattr(intern!(x.py(), "_value"))?;
+    }
+    Ok(x.is_instance_of::<PyInt>()
+        || x.is_instance_of::<PyRlocInt>()
+        || x.is_instance_of::<PyConstExpr>())
+}
