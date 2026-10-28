@@ -1,42 +1,52 @@
 //! Completion items derived from the reusable analysis layer.
 
-use crate::analysis::{symbol_slot_at, ParsedDocument, SymbolSlot};
+use std::ops::Range;
+
+use crate::analysis::{symbol_slot_at, ts_symbol_slot_at, ParsedDocument, SymbolSlot, TsLanguage};
 use eudkit_core::map_context::CANONICAL_UNIT_NAMES;
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionTextEdit, Position, Range, TextEdit,
+    CompletionItem, CompletionItemKind, CompletionTextEdit, Position, Range as LspRange, TextEdit,
 };
 
-/// Completion items for `offset`, or `None` when the cursor is not in a known
-/// symbol slot.
+/// Completion items for `offset` in a Python document, or `None` when the
+/// cursor is not in a known symbol slot.
 pub fn completions_at(document: &ParsedDocument<'_>, offset: usize) -> Option<Vec<CompletionItem>> {
     match symbol_slot_at(document, offset)? {
         SymbolSlot::UnitName(slot) => {
-            let range = byte_range_to_lsp(
-                document.source(),
-                slot.content_range().start,
-                slot.content_range().end,
-            );
-            Some(
-                CANONICAL_UNIT_NAMES
-                    .iter()
-                    .map(|name| CompletionItem {
-                        label: (*name).to_string(),
-                        kind: Some(CompletionItemKind::ENUM_MEMBER),
-                        detail: Some("EUD canonical unit".to_string()),
-                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                            range,
-                            new_text: (*name).to_string(),
-                        })),
-                        ..CompletionItem::default()
-                    })
-                    .collect(),
-            )
+            Some(unit_completions(document.source(), slot.content_range()))
         }
     }
 }
 
-fn byte_range_to_lsp(source: &str, start: usize, end: usize) -> Range {
-    Range::new(
+/// Completion items for `offset` in a TypeScript or JavaScript document.
+pub fn ts_completions_at(
+    source: &str,
+    language: TsLanguage,
+    offset: usize,
+) -> Option<Vec<CompletionItem>> {
+    let slot = ts_symbol_slot_at(source, language, offset)?;
+    Some(unit_completions(source, slot.content_range()))
+}
+
+fn unit_completions(source: &str, content_range: Range<usize>) -> Vec<CompletionItem> {
+    let range = byte_range_to_lsp(source, content_range.start, content_range.end);
+    CANONICAL_UNIT_NAMES
+        .iter()
+        .map(|name| CompletionItem {
+            label: (*name).to_string(),
+            kind: Some(CompletionItemKind::ENUM_MEMBER),
+            detail: Some("EUD canonical unit".to_string()),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                range,
+                new_text: (*name).to_string(),
+            })),
+            ..CompletionItem::default()
+        })
+        .collect()
+}
+
+fn byte_range_to_lsp(source: &str, start: usize, end: usize) -> LspRange {
+    LspRange::new(
         offset_to_position(source, start),
         offset_to_position(source, end),
     )

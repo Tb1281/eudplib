@@ -1,4 +1,4 @@
-//! Language-server support for eudkit Python Frontend documents.
+//! Language-server support for eudkit Python and TypeScript Frontend documents.
 
 pub mod analysis;
 pub mod completion;

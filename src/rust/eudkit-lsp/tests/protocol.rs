@@ -5,6 +5,10 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 const URI: &str = "file:///tmp/eudkit-lsp-test.py";
+const TYPESCRIPT_URI: &str = "file:///tmp/eudkit-lsp-test.ts";
+const TSX_URI: &str = "file:///tmp/eudkit-lsp-test.tsx";
+const JAVASCRIPT_URI: &str = "file:///tmp/eudkit-lsp-test.js";
+const JSX_URI: &str = "file:///tmp/eudkit-lsp-test.jsx";
 
 struct LspClient {
     child: Child,
@@ -106,12 +110,16 @@ impl LspClient {
     }
 
     fn open(&mut self, text: &str) {
+        self.open_document(URI, "python", text);
+    }
+
+    fn open_document(&mut self, uri: &str, language_id: &str, text: &str) {
         self.notify(
             "textDocument/didOpen",
             json!({
                 "textDocument": {
-                    "uri": URI,
-                    "languageId": "python",
+                    "uri": uri,
+                    "languageId": language_id,
                     "version": 1,
                     "text": text,
                 }
@@ -120,21 +128,29 @@ impl LspClient {
     }
 
     fn change(&mut self, text: &str, version: i32) {
+        self.change_document(URI, text, version);
+    }
+
+    fn change_document(&mut self, uri: &str, text: &str, version: i32) {
         self.notify(
             "textDocument/didChange",
             json!({
-                "textDocument": { "uri": URI, "version": version },
+                "textDocument": { "uri": uri, "version": version },
                 "contentChanges": [{ "text": text }],
             }),
         );
     }
 
     fn completion(&mut self, text: &str, byte_offset: usize) -> Vec<String> {
+        self.completion_for(URI, text, byte_offset)
+    }
+
+    fn completion_for(&mut self, uri: &str, text: &str, byte_offset: usize) -> Vec<String> {
         let (line, character) = position_at(text, byte_offset);
         let response = self.request(
             "textDocument/completion",
             json!({
-                "textDocument": { "uri": URI },
+                "textDocument": { "uri": uri },
                 "position": { "line": line, "character": character },
             }),
         );
@@ -287,6 +303,100 @@ fn does_not_complete_outside_the_kill_unit_unit_slot() {
     assert!(client
         .completion(ordinary_code, ordinary_code.len())
         .is_empty());
+
+    client.shutdown();
+}
+
+#[test]
+fn completes_canonical_units_in_typescript_tsx_javascript_and_jsx() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    let documents = [
+        (TYPESCRIPT_URI, "typescript", "KillUnit(\""),
+        (
+            TSX_URI,
+            "typescriptreact",
+            "const view = <div />;\nKillUnit(\"",
+        ),
+        (JAVASCRIPT_URI, "javascript", "KillUnit(\""),
+        (
+            JSX_URI,
+            "javascriptreact",
+            "const view = <div />;\nKillUnit(\"",
+        ),
+    ];
+
+    for (uri, language_id, text) in documents {
+        client.open_document(uri, language_id, text);
+        assert_canonical_units(&client.completion_for(uri, text, text.len()));
+    }
+
+    client.shutdown();
+}
+
+#[test]
+fn completes_single_quotes_partial_values_and_closed_strings_in_typescript_and_javascript() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    for (uri, language_id) in [
+        (TYPESCRIPT_URI, "typescript"),
+        (JAVASCRIPT_URI, "javascript"),
+    ] {
+        client.open_document(uri, language_id, "DisplayText(\"");
+
+        let single_quote = "KillUnit('Mar";
+        client.change_document(uri, single_quote, 2);
+        assert_canonical_units(&client.completion_for(uri, single_quote, single_quote.len()));
+
+        let partial = "KillUnit(\"Mar";
+        client.change_document(uri, partial, 3);
+        assert_canonical_units(&client.completion_for(uri, partial, partial.len()));
+
+        let closed = "KillUnit(\"Terran Marine\", 1)";
+        client.change_document(uri, closed, 4);
+        assert_canonical_units(&client.completion_for(uri, closed, "KillUnit(\"Terr".len()));
+    }
+
+    client.shutdown();
+}
+
+#[test]
+fn does_not_complete_outside_the_unit_slot_in_typescript_and_javascript() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    for (uri, language_id) in [
+        (TYPESCRIPT_URI, "typescript"),
+        (JAVASCRIPT_URI, "javascript"),
+    ] {
+        client.open_document(uri, language_id, "DisplayText(\"");
+
+        let cases = [
+            ("DisplayText(\"", "DisplayText(\"".len()),
+            (
+                "KillUnit(\"Terran Marine\", \"",
+                "KillUnit(\"Terran Marine\", \"".len(),
+            ),
+            ("KillUnit(1, \"", "KillUnit(1, \"".len()),
+            ("// KillUnit(\"\nconst x = 1;", "// KillUnit(\"".len()),
+            (
+                "const message = \"KillUnit(\";",
+                "const message = \"KillUnit(\"".len(),
+            ),
+            ("const unit = \"Mar", "const unit = \"Mar".len()),
+            ("eud.KillUnit(\"Mar\", 1)", "eud.KillUnit(\"Mar".len()),
+        ];
+
+        for (version, (text, offset)) in cases.into_iter().enumerate() {
+            client.change_document(uri, text, version as i32 + 2);
+            assert!(
+                client.completion_for(uri, text, offset).is_empty(),
+                "must not complete in {text:?} for {language_id}"
+            );
+        }
+    }
 
     client.shutdown();
 }

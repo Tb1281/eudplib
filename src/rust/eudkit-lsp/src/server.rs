@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::error::Error;
 
-use crate::analysis::ParsedDocument;
-use crate::completion::completions_at;
+use crate::analysis::{ParsedDocument, TsLanguage};
+use crate::completion::{completions_at, ts_completions_at};
 use lsp_server::{Connection, ErrorCode, Message, Request, Response};
 use lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
@@ -14,9 +14,15 @@ use lsp_types::{
 
 type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
+#[derive(Debug, Clone)]
+struct Document {
+    text: String,
+    language_id: String,
+}
+
 #[derive(Default)]
 struct ServerState {
-    documents: HashMap<String, String>,
+    documents: HashMap<String, Document>,
 }
 
 /// Run the language server over stdin/stdout.
@@ -99,10 +105,19 @@ fn completion_response(
 ) -> Option<CompletionResponse> {
     let position = params.text_document_position.position;
     let uri = params.text_document_position.text_document.uri.as_str();
-    let text = state.documents.get(uri)?;
-    let offset = position_to_offset(text, position)?;
-    let document = ParsedDocument::parse(text);
-    completions_at(&document, offset).map(CompletionResponse::Array)
+    let document = state.documents.get(uri)?;
+    let offset = position_to_offset(&document.text, position)?;
+    let items = match document.language_id.as_str() {
+        "python" => {
+            let parsed = ParsedDocument::parse(&document.text);
+            completions_at(&parsed, offset)
+        }
+        language_id => {
+            let language = TsLanguage::from_language_id(language_id)?;
+            ts_completions_at(&document.text, language, offset)
+        }
+    }?;
+    Some(CompletionResponse::Array(items))
 }
 
 fn handle_notification(method: &str, params: serde_json::Value, state: &mut ServerState) {
@@ -111,16 +126,21 @@ fn handle_notification(method: &str, params: serde_json::Value, state: &mut Serv
             if let Ok(params) = serde_json::from_value::<DidOpenTextDocumentParams>(params) {
                 state.documents.insert(
                     params.text_document.uri.as_str().to_string(),
-                    params.text_document.text,
+                    Document {
+                        text: params.text_document.text,
+                        language_id: params.text_document.language_id,
+                    },
                 );
             }
         }
         "textDocument/didChange" => {
             if let Ok(params) = serde_json::from_value::<DidChangeTextDocumentParams>(params) {
                 if let Some(change) = params.content_changes.into_iter().next_back() {
-                    state
-                        .documents
-                        .insert(params.text_document.uri.as_str().to_string(), change.text);
+                    if let Some(document) =
+                        state.documents.get_mut(params.text_document.uri.as_str())
+                    {
+                        document.text = change.text;
+                    }
                 }
             }
         }
