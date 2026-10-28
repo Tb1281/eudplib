@@ -9,18 +9,18 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use zed_extension_api::{
-    self as zed, Architecture, DownloadedFileType, LanguageServerId,
-    LanguageServerInstallationStatus, Os, Result, Worktree,
+    self as zed, process::Command as ProcessCommand, Architecture, DownloadedFileType,
+    LanguageServerId, LanguageServerInstallationStatus, Os, Result, Worktree,
 };
 
 const LANGUAGE_SERVER_ID: &str = "eudkit-lsp";
 const BINARY_NAME: &str = "eudkit-lsp";
 const ENV_OVERRIDE: &str = "EUDKIT_LSP_PATH";
 const RELEASE_REPOSITORY: &str = "Tb1281/eudplib";
-/// Pinned at compile time from the extension package version. The Zed
-/// extension cannot execute `eudkit-lsp --version` through zed_extension_api
-/// 0.7, so compatibility is enforced by downloading only the release tag for
-/// this exact version and caching it under a version-scoped directory.
+/// Pinned at compile time from the extension package version. Downloads come
+/// from this exact release tag, the cache is version-scoped, and every cached
+/// or downloaded binary must answer `--version` with the same major/minor
+/// series before Zed is allowed to start it.
 const RELEASE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Release assets published for `eudkit-lsp`.
@@ -161,8 +161,13 @@ impl EudkitExtension {
             &checksum_url,
             &checksum_relative,
             &checksum_path,
-        )?;
+        )
+        .map_err(|error| {
+            remove_file_if_exists(&temp_path);
+            error
+        })?;
         let contents = fs::read(&temp_path).map_err(|error| {
+            remove_file_if_exists(&temp_path);
             format!(
                 "failed to read downloaded '{}': {error}",
                 temp_path.display()
@@ -481,6 +486,19 @@ mod tests {
         assert_eq!(
             versioned_binary_relative_path("v0.1.0", asset),
             "eudkit-lsp-0.1.0/eudkit-lsp-linux-x86_64"
+        );
+    }
+
+    #[test]
+    fn extension_manifest_version_matches_the_cargo_package() {
+        let manifest = include_str!("../extension.toml");
+        let version_line = manifest
+            .lines()
+            .find(|line| line.trim_start().starts_with("version ="))
+            .expect("extension.toml should declare a version");
+        assert_eq!(
+            version_line.trim(),
+            format!("version = \"{RELEASE_VERSION}\"")
         );
     }
 
