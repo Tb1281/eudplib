@@ -1,3 +1,4 @@
+import contextlib
 import json
 import tempfile
 import time
@@ -154,6 +155,88 @@ class TestEudkitPythonFrontend(unittest.TestCase):
             self.assertEqual(report.vproc_count, 0)
             self.assertEqual(report.byte_buf_count, 2)
             self.assertTrue(out_map.exists())
+
+    def test_session_scope_scaffold_delegates_all_managers(self):
+        import eudkit
+        from eudkit.types import _active_builder_session
+
+        session = eudkit.Session(TESTMAP_PATH)
+        flag = session.var(0, name="scope_flag")
+        other = session.var(0, name="scope_other")
+        previous = _active_builder_session.get()
+        entered = 0
+        original_scope = session._scope
+
+        @contextlib.contextmanager
+        def spy(begin, end):
+            nonlocal entered
+            entered += 1
+            with original_scope(begin, end):
+                yield
+
+        session._scope = spy
+
+        with session.main_loop():
+            self.assertIs(_active_builder_session.get(), session)
+            with session.if_(flag == 0):
+                self.assertIs(_active_builder_session.get(), session)
+            with session.elif_(flag == 1):
+                pass
+            with session.else_():
+                pass
+            with session.while_(flag < 1):
+                flag += 1
+            with session.once():
+                pass
+            with session.when(other == 0):
+                pass
+            with session.until(other == 1):
+                pass
+            with session.after(1):
+                pass
+            with session.every(1):
+                pass
+
+        self.assertEqual(entered, 10)
+        self.assertIs(_active_builder_session.get(), previous)
+
+    def test_session_scope_restores_ambient_session_after_exception(self):
+        import eudkit
+        from eudkit.types import _active_builder_session
+
+        session = eudkit.Session(TESTMAP_PATH)
+        flag = session.var(0, name="scope_exc_flag")
+        previous = _active_builder_session.get()
+
+        with self.assertRaises(RuntimeError):
+            with session.if_(flag == 0):
+                raise RuntimeError("boom")
+
+        self.assertIs(_active_builder_session.get(), previous)
+
+    def test_reactive_builders_accept_keyword_arguments_and_return_callback_result(self):
+        import eudkit
+
+        session = eudkit.Session(TESTMAP_PATH)
+        flag = session.var(0, name="reactive_kw_flag")
+
+        with session.main_loop():
+            with eudkit.when(conditions=flag == 0):
+                pass
+            with eudkit.until(condition=flag == 1):
+                pass
+            with eudkit.after(loops=2):
+                pass
+            with eudkit.every(loops=3):
+                pass
+
+            result = eudkit.once(conditions=flag == 0, callback=lambda: 42)
+            self.assertEqual(result, 42)
+            eudkit.once(flag == 0, lambda: 7)
+            eudkit.when(flag == 0, lambda: None)
+            eudkit.until(flag == 1, lambda: None)
+            eudkit.after(2, lambda: None)
+            eudkit.every(3, lambda: None)
 
     def test_v2_vs_v1_differential_budget_gate(self):
         import eudkit
@@ -1047,6 +1130,62 @@ class TestEudkitPythonFrontend(unittest.TestCase):
         self.assertGreater(rep.payload_size, 0)
         if out_path.exists():
             out_path.unlink()
+
+    def test_reactive_conformance_fixture_matches_shared_golden_rules(self):
+        """Both Python reactive syntaxes must match the shared TypeScript fixture."""
+        from eudkit.runner import run_build
+
+        fixture_dir = REPO_ROOT / "tests" / "fixtures" / "reactive_conformance"
+        expected = json.loads(
+            (fixture_dir / "expected_rules.json").read_text(encoding="utf-8")
+        )
+
+        def reactive_rules(plan):
+            rules = []
+
+            def walk(stmts):
+                for stmt in stmts:
+                    if "Reactive" in stmt:
+                        rule = stmt["Reactive"]
+                        rules.append(rule)
+                        for payload in rule.values():
+                            if isinstance(payload, dict):
+                                walk(payload.get("body", []))
+                    elif "If" in stmt:
+                        walk(stmt["If"]["then_body"])
+                        walk(stmt["If"].get("else_body", []))
+                    elif "While" in stmt:
+                        walk(stmt["While"]["body"])
+
+            for function in plan["module"]["functions"]:
+                for block in function["blocks"]:
+                    walk(block["stmts"])
+            return rules
+
+        plans = {}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for fixture in ("main.py", "main_callbacks.py"):
+                plan_path = Path(tmpdir) / f"{fixture}.eudhir"
+                report = run_build(
+                    input_map=TESTMAP_PATH,
+                    entry=fixture_dir / fixture,
+                    plan=plan_path,
+                )
+                self.assertIsNone(report)
+                plans[fixture] = json.loads(plan_path.read_text(encoding="utf-8"))
+
+        for fixture, plan in plans.items():
+            self.assertEqual(
+                reactive_rules(plan),
+                expected,
+                f"{fixture} must emit the shared Python/TypeScript reactive rules",
+            )
+
+        self.assertEqual(
+            plans["main.py"]["module"],
+            plans["main_callbacks.py"]["module"],
+            "context-manager and callback Python syntaxes must emit identical HIR",
+        )
 
     def test_string_buffer_single_api(self):
         """Verify modern StringBuffer single public API."""

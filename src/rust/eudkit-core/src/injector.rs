@@ -1,14 +1,31 @@
 use crate::allocator::AllocatedPayload;
 use crate::chk::Chk;
+use crate::chk_layout::classic;
 use crate::error::Result;
 use crate::hir::{epd, CURRENT_PLAYER_ADDR, PTS_BASE_ADDR, STRX_BASE_ADDR};
 use crate::lir::EUDX_SIGNATURE;
-use crate::map_context::{MapContext, MapTrigger};
+use crate::map_context::{MapData, MapTrigger};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+pub use crate::chk_layout::classic::{
+    pack_action as pack_chk_action, pack_condition as pack_chk_condition,
+    pack_trigger as pack_chk_trigger,
+};
+
+/// Number of classic `TRIG` entries in the single-stage entry bootstrap.
+pub const BOOTSTRAP_TRIGGER_COUNT: usize = 70;
+
+/// The typed result of one compilation, shared by the Rust CLI, the Python
+/// runner, and the Python CLI.
+///
+/// `Serialize`/`Deserialize` are the wire format for the report that the
+/// Python runner hands back to the Rust CLI. Every field is required: a
+/// missing field is a malformed report, never an implicit zero.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CompilationReport {
     pub trigger_count: usize,
     pub byte_buf_count: usize,
+    /// Number of `VProc` slots in the allocated `LIR` module.
+    pub vproc_count: usize,
     pub payload_offset: usize,
     pub payload_size: usize,
     pub payload_entry_addr: u32,
@@ -16,35 +33,59 @@ pub struct CompilationReport {
     pub ort_offsets: Vec<usize>,
 }
 
+impl CompilationReport {
+    /// Renders the one-line build summary printed by every CLI.
+    pub fn summary(&self, output_map: impl std::fmt::Display) -> String {
+        format!(
+            "Built {} (triggers={}, payload_bytes={}, entry={:#010X})",
+            output_map, self.trigger_count, self.payload_size, self.payload_entry_addr
+        )
+    }
+
+    /// Serializes this report to the JSON wire format shared with Python.
+    pub fn to_json(&self) -> std::result::Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// Parses the JSON wire format written by the Python runner.
+    pub fn from_json(text: &str) -> std::result::Result<Self, serde_json::Error> {
+        serde_json::from_str(text)
+    }
+}
+
 /// Statically relocates `payload` against `0x191943C8 + payload_offset`,
 /// appends it to `STRx`, and writes the single-stage `TRIG` entry bootstrap
 /// while preserving existing classic `TRIG` triggers.
 pub fn inject_payload_into_chk(
     chk: &mut Chk,
-    map_ctx: &MapContext,
+    map_data: &MapData,
     allocated: &AllocatedPayload,
     trigger_count: usize,
     byte_buf_count: usize,
+    vproc_count: usize,
 ) -> Result<CompilationReport> {
     inject_payload_into_chk_with_restores(
         chk,
-        map_ctx,
+        map_data,
         allocated,
         trigger_count,
         byte_buf_count,
+        vproc_count,
         &[],
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn inject_payload_into_chk_with_restores(
     chk: &mut Chk,
-    map_ctx: &MapContext,
+    map_data: &MapData,
     allocated: &AllocatedPayload,
     trigger_count: usize,
     byte_buf_count: usize,
-    restore_triggers: &[[u8; 2400]],
+    vproc_count: usize,
+    restore_triggers: &[[u8; classic::TRIGGER_SIZE]],
 ) -> Result<CompilationReport> {
-    let mut strx_bytes = map_ctx.string_table().serialize_strx();
+    let mut strx_bytes = map_data.string_table().serialize_strx();
     let str_padding = (4 - (strx_bytes.len() & 3)) & 3;
     strx_bytes.resize(strx_bytes.len() + str_padding, 0);
 
@@ -70,10 +111,10 @@ pub fn inject_payload_into_chk_with_restores(
     strx_bytes.extend_from_slice(&relocated);
     chk.set_section(b"STRx", strx_bytes)?;
 
-    let str_bytes = map_ctx.string_table().serialize_str();
+    let str_bytes = map_data.string_table().serialize_str();
     chk.set_section(b"STR ", str_bytes)?;
 
-    let trig_bytes = build_trig_section(payload_entry_addr, map_ctx.triggers(), restore_triggers);
+    let trig_bytes = build_trig_section(payload_entry_addr, map_data.triggers(), restore_triggers);
     chk.set_section(b"TRIG", trig_bytes)?;
 
     chk.fix_map_data();
@@ -82,6 +123,7 @@ pub fn inject_payload_into_chk_with_restores(
     Ok(CompilationReport {
         trigger_count,
         byte_buf_count,
+        vproc_count,
         payload_offset,
         payload_size: allocated.data.len(),
         payload_entry_addr,
@@ -90,91 +132,18 @@ pub fn inject_payload_into_chk_with_restores(
     })
 }
 
-pub fn pack_chk_condition(
-    locid: u32,
-    player: i32,
-    amount: u32,
-    unitid: u16,
-    comparison: u8,
-    condtype: u8,
-    restype: u8,
-    flag: u8,
-    eudx: u16,
-) -> [u8; 20] {
-    let mut out = [0u8; 20];
-    out[0..4].copy_from_slice(&locid.to_le_bytes());
-    out[4..8].copy_from_slice(&(player as u32).to_le_bytes());
-    out[8..12].copy_from_slice(&amount.to_le_bytes());
-    out[12..14].copy_from_slice(&unitid.to_le_bytes());
-    out[14] = comparison;
-    out[15] = condtype;
-    out[16] = restype;
-    out[17] = flag;
-    out[18..20].copy_from_slice(&eudx.to_le_bytes());
-    out
-}
-
-pub fn pack_chk_action(
-    locid1: u32,
-    strid: u32,
-    wavid: u32,
-    time: u32,
-    player1: i32,
-    player2: i32,
-    unitid: u16,
-    acttype: u8,
-    amount: u8,
-    flags: u8,
-    eudx: u16,
-) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out[0..4].copy_from_slice(&locid1.to_le_bytes());
-    out[4..8].copy_from_slice(&strid.to_le_bytes());
-    out[8..12].copy_from_slice(&wavid.to_le_bytes());
-    out[12..16].copy_from_slice(&time.to_le_bytes());
-    out[16..20].copy_from_slice(&(player1 as u32).to_le_bytes());
-    out[20..24].copy_from_slice(&(player2 as u32).to_le_bytes());
-    out[24..26].copy_from_slice(&unitid.to_le_bytes());
-    out[26] = acttype;
-    out[27] = amount;
-    out[28] = flags;
-    out[29] = 0;
-    out[30..32].copy_from_slice(&eudx.to_le_bytes());
-    out
-}
-
-pub fn pack_chk_trigger(
-    players: &[u8],
-    conditions: &[[u8; 20]],
-    actions: &[[u8; 32]],
-    flags: u32,
-) -> [u8; 2400] {
-    let mut out = [0u8; 2400];
-    for (i, cond) in conditions.iter().take(16).enumerate() {
-        out[i * 20..(i + 1) * 20].copy_from_slice(cond);
-    }
-    for (i, act) in actions.iter().take(64).enumerate() {
-        let base = 320 + i * 32;
-        out[base..base + 32].copy_from_slice(act);
-    }
-    out[2368..2372].copy_from_slice(&flags.to_le_bytes());
-    for &p in players {
-        if (p as usize) < 28 {
-            out[2372 + p as usize] = 1;
-        }
-    }
-    out
-}
-
 /// Builds the `TRIG` section: preserves classic map triggers followed by optional
 /// obscuration restore triggers and the 70-trigger single-stage `TRIG` entry bootstrap
 /// that redirects `pts[player]` (`0x51A280`) into `payload_entry_addr` in `STRx`.
 pub fn build_trig_section(
     payload_entry_addr: u32,
     classic_triggers: &[MapTrigger],
-    restore_triggers: &[[u8; 2400]],
+    restore_triggers: &[[u8; classic::TRIGGER_SIZE]],
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity((classic_triggers.len() + restore_triggers.len() + 70) * 2400);
+    let mut out = Vec::with_capacity(
+        (classic_triggers.len() + restore_triggers.len() + BOOTSTRAP_TRIGGER_COUNT)
+            * classic::TRIGGER_SIZE,
+    );
 
     // 1. Preserve classic map triggers intact
     for trig in classic_triggers {

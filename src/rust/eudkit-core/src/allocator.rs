@@ -1,3 +1,7 @@
+use crate::chk_layout::{
+    payload, ACTION_COUNT, ACTION_DWORDS, ACTION_SIZE, CONDITION_COUNT, CONDITION_DWORDS,
+    CONDITION_SIZE,
+};
 use crate::error::{EudkitError, Result};
 use crate::hir::epd;
 use crate::lir::{
@@ -64,36 +68,39 @@ impl OccupationBuilder {
     }
 
     fn write_trigger(&mut self, condition_count: usize, action_count: usize) {
-        self.push(true); // prev_ptr
-        self.push(true); // next_ptr
+        debug_assert!(condition_count <= CONDITION_COUNT);
+        debug_assert!(action_count <= ACTION_COUNT);
+
+        // prev_ptr + next_ptr occupy the payload prefix before conditions.
+        self.write_bytes_len(payload::CONDITIONS_OFFSET);
 
         // 16 Condition slots (5 dwords = 20 bytes each)
-        for _ in 0..(condition_count * 5) {
+        for _ in 0..(condition_count * CONDITION_DWORDS) {
             self.push(true);
         }
-        if condition_count < 16 {
-            for _ in 0..5 {
+        if condition_count < CONDITION_COUNT {
+            for _ in 0..CONDITION_DWORDS {
                 self.push(true); // zeroed sentinel condition
             }
-            self.write_space((20 * (15 - condition_count)) as u32);
+            self.write_space((CONDITION_SIZE * (CONDITION_COUNT - 1 - condition_count)) as u32);
         }
 
         // 64 Action slots (8 dwords = 32 bytes each)
-        for _ in 0..(action_count * 8) {
+        for _ in 0..(action_count * ACTION_DWORDS) {
             self.push(true);
         }
-        if action_count < 64 {
-            for _ in 0..8 {
+        if action_count < ACTION_COUNT {
+            for _ in 0..ACTION_DWORDS {
                 self.push(true); // zeroed sentinel action
             }
-            self.write_space((32 * (63 - action_count)) as u32);
+            self.write_space((ACTION_SIZE * (ACTION_COUNT - 1 - action_count)) as u32);
         }
 
-        // Preserved / execution flags dword (+2376)
+        // Preserved / execution flags dword.
         self.push(true);
 
-        // 27 unused trailing bytes + 1 byte currentAction = 0 at +2407
-        self.write_space(27);
+        // Unused trailing bytes + currentAction byte.
+        self.write_space(payload::TRAILING_UNUSED_BYTES as u32);
         self.occup1();
     }
 
@@ -137,7 +144,9 @@ impl OccupationBuilder {
 pub fn trigger_occupation_map(condition_count: usize, action_count: usize) -> Vec<i32> {
     let mut builder = OccupationBuilder::new();
     builder.write_trigger(condition_count, action_count);
-    builder.finish()
+    let map = builder.finish();
+    debug_assert_eq!(map.len() * 4, payload::TRIGGER_SIZE);
+    map
 }
 
 pub fn vproc_buffer_occupation_map(slot_count: usize) -> Vec<i32> {
@@ -279,6 +288,7 @@ impl PayloadWriter {
     }
 
     fn write_condition(&mut self, cond: &LirCondition, object_offsets: &[u32]) -> Result<()> {
+        let start = self.datacur;
         self.write_expr(cond.locid, object_offsets)?;
         self.write_expr(cond.player, object_offsets)?;
         self.write_expr(cond.amount, object_offsets)?;
@@ -288,10 +298,12 @@ impl PayloadWriter {
         self.write_u8(cond.restype);
         self.write_u8(cond.flags);
         self.write_u16(cond.eudx);
+        debug_assert_eq!(self.datacur - start, CONDITION_SIZE);
         Ok(())
     }
 
     fn write_action(&mut self, act: &LirAction, object_offsets: &[u32]) -> Result<()> {
+        let start = self.datacur;
         self.write_expr(act.locid1, object_offsets)?;
         self.write_expr(act.strid, object_offsets)?;
         self.write_expr(act.wavid, object_offsets)?;
@@ -304,35 +316,41 @@ impl PayloadWriter {
         self.write_u8(act.flags);
         self.write_u8(0); // padding byte (+0x1D)
         self.write_u16(act.eudx);
+        debug_assert_eq!(self.datacur - start, ACTION_SIZE);
         Ok(())
     }
 
     fn write_trigger(&mut self, trig: &LirTrigger, object_offsets: &[u32]) -> Result<()> {
         let start = self.datacur;
         self.write_expr(trig.prev_ptr, object_offsets)?;
+        debug_assert_eq!(self.datacur - start, payload::NEXT_PTR_OFFSET);
         self.write_expr(trig.next_ptr, object_offsets)?;
+        debug_assert_eq!(self.datacur - start, payload::CONDITIONS_OFFSET);
 
         for c in &trig.conditions {
             self.write_condition(c, object_offsets)?;
         }
-        if trig.conditions.len() < 16 {
-            self.write_bytes(&[0u8; 20]);
-            self.write_space(20 * (15 - trig.conditions.len()));
+        if trig.conditions.len() < CONDITION_COUNT {
+            self.write_bytes(&[0u8; CONDITION_SIZE]);
+            self.write_space(CONDITION_SIZE * (CONDITION_COUNT - 1 - trig.conditions.len()));
         }
+        debug_assert_eq!(self.datacur - start, payload::ACTIONS_OFFSET);
 
         for a in &trig.actions {
             self.write_action(a, object_offsets)?;
         }
-        if trig.actions.len() < 64 {
-            self.write_bytes(&[0u8; 32]);
-            self.write_space(32 * (63 - trig.actions.len()));
+        if trig.actions.len() < ACTION_COUNT {
+            self.write_bytes(&[0u8; ACTION_SIZE]);
+            self.write_space(ACTION_SIZE * (ACTION_COUNT - 1 - trig.actions.len()));
         }
+        debug_assert_eq!(self.datacur - start, payload::FLAGS_OFFSET);
 
         self.write_u32(trig.flags);
-        self.write_space(27);
+        self.write_space(payload::TRAILING_UNUSED_BYTES);
+        debug_assert_eq!(self.datacur - start, payload::CURRENT_ACTION_OFFSET);
         self.write_u8(0); // currentAction = 0
 
-        debug_assert_eq!(self.datacur - start, 2408);
+        debug_assert_eq!(self.datacur - start, payload::TRIGGER_SIZE);
         Ok(())
     }
 

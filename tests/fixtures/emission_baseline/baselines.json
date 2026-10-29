@@ -1,0 +1,98 @@
+{
+  "basemap": "tests/outputmap/basemap/basemap_strx.scx",
+  "entries": [
+    {
+      "frontend": "python",
+      "entry": "examples/01_variables_and_math/eudkit_v2.py",
+      "trigger_count": 8,
+      "payload_size": 5032,
+      "sha256": "8a669c9c9780e3d15cf23588549c9a4aa939dc4af7ac8f58d9143e73ef227e29"
+    },
+    {
+      "frontend": "python",
+      "entry": "examples/03_functions_and_inlining/eudkit_v2.py",
+      "trigger_count": 42,
+      "payload_size": 12232,
+      "sha256": "17fb0137e5cba96faa3ebaaa2762df470c1dc5e680577e79f9f981d311872a31"
+    },
+    {
+      "frontend": "python",
+      "entry": "examples/04-arith-chain/v2.py",
+      "trigger_count": 673,
+      "payload_size": 168992,
+      "sha256": "c625dda12b43c5ae9690ce8579d42c5880c33f2131cf9ccc5e0fc615ab01a9e8"
+    },
+    {
+      "frontend": "python",
+      "entry": "examples/05-byte-word-read/v2.py",
+      "trigger_count": 105,
+      "payload_size": 30272,
+      "sha256": "2d8d2145279613a940f18cf9068cd3ea298d93f23dcd45573627dd3c07bd04ad"
+    },
+    {
+      "frontend": "python",
+      "entry": "examples/06_reactive_rules/eudkit_v2.py",
+      "trigger_count": 8,
+      "payload_size": 3344,
+      "sha256": "209c3456bf18d10763fe8ac37a6f0baf6b2e10911207d4ba87715ab3f0cd9d41"
+    },
+    {
+      "frontend": "python",
+      "entry": "examples/09-struct-array/v2.py",
+      "trigger_count": 187,
+      "payload_size": 46568,
+      "sha256": "b8f98a812dd3e3ee10a7633cc2e8c60832ea7a46ec99a6ef7bc6d4e620f52a66"
+    },
+    {
+      "frontend": "python",
+      "entry": "examples/12-nickname/v2.py",
+      "trigger_count": 147,
+      "payload_size": 45720,
+      "sha256": "06c21921027e2d7c98f5a855f4565b0576ae0107500d0a73bed14522baf88cbb"
+    },
+    {
+      "frontend": "python",
+      "entry": "examples/14-unit-scan-filter-count/v2.py",
+      "trigger_count": 147,
+      "payload_size": 37088,
+      "sha256": "991c8768095b599fbcb75943937c65cf5335291cbef5fae707682635f4d4959c"
+    },
+    {
+      "frontend": "python",
+      "entry": "examples/17-unit-snapshot-restore/v2.py",
+      "trigger_count": 126,
+      "payload_size": 32112,
+      "sha256": "b01934cb179fab88f4440a93be7043fc9c7c8b8acb2eb071f1bb95866035a68f"
+    },
+    {
+      "frontend": "typescript",
+      "entry": "examples/02_control_flow/eudkit_v2.ts",
+      "sha256": "12f7f33313a420885d1b83a64d8cf3aa385083456eb6f741f62dcc39023a1f95"
+    },
+    {
+      "frontend": "typescript",
+      "entry": "examples/04-arith-chain/v2.ts",
+      "sha256": "c625dda12b43c5ae9690ce8579d42c5880c33f2131cf9ccc5e0fc615ab01a9e8"
+    },
+    {
+      "frontend": "typescript",
+      "entry": "examples/06_reactive_rules/eudkit_v2.ts",
+      "sha256": "293fcf6806db5420cc6f78ae63aa529e00c238a08f5d8cc518444cfc18ab7506"
+    },
+    {
+      "frontend": "typescript",
+      "entry": "examples/07-array-loop/v2.ts",
+      "sha256": "f67d9ce408e724072702a3557c6f807a4fb0c5c711d227df10b4eedc02f4ae81"
+    },
+    {
+      "frontend": "typescript",
+      "entry": "examples/16-create-unit-track/v2.ts",
+      "sha256": "4d7ff80c9889c5c7846f9749845f84816800668ca2c003816cf2f0c5b46c22f6"
+    },
+    {
+      "frontend": "typescript",
+      "entry": "examples/17-unit-snapshot-restore/v2.ts",
+      "sha256": "524603e133ba9b8544f6eafae1242660b4633396efa3ce8525d6b8be96500744"
+    }
+  ]
+}

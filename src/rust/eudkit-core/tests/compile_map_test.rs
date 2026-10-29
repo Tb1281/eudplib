@@ -211,7 +211,7 @@ fn compiles_scx_map_with_object_stacking_static_strx_relocation_and_byte_determi
     assert_eq!(trig.len() % 2400, 0);
     assert_eq!(
         trig.len() / 2400,
-        session1.map_context().triggers().len() + 70,
+        session1.map_data().triggers().len() + 70,
         "TRIG must contain preserved classic triggers plus 70 single-stage bootstrap triggers"
     );
 }
@@ -255,7 +255,7 @@ fn preserves_classic_trig_triggers_and_upgrades_legacy_str_to_strx() {
     let out_korean = temp_dir.path().join("korean_out.scx");
     let mut session_kr =
         CompilationSession::from_map(&korean_trig_map, CompilationConfig::default()).unwrap();
-    let orig_triggers = session_kr.map_context().triggers().to_vec();
+    let orig_triggers = session_kr.map_data().triggers().to_vec();
     assert!(
         !orig_triggers.is_empty(),
         "Korean map fixture should have classic TRIG triggers"

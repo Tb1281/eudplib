@@ -94,7 +94,7 @@ In legacy `eudplib`, mapmakers had to manually choose variable types to balance 
 - `EUDLightVariable`: 4-byte memory cell (saves triggers, but cannot be copied dynamically).
 - `EUDXVariable`: Bitmasked variable.
 
-In `eudkit`, you declare a unified variable (`var_` in TypeScript or `session.var` in Python). The Rust Backend runs an **automatic Storage Lowering pass** that inspects variable liveness and usage: variables only read or modified with constants are stored in 4-byte memory cells with zero trigger overhead; variables requiring dynamic copy become single-slot 72-byte `VProcs`.
+In `eudkit`, you declare a unified variable (`var_` in TypeScript or `session.var` in Python). The Rust Backend runs an **automatic Storage Lowering pass** that inspects variable usage: variables only read or modified with constants are stored in 4-byte memory cells with zero trigger overhead; variables requiring dynamic copy become single-slot 72-byte `VProcs`.
 
 #### Legacy `epScript` (v1)
 ```javascript
@@ -294,9 +294,35 @@ When enabled, `eudkit` protects output maps with:
 
 ---
 
-## 4. Migration Checklist
+## 4. Deterministic Builds with HIR Plans
+
+Python and TypeScript keep different authoring models: Python executes the entry script with `runpy` and PyO3, while TypeScript is parsed statically with `oxc`. Both lower to the same `HIR` seam. A **HIR Plan** freezes that seam into a versioned `.eudhir` artifact.
+
+```bash
+# Authoring: run the Frontend and compile in one step
+eudkit build --config eudkit.toml
+
+# Explicit synthesis: execute/parse the Frontend and write a plan
+eudkit synth --input maps/base.scx --entry src/main.py --plan build/plan.eudhir
+eudkit synth --input maps/base.scx --entry src/main.ts --plan build/plan.eudhir
+
+# CI or distribution: no Python or Node.js required
+eudkit compile --plan build/plan.eudhir --input maps/base.scx --output build/map.scx
+
+# CI drift check: fail if the committed plan no longer matches the source
+eudkit synth --input maps/base.scx --entry src/main.ts --plan build/plan.eudhir --check
+```
+
+A plan records the `Map Context` fingerprint it was synthesized against. `eudkit compile --plan` rejects a plan when the input map no longer matches, so a stale plan cannot silently compile against a different map.
+
+This is not a temporary workaround for Python. Host execution is the supported Python authoring model because it preserves `open()`, `json.load()`, `csv`, comprehensions, and ordinary build-time libraries. TypeScript remains a static Frontend. The plan is the shared, host-runtime-free boundary.
+
+---
+
+## 5. Migration Checklist
 
 - [ ] Run `eudkit migrate <project.edd>` to convert project config to `eudkit.toml` and epScript files to `.ts`.
 - [ ] Run `eudkit inspect <map.scx> --dts types/map.d.ts` to generate typed autocomplete definitions for your map's locations, units, switches, and strings.
 - [ ] Verify imported scripts compile cleanly with `eudkit dump-ir --config eudkit.toml`.
 - [ ] Build the final `.scx` map with `eudkit build --config eudkit.toml`.
+- [ ] If CI or distribution must compile without Python or Node.js, commit a `.eudhir` plan and use `eudkit compile --plan`.

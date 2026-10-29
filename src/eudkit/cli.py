@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
+from . import _rust as _rust_eudkit
 from .runner import run_build
+
+
+def _resolve_request(**overrides: object) -> dict[str, object]:
+    """Resolves flags and ``eudkit.toml`` through the shared BuildRequest."""
+    return _rust_eudkit.resolve_build_request(**overrides)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -24,6 +29,10 @@ def main(argv: list[str] | None = None) -> None:
     build_parser.add_argument("--entry", "-e", help="Path to entry script (.py/.ts)")
     build_parser.add_argument("--obscurate", action="store_true", help="Enable bytecode obscuration")
     build_parser.add_argument("--seed", type=int, help="Deterministic seed for obscuration")
+    build_parser.add_argument(
+        "--plan",
+        help="Write the canonical HIR plan artifact (.eudhir) instead of building",
+    )
 
     dump_parser = subparsers.add_parser("dump-ir", help="Dump Intermediate Representation (HIR/LIR)")
     dump_parser.add_argument("--config", "-c", help="Path to eudkit.toml configuration file")
@@ -35,39 +44,25 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.subcommand == "build":
-        input_map = args.input
-        output_map = args.output
-        entry = args.entry
-        obscurate = args.obscurate
-        seed = args.seed
+        try:
+            resolved = _resolve_request(
+                config=args.config,
+                input_map=args.input,
+                output_map=args.output,
+                entry=args.entry,
+                obscurate=True if args.obscurate else None,
+                obscurate_seed=args.seed,
+            )
+        except Exception as e:
+            print(f"error: failed to resolve build configuration: {e}", file=sys.stderr)
+            sys.exit(1)
 
-        # Check for eudkit.toml if not all provided
-        if args.config or (Path("eudkit.toml").exists() and (not input_map or not output_map or not entry)):
-            config_file = Path(args.config) if args.config else Path("eudkit.toml")
-            if config_file.exists():
-                import tomllib
-                try:
-                    with open(config_file, "rb") as f:
-                        data = tomllib.load(f)
-                    proj = data.get("project", {})
-                    bld = data.get("build", {})
-                    if not input_map:
-                        input_map = bld.get("input_map") or proj.get("input_map")
-                    if not output_map:
-                        output_map = bld.get("output_map") or proj.get("output_map")
-                    if not entry:
-                        entry = bld.get("entry") or proj.get("entry")
-                    if not obscurate:
-                        obscurate = bld.get("obscurate", False) or proj.get("obscurate", False)
-                    if seed is None:
-                        seed = bld.get("obscurate_seed") or proj.get("obscurate_seed")
-                except Exception as e:
-                    print(f"error: failed to parse config {config_file}: {e}", file=sys.stderr)
-                    sys.exit(1)
-
-        if not input_map or not output_map:
+        input_map = resolved["input_map"]
+        output_map = resolved["output_map"]
+        plan = args.plan
+        if not input_map or (not output_map and not plan):
             print(
-                "usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <script>]",
+                "usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <script>] [--plan <out.eudhir>]",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -76,29 +71,40 @@ def main(argv: list[str] | None = None) -> None:
             report = run_build(
                 input_map=input_map,
                 output_map=output_map,
-                entry=entry,
-                obscurate=obscurate,
-                obscurate_seed=seed,
+                entry=resolved["entry"],
+                obscurate=resolved["obscurate"],
+                obscurate_seed=resolved["obscurate_seed"],
+                preserve_classic_triggers=resolved["preserve_classic_triggers"],
+                plan=plan,
             )
             if report is not None:
-                print(
-                    f"Built {output_map} (triggers={report.trigger_count}, "
-                    f"payload_bytes={report.payload_size}, entry={report.payload_entry_addr:#010X})"
-                )
+                print(report.summary(str(output_map)))
         except Exception as e:
             print(f"error: {e}", file=sys.stderr)
             sys.exit(1)
 
     elif args.subcommand == "dump-ir":
-        input_map = args.input
-        entry = args.entry
+        try:
+            resolved = _resolve_request(
+                config=args.config,
+                input_map=args.input,
+                entry=args.entry,
+            )
+        except Exception as e:
+            print(f"error: failed to resolve build configuration: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        input_map = resolved["input_map"]
         if not input_map:
             print("usage: eudkit dump-ir --map <map.scx> [--entry <script>]", file=sys.stderr)
             sys.exit(1)
         try:
             run_build(
                 input_map=input_map,
-                entry=entry,
+                entry=resolved["entry"],
+                obscurate=resolved["obscurate"],
+                obscurate_seed=resolved["obscurate_seed"],
+                preserve_classic_triggers=resolved["preserve_classic_triggers"],
                 dump_hir=not args.lir_only,
                 dump_lir=not args.hir_only,
             )

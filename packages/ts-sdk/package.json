@@ -6,7 +6,11 @@
   "types": "src/index.ts",
   "scripts": {
     "check-docs": "node scripts/check-docs.mjs",
-    "test": "node scripts/check-docs.mjs && echo \"SDK verified via eudkit-ts integration tests\""
+    "test": "npm run check-docs && npm run test:types",
+    "test:types": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   },
   "keywords": [
     "eudkit",

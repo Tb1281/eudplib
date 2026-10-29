@@ -980,125 +980,61 @@ export const session = {
 /**
  * Execute a block of logic exactly once during the game.
  *
- * If `condition` is provided, waits until the condition holds on a trigger loop pass,
+ * This is a compile-time primitive: `eudkit-ts` lowers the call to `HirStmt::Reactive`.
+ * The HIR reactive lowering module owns the guard variable and its Trigger Loop timing.
+ * There is intentionally no runtime implementation in this SDK.
+ *
+ * If `condition` is provided, waits until the condition holds on a Trigger Loop pass,
  * executes once, and permanently deactivates its guard.
- * If `condition` is omitted or null, executes on the initial trigger loop pass.
- *
- * @param conditionOrCallback - Condition guard or callback function.
- * @param maybeCallback - Callback function if condition was provided as first argument.
+ * If `condition` is omitted, null, or undefined, executes on the initial Trigger Loop pass.
  */
-export function once(
-  conditionOrCallback: Condition | null | undefined | (() => void),
-  maybeCallback?: () => void
-): void {
-  const callback =
-    typeof conditionOrCallback === "function" ? conditionOrCallback : maybeCallback;
-  const condition =
-    typeof conditionOrCallback === "function" ? null : conditionOrCallback;
-
-  const flag = var_(1);
-  if (condition) {
-    if (flag.exactly(1) && condition) {
-      flag.setTo(0);
-      callback?.();
-    }
-  } else {
-    if (flag.exactly(1)) {
-      flag.setTo(0);
-      callback?.();
-    }
-  }
-}
+export declare function once(callback: () => void): void;
+export declare function once(
+  condition: Condition | Condition[] | null | undefined,
+  callback: () => void
+): void;
 
 /**
- * Standing reactive rule: executes callback every trigger loop while condition evaluates to true.
+ * Standing reactive rule: executes callback every Trigger Loop while condition evaluates to true.
  *
- * In StarCraft's polling-based trigger VM, `when(cond, cb)` checks conditions at the beginning
- * of each trigger loop pass. As long as the conditions remain satisfied, the enclosed actions execute.
- *
- * @param condition - Single condition or array of conditions to evaluate every loop.
- * @param callback - Function body containing actions to execute while conditions hold.
+ * `eudkit-ts` lowers the call to `HirStmt::Reactive`; the HIR reactive lowering module
+ * owns the condition and body placement. There is intentionally no runtime implementation.
  */
-export function when(condition: Condition | Condition[], callback: () => void): void {
-  const isSatisfied = Array.isArray(condition)
-    ? condition.length > 0 && condition.every((c) => Boolean(c))
-    : Boolean(condition);
-  if (isSatisfied) {
-    callback();
-  }
-}
+export declare function when(
+  condition: Condition | Condition[],
+  callback: () => void
+): void;
 
 /**
- * Continuous rule: executes callback every trigger loop until condition holds, then permanently deactivates.
+ * Continuous rule: executes callback every Trigger Loop until condition holds, then permanently deactivates.
  *
- * Evaluated on each trigger loop pass. As soon as `condition` becomes true, the guard flag is set
- * to 1 and the block will never execute again in subsequent trigger loops.
- *
- * @param condition - Termination condition that permanently silences this rule.
- * @param callback - Function body executed each trigger loop prior to termination.
+ * `eudkit-ts` lowers the call to `HirStmt::Reactive`; the HIR reactive lowering module
+ * owns the guard variable. There is intentionally no runtime implementation.
  */
-export function until(condition: Condition, callback: () => void): void {
-  const guard = var_(0);
-  if (guard.exactly(0)) {
-    if (condition) {
-      guard.setTo(1);
-    } else {
-      callback();
-    }
-  }
-}
+export declare function until(
+  condition: Condition,
+  callback: () => void
+): void;
 
 /**
- * Delay rule: counts down `loops` trigger cycles and fires callback once.
+ * Delay rule: counts down `loops` Trigger Loops and fires callback once.
  *
- * ### StarCraft Trigger Loop Architecture
- * In Brood War, triggers do NOT execute on every engine frame by default; they run in discrete
- * Trigger Loops (roughly every 30-31 game frames in standard maps, or every single frame when
- * an EUD Turbo Trigger / Hyper Trigger continuously resets the trigger loop tick countdown to 0).
+ * `eudkit-ts` lowers the call to `HirStmt::Reactive`; the HIR reactive lowering module
+ * owns the timer and completion guard. There is intentionally no runtime implementation.
  *
- * Native `Wait(ms)` actions freeze the player's trigger evaluation thread and cause multiplayer desyncs.
- * `after(loops, cb)` avoids `Wait` entirely by maintaining a deterministic 4-byte counter variable
- * decremented on each trigger loop pass without thread stalls.
+ * Native `Wait(ms)` actions freeze the player's trigger evaluation thread and cause
+ * multiplayer desyncs. `after(loops, cb)` counts Trigger Loops instead.
  *
- * @param loops - Number of trigger loop evaluation cycles to wait before firing (e.g. 24 loops = ~1 second under Turbo).
- * @param callback - Logic to execute once the loop delay has elapsed.
+ * @param loops - Number of Trigger Loop evaluation cycles to wait before firing.
  */
-export function after(loops: number, callback: () => void): void {
-  const timer = var_(loops);
-  const done = var_(0);
-  if (done.exactly(0)) {
-    if (timer.atLeast(1)) {
-      timer.subtract(1);
-    }
-    if (timer.exactly(0)) {
-      done.setTo(1);
-      callback();
-    }
-  }
-}
+export declare function after(loops: number, callback: () => void): void;
 
 /**
- * Periodic clock rule: fires repeatedly every `loops` trigger cycles.
+ * Periodic clock rule: fires repeatedly every `loops` Trigger Loops.
  *
- * ### StarCraft Trigger Loop Architecture
- * In Brood War, triggers execute in discrete Trigger Loops. In standard maps, 1 loop occurs
- * every ~31 frames (~1.3s on Fastest speed). When an EUD Turbo Trigger is active, the engine's
- * trigger loop countdown tick is kept at 0, causing the trigger loop to execute on every single
- * game frame (24 times/second on Fastest).
+ * `eudkit-ts` lowers the call to `HirStmt::Reactive`; the HIR reactive lowering module
+ * owns the timer. There is intentionally no runtime implementation.
  *
- * `every(loops, cb)` maintains a deterministic countdown variable that decrements on each trigger
- * loop cycle and resets to `loops` upon reaching 0, executing without relying on fragile engine `Wait()` calls.
- *
- * @param loops - Interval in trigger loop cycles between successive firings (e.g. 24 loops = every 1s under Turbo).
- * @param callback - Logic to execute periodically every `loops` trigger cycles.
+ * @param loops - Interval in Trigger Loop cycles between successive firings.
  */
-export function every(loops: number, callback: () => void): void {
-  const timer = var_(loops);
-  if (timer.atLeast(1)) {
-    timer.subtract(1);
-  }
-  if (timer.exactly(0)) {
-    timer.setTo(loops);
-    callback();
-  }
-}
+export declare function every(loops: number, callback: () => void): void;

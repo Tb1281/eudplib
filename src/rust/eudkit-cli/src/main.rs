@@ -1,9 +1,10 @@
-use eudkit_core::config::ProjectConfig;
+use eudkit_core::config::{BuildRequest, ProjectConfig};
 use eudkit_core::hir::{
     Comparison, HirBasicBlock, HirByteBuf, HirFunction, HirModule, HirStmt, HirTerminator,
     HirValue, Modifier, PlayerId, StockAction, StockCondition,
 };
 use eudkit_core::lir::{ActField, FieldRef};
+use eudkit_core::plan::{HirPlan, PlanMap};
 use eudkit_core::{CompilationConfig, CompilationSession};
 use std::env;
 use std::fs;
@@ -86,7 +87,7 @@ fn cmd_inspect(args: &[String]) -> Result<(), String> {
         .ok_or_else(|| "usage: eudkit inspect <map.scx> [--dts <output.d.ts>]".to_string())?;
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .map_err(|e| e.to_string())?;
-    let ctx = session.map_context();
+    let ctx = session.map_data();
 
     let named_locations = ctx.locations().iter().filter(|l| l.name.is_some()).count();
     let cuwp_used = ctx.cuwp_slots().iter().filter(|s| s.in_use).count();
@@ -133,7 +134,7 @@ fn cmd_inspect(args: &[String]) -> Result<(), String> {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("map");
-        let dts = ctx.generate_dts(mod_name);
+        let dts = eudkit_core::dts::generate_dts(ctx, session.canonical_symbols(), mod_name);
         if let Some(parent) = dts_path.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -202,73 +203,30 @@ fn configure_python_cmd(cmd: &mut std::process::Command) {
 }
 
 fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
-    let mut map_path: Option<PathBuf> = None;
-    let mut config_path: Option<PathBuf> = None;
-    let mut entry_path: Option<PathBuf> = None;
-    let mut out_path: Option<PathBuf> = None;
-    let mut hir_only = false;
-    let mut lir_only = false;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--map" | "-m" | "--input" | "-i" => {
-                i += 1;
-                map_path = Some(PathBuf::from(args.get(i).ok_or("missing value for --map")?));
-            }
-            "--config" | "-c" => {
-                i += 1;
-                config_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --config")?,
-                ));
-            }
-            "--entry" | "-e" => {
-                i += 1;
-                entry_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --entry")?,
-                ));
-            }
-            "--output" | "-o" => {
-                i += 1;
-                out_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --output")?,
-                ));
-            }
-            "--hir-only" => hir_only = true,
-            "--lir-only" => lir_only = true,
-            other if !other.starts_with('-') && map_path.is_none() => {
-                map_path = Some(PathBuf::from(other));
-            }
-            other => return Err(format!("unknown argument for dump-ir: {other}")),
-        }
-        i += 1;
+    let request = BuildRequest::from_args(args).map_err(|e| e.to_string())?;
+    if request.help {
+        println!(
+            "usage: eudkit dump-ir [--config <eudkit.toml>] [--map <map.scx>] [--entry <script>] [--hir-only|--lir-only]"
+        );
+        return Ok(());
     }
 
-    let (resolved_map, comp_cfg, mod_name, resolved_entry) = if let Some(cfg_file) = config_path {
-        let pcfg = ProjectConfig::from_file(&cfg_file).map_err(|e| e.to_string())?;
-        (
-            map_path.unwrap_or(pcfg.input_map.clone()),
-            pcfg.to_compilation_config(),
-            pcfg.name,
-            entry_path.or(pcfg.entry),
-        )
-    } else if Path::new("eudkit.toml").exists() && map_path.is_none() {
-        let pcfg = ProjectConfig::from_file("eudkit.toml").map_err(|e| e.to_string())?;
-        (
-            pcfg.input_map.clone(),
-            pcfg.to_compilation_config(),
-            pcfg.name,
-            entry_path.or(pcfg.entry),
-        )
+    let resolved = request.resolve().map_err(|e| e.to_string())?;
+    if resolved.config.input_map.as_os_str().is_empty() {
+        return Err("usage: eudkit dump-ir --map <map.scx>".to_string());
+    }
+
+    let resolved_map = resolved.config.input_map.clone();
+    let resolved_entry = resolved.config.entry.clone();
+    let comp_cfg = resolved.config.to_compilation_config();
+    let mod_name = if resolved.config_path.is_some() {
+        resolved.config.name.clone()
     } else {
-        let mp = map_path.ok_or("usage: eudkit dump-ir --map <map.scx>")?;
-        (
-            mp,
-            CompilationConfig::default(),
-            "tracer_module".to_string(),
-            entry_path,
-        )
+        "tracer_module".to_string()
     };
+    let hir_only = request.hir_only;
+    let lir_only = request.lir_only;
+    let out_path = request.output_map.clone();
 
     if let Some(entry) = &resolved_entry {
         let ext = entry.extension().and_then(|s| s.to_str()).unwrap_or("");
@@ -311,8 +269,13 @@ fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
         CompilationSession::from_map(&resolved_map, comp_cfg).map_err(|e| e.to_string())?;
 
     if let Some(entry) = resolved_entry {
-        let hir = eudkit_ts::compile_ts_file(&entry, &mod_name, session.map_context())
-            .map_err(|e| e.to_string())?;
+        let hir = eudkit_ts::compile_ts_file(
+            &entry,
+            &mod_name,
+            session.map_data(),
+            session.canonical_symbols(),
+        )
+        .map_err(|e| e.to_string())?;
         session.set_hir_module(hir);
     } else {
         session.set_hir_module(default_tracer_hir(&mod_name));
@@ -342,6 +305,13 @@ fn execute_python_build(
     proj_cfg: &ProjectConfig,
     entry_path: &Path,
 ) -> Result<eudkit_core::CompilationReport, String> {
+    // The Python runner writes one typed JSON `CompilationReport` here. This is
+    // an implementation detail of the Python Frontend handoff; the Rust CLI
+    // never interprets the file as ad-hoc text. A file is used instead of
+    // stdout because the entry script may print arbitrary user output there.
+    let report_path = env::temp_dir().join(format!("eudkit-python-report-{}.json", process::id()));
+    let _ = fs::remove_file(&report_path);
+
     let py_bin = find_python_bin();
     let mut cmd = std::process::Command::new(&py_bin);
     configure_python_cmd(&mut cmd);
@@ -352,7 +322,9 @@ fn execute_python_build(
         .arg("--output")
         .arg(&proj_cfg.output_map)
         .arg("--entry")
-        .arg(entry_path);
+        .arg(entry_path)
+        .arg("--report")
+        .arg(&report_path);
 
     if proj_cfg.obscurate {
         cmd.arg("--obscurate");
@@ -360,12 +332,16 @@ fn execute_python_build(
     if let Some(seed) = proj_cfg.obscurate_seed {
         cmd.arg("--seed").arg(seed.to_string());
     }
+    if !proj_cfg.preserve_classic_triggers {
+        cmd.arg("--no-preserve-classic-triggers");
+    }
 
     let output = cmd
         .output()
         .map_err(|e| format!("failed to execute python runner ({py_bin}): {e}"))?;
 
     if !output.status.success() {
+        let _ = fs::remove_file(&report_path);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
         return Err(format!("Python build failed:\n{stderr}\n{stdout}"));
@@ -374,24 +350,342 @@ fn execute_python_build(
     let stdout = String::from_utf8_lossy(&output.stdout);
     print!("{stdout}");
 
-    let session =
-        CompilationSession::from_map(&proj_cfg.output_map, proj_cfg.to_compilation_config())
-            .map_err(|e| {
-                format!(
-                    "failed to read generated map {}: {e}",
-                    proj_cfg.output_map.display()
-                )
-            })?;
+    let report_text = fs::read_to_string(&report_path).map_err(|e| {
+        format!(
+            "Python build did not report its result ({e}): {}",
+            report_path.display()
+        )
+    })?;
+    let _ = fs::remove_file(&report_path);
+    parse_python_report(&report_text)
+        .map_err(|e| format!("invalid Python build report {}: {e}", report_path.display()))
+}
 
-    Ok(eudkit_core::CompilationReport {
-        trigger_count: session.map_context().triggers().len(),
-        byte_buf_count: 0,
-        payload_offset: 0,
-        payload_size: 0,
-        payload_entry_addr: 0,
-        prt_offsets: Vec::new(),
-        ort_offsets: Vec::new(),
-    })
+/// Parses the typed JSON report written by `python -m eudkit.runner --report`.
+///
+/// Every field is required; a missing key is an error rather than a zeroed
+/// value.
+fn parse_python_report(text: &str) -> Result<eudkit_core::CompilationReport, String> {
+    eudkit_core::CompilationReport::from_json(text).map_err(|e| e.to_string())
+}
+
+fn plan_for_session(session: &CompilationSession, module: HirModule) -> HirPlan {
+    let mut map = PlanMap::new(session.map_fingerprint());
+    if let Some(name) = session
+        .input_map_path()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+    {
+        map = map.with_name(name);
+    }
+    HirPlan::new(module).with_map(map)
+}
+
+fn read_plan(path: &Path) -> Result<HirPlan, String> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read HIR plan {}: {e}", path.display()))?;
+    HirPlan::from_json(&text).map_err(|e| e.to_string())
+}
+
+fn write_plan(path: &Path, plan: &HirPlan) -> Result<(), String> {
+    let json = plan.to_json().map_err(|e| e.to_string())?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+    fs::write(path, &json)
+        .map_err(|e| format!("failed to write HIR plan {}: {e}", path.display()))?;
+    println!("Wrote HIR plan {} ({} bytes)", path.display(), json.len());
+    Ok(())
+}
+
+fn run_python_plan(
+    proj_cfg: &ProjectConfig,
+    entry_path: &Path,
+    plan_path: &Path,
+) -> Result<(), String> {
+    let py_bin = find_python_bin();
+    let mut cmd = std::process::Command::new(&py_bin);
+    configure_python_cmd(&mut cmd);
+    cmd.arg("-m")
+        .arg("eudkit.runner")
+        .arg("--input")
+        .arg(&proj_cfg.input_map)
+        .arg("--entry")
+        .arg(entry_path)
+        .arg("--plan")
+        .arg(plan_path);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to execute python runner ({py_bin}): {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("Python synthesis failed:\n{stderr}\n{stdout}"));
+    }
+    if !plan_path.exists() {
+        return Err(format!(
+            "Python runner reported success but did not write {}",
+            plan_path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn synth_ts_plan(proj_cfg: &ProjectConfig, entry_path: &Path) -> Result<HirPlan, String> {
+    let session =
+        CompilationSession::from_map(&proj_cfg.input_map, proj_cfg.to_compilation_config())
+            .map_err(|e| e.to_string())?;
+    let hir = eudkit_ts::compile_ts_file(
+        entry_path,
+        &proj_cfg.name,
+        session.map_data(),
+        session.canonical_symbols(),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(plan_for_session(&session, hir))
+}
+
+fn temporary_plan_path() -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("eudkit-plan-{}-{nanos}.eudhir", std::process::id()))
+}
+
+fn cmd_synth(args: &[String]) -> Result<(), String> {
+    let mut config_path: Option<PathBuf> = None;
+    let mut input_map: Option<PathBuf> = None;
+    let mut entry_path: Option<PathBuf> = None;
+    let mut plan_path: Option<PathBuf> = None;
+    let mut check = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--config" | "-c" => {
+                i += 1;
+                config_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --config")?,
+                ));
+            }
+            "--input" | "-i" => {
+                i += 1;
+                input_map = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --input")?,
+                ));
+            }
+            "--entry" | "-e" => {
+                i += 1;
+                entry_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --entry")?,
+                ));
+            }
+            "--plan" | "-p" | "--output" | "-o" => {
+                i += 1;
+                plan_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --plan")?,
+                ));
+            }
+            "--check" => check = true,
+            "--help" | "-h" => {
+                println!("usage: eudkit synth [--config <eudkit.toml>] [--input <in.scx>] [--entry <script.(ts|py)>] [--plan <out.eudhir>] [--check]");
+                return Ok(());
+            }
+            other => return Err(format!("unknown argument for synth: {other}")),
+        }
+        i += 1;
+    }
+
+    let mut proj_cfg = if let Some(cfg_file) = config_path {
+        ProjectConfig::from_file(cfg_file).map_err(|e| e.to_string())?
+    } else if Path::new("eudkit.toml").exists() && (input_map.is_none() || entry_path.is_none()) {
+        ProjectConfig::from_file("eudkit.toml").map_err(|e| e.to_string())?
+    } else {
+        ProjectConfig::default()
+    };
+
+    if let Some(input) = input_map {
+        proj_cfg.input_map = input;
+    }
+    if let Some(entry) = entry_path {
+        proj_cfg.entry = Some(entry);
+    }
+
+    if proj_cfg.input_map.as_os_str().is_empty() {
+        return Err(
+            "usage: eudkit synth --input <in.scx> --entry <script.(ts|py)> --plan <out.eudhir>"
+                .to_string(),
+        );
+    }
+    let entry = proj_cfg.entry.clone().ok_or(
+        "usage: eudkit synth --input <in.scx> --entry <script.(ts|py)> --plan <out.eudhir>",
+    )?;
+    let plan_path = plan_path.unwrap_or_else(|| {
+        if proj_cfg.output_map.as_os_str().is_empty() {
+            PathBuf::from("plan.eudhir")
+        } else {
+            proj_cfg.output_map.with_extension("eudhir")
+        }
+    });
+
+    let ext = entry
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let generated = if ext == "py" {
+        let generated_path = if check {
+            temporary_plan_path()
+        } else {
+            plan_path.clone()
+        };
+        let result = run_python_plan(&proj_cfg, &entry, &generated_path)
+            .and_then(|_| read_plan(&generated_path));
+        if check {
+            let _ = fs::remove_file(&generated_path);
+        }
+        result?
+    } else if ext == "ts" || ext == "js" {
+        synth_ts_plan(&proj_cfg, &entry)?
+    } else {
+        return Err(format!(
+            "unsupported entry extension '.{ext}': expected .py, .ts, or .js"
+        ));
+    };
+
+    if check {
+        let existing = read_plan(&plan_path)
+            .map_err(|e| format!("cannot check {}: {e}", plan_path.display()))?;
+        if existing != generated {
+            return Err(format!(
+                "HIR plan {} is out of date; run `eudkit synth` and commit the result",
+                plan_path.display()
+            ));
+        }
+        println!("HIR plan {} is up to date", plan_path.display());
+    } else {
+        write_plan(&plan_path, &generated)?;
+    }
+
+    Ok(())
+}
+
+fn cmd_compile(args: &[String]) -> Result<(), String> {
+    let mut config_path: Option<PathBuf> = None;
+    let mut input_map: Option<PathBuf> = None;
+    let mut output_map: Option<PathBuf> = None;
+    let mut plan_path: Option<PathBuf> = None;
+    let mut obscurate: Option<bool> = None;
+    let mut seed: Option<u64> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--config" | "-c" => {
+                i += 1;
+                config_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --config")?,
+                ));
+            }
+            "--input" | "-i" => {
+                i += 1;
+                input_map = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --input")?,
+                ));
+            }
+            "--output" | "-o" => {
+                i += 1;
+                output_map = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --output")?,
+                ));
+            }
+            "--plan" | "-p" => {
+                i += 1;
+                plan_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --plan")?,
+                ));
+            }
+            "--obscurate" => obscurate = Some(true),
+            "--seed" => {
+                i += 1;
+                let value = args.get(i).ok_or("missing value for --seed")?;
+                seed = Some(value.parse::<u64>().map_err(|e| e.to_string())?);
+            }
+            "--help" | "-h" => {
+                println!("usage: eudkit compile --plan <plan.eudhir> --input <in.scx> --output <out.scx>");
+                return Ok(());
+            }
+            other => return Err(format!("unknown argument for compile: {other}")),
+        }
+        i += 1;
+    }
+
+    let mut proj_cfg = if let Some(cfg_file) = config_path {
+        ProjectConfig::from_file(cfg_file).map_err(|e| e.to_string())?
+    } else if Path::new("eudkit.toml").exists() && (input_map.is_none() || output_map.is_none()) {
+        ProjectConfig::from_file("eudkit.toml").map_err(|e| e.to_string())?
+    } else {
+        ProjectConfig::default()
+    };
+
+    if let Some(input) = input_map {
+        proj_cfg.input_map = input;
+    }
+    if let Some(output) = output_map {
+        proj_cfg.output_map = output;
+    }
+    if let Some(obscurate) = obscurate {
+        proj_cfg.obscurate = obscurate;
+    }
+    if let Some(seed) = seed {
+        proj_cfg.obscurate_seed = Some(seed);
+    }
+
+    if proj_cfg.input_map.as_os_str().is_empty() || proj_cfg.output_map.as_os_str().is_empty() {
+        return Err(
+            "usage: eudkit compile --plan <plan.eudhir> --input <in.scx> --output <out.scx>"
+                .to_string(),
+        );
+    }
+    let plan_path = plan_path
+        .ok_or("usage: eudkit compile --plan <plan.eudhir> --input <in.scx> --output <out.scx>")?;
+    let plan = read_plan(&plan_path)?;
+
+    let mut session =
+        CompilationSession::from_map(&proj_cfg.input_map, proj_cfg.to_compilation_config())
+            .map_err(|e| e.to_string())?;
+
+    if let Some(map) = &plan.map {
+        let actual = session.map_fingerprint();
+        if map.fingerprint != actual {
+            return Err(format!(
+                "HIR plan map fingerprint mismatch: plan was synthesized for {}, input map is {}. Re-run `eudkit synth`.",
+                map.fingerprint, actual
+            ));
+        }
+    } else {
+        eprintln!(
+            "warning: HIR plan has no map fingerprint; compiling without a Map Context identity check"
+        );
+    }
+
+    session.set_hir_module(plan.module);
+    let report = session
+        .compile_map(&proj_cfg.output_map)
+        .map_err(|e| e.to_string())?;
+    println!(
+        "Compiled {} (triggers={}, payload_bytes={}, entry={:#010X})",
+        proj_cfg.output_map.display(),
+        report.trigger_count,
+        report.payload_size,
+        report.payload_entry_addr
+    );
+    Ok(())
 }
 
 fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationReport, String> {
@@ -417,7 +711,11 @@ fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationRep
             .map_err(|e| e.to_string())?;
 
     if let Some(dts_path) = &proj_cfg.dts {
-        let dts = session.map_context().generate_dts(&proj_cfg.name);
+        let dts = eudkit_core::dts::generate_dts(
+            session.map_data(),
+            session.canonical_symbols(),
+            &proj_cfg.name,
+        );
         if let Some(parent) = dts_path.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -427,8 +725,13 @@ fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationRep
     }
 
     if let Some(entry_path) = &proj_cfg.entry {
-        let hir = eudkit_ts::compile_ts_file(entry_path, &proj_cfg.name, session.map_context())
-            .map_err(|e| e.to_string())?;
+        let hir = eudkit_ts::compile_ts_file(
+            entry_path,
+            &proj_cfg.name,
+            session.map_data(),
+            session.canonical_symbols(),
+        )
+        .map_err(|e| e.to_string())?;
         session.set_hir_module(hir);
     } else {
         session.set_hir_module(default_tracer_hir(&proj_cfg.name));
@@ -438,96 +741,26 @@ fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationRep
         .compile_map(&proj_cfg.output_map)
         .map_err(|e| e.to_string())?;
 
-    println!(
-        "Built {} (triggers={}, payload_bytes={}, entry={:#010X})",
-        proj_cfg.output_map.display(),
-        report.trigger_count,
-        report.payload_size,
-        report.payload_entry_addr
-    );
+    println!("{}", report.summary(proj_cfg.output_map.display()));
     Ok(report)
 }
 
 fn cmd_watch(args: &[String]) -> Result<(), String> {
-    let mut config_path: Option<PathBuf> = None;
-    let mut input_map: Option<PathBuf> = None;
-    let mut output_map: Option<PathBuf> = None;
-    let mut entry_path: Option<PathBuf> = None;
-    let mut dts_out: Option<PathBuf> = None;
-    let mut obscurate: Option<bool> = None;
-    let mut seed: Option<u64> = None;
-    let mut once = false;
+    let request = BuildRequest::from_args(args).map_err(|e| e.to_string())?;
+    if request.help {
+        println!(
+            "usage: eudkit watch [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <main.ts>] [--once]"
+        );
+        return Ok(());
+    }
+    run_watch(&request)
+}
 
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--config" | "-c" => {
-                i += 1;
-                config_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --config")?,
-                ));
-            }
-            "--input" | "-i" => {
-                i += 1;
-                input_map = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --input")?,
-                ));
-            }
-            "--output" | "-o" => {
-                i += 1;
-                output_map = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --output")?,
-                ));
-            }
-            "--entry" | "-e" => {
-                i += 1;
-                entry_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --entry")?,
-                ));
-            }
-            "--dts" => {
-                i += 1;
-                dts_out = Some(PathBuf::from(args.get(i).ok_or("missing value for --dts")?));
-            }
-            "--obscurate" => obscurate = Some(true),
-            "--seed" => {
-                i += 1;
-                let s = args.get(i).ok_or("missing value for --seed")?;
-                seed = Some(s.parse::<u64>().map_err(|e| e.to_string())?);
-            }
-            "--once" => once = true,
-            "--watch" | "-w" => {}
-            other => return Err(format!("unknown argument for watch: {other}")),
-        }
-        i += 1;
-    }
-
-    let mut proj_cfg = if let Some(cfg_file) = config_path.as_ref() {
-        ProjectConfig::from_file(cfg_file).map_err(|e| e.to_string())?
-    } else if Path::new("eudkit.toml").exists() && (input_map.is_none() || output_map.is_none()) {
-        ProjectConfig::from_file("eudkit.toml").map_err(|e| e.to_string())?
-    } else {
-        ProjectConfig::default()
-    };
-
-    if let Some(inp) = input_map {
-        proj_cfg.input_map = inp;
-    }
-    if let Some(out) = output_map {
-        proj_cfg.output_map = out;
-    }
-    if let Some(ent) = entry_path {
-        proj_cfg.entry = Some(ent);
-    }
-    if let Some(dts) = dts_out {
-        proj_cfg.dts = Some(dts);
-    }
-    if let Some(obs) = obscurate {
-        proj_cfg.obscurate = obs;
-    }
-    if let Some(sd) = seed {
-        proj_cfg.obscurate_seed = Some(sd);
-    }
+fn run_watch(request: &BuildRequest) -> Result<(), String> {
+    let resolved = request.resolve().map_err(|e| e.to_string())?;
+    let proj_cfg = resolved.config;
+    let config_path = resolved.config_path;
+    let once = request.once;
 
     if proj_cfg.input_map.as_os_str().is_empty() || proj_cfg.output_map.as_os_str().is_empty() {
         return Err(
@@ -644,93 +877,19 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
 }
 
 fn cmd_build(args: &[String]) -> Result<(), String> {
-    if args.iter().any(|a| a == "--watch" || a == "-w") {
-        return cmd_watch(args);
+    let request = BuildRequest::from_args(args).map_err(|e| e.to_string())?;
+    if request.help {
+        println!(
+            "usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <script.(ts|py)>]"
+        );
+        return Ok(());
+    }
+    if request.watch {
+        return run_watch(&request);
     }
 
-    let mut config_path: Option<PathBuf> = None;
-    let mut input_map: Option<PathBuf> = None;
-    let mut output_map: Option<PathBuf> = None;
-    let mut entry_path: Option<PathBuf> = None;
-    let mut dts_out: Option<PathBuf> = None;
-    let mut obscurate: Option<bool> = None;
-    let mut seed: Option<u64> = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--config" | "-c" => {
-                i += 1;
-                config_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --config")?,
-                ));
-            }
-            "--input" | "-i" => {
-                i += 1;
-                input_map = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --input")?,
-                ));
-            }
-            "--output" | "-o" => {
-                i += 1;
-                output_map = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --output")?,
-                ));
-            }
-            "--entry" | "-e" => {
-                i += 1;
-                entry_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --entry")?,
-                ));
-            }
-            "--dts" => {
-                i += 1;
-                dts_out = Some(PathBuf::from(args.get(i).ok_or("missing value for --dts")?));
-            }
-            "--obscurate" => obscurate = Some(true),
-            "--seed" => {
-                i += 1;
-                let s = args.get(i).ok_or("missing value for --seed")?;
-                seed = Some(s.parse::<u64>().map_err(|e| e.to_string())?);
-            }
-            "--watch" | "-w" => {}
-            "--help" | "-h" => {
-                println!("usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <script.(ts|py)>]");
-                return Ok(());
-            }
-            other => return Err(format!("unknown argument for build: {other}")),
-        }
-        i += 1;
-    }
-
-    let mut proj_cfg = if let Some(cfg_file) = config_path {
-        ProjectConfig::from_file(cfg_file).map_err(|e| e.to_string())?
-    } else if Path::new("eudkit.toml").exists() && (input_map.is_none() || output_map.is_none()) {
-        ProjectConfig::from_file("eudkit.toml").map_err(|e| e.to_string())?
-    } else {
-        ProjectConfig::default()
-    };
-
-    if let Some(inp) = input_map {
-        proj_cfg.input_map = inp;
-    }
-    if let Some(out) = output_map {
-        proj_cfg.output_map = out;
-    }
-    if let Some(ent) = entry_path {
-        proj_cfg.entry = Some(ent);
-    }
-    if let Some(dts) = dts_out {
-        proj_cfg.dts = Some(dts);
-    }
-    if let Some(obs) = obscurate {
-        proj_cfg.obscurate = obs;
-    }
-    if let Some(sd) = seed {
-        proj_cfg.obscurate_seed = Some(sd);
-    }
-
-    execute_build(&proj_cfg).map(|_| ())
+    let resolved = request.resolve().map_err(|e| e.to_string())?;
+    execute_build(&resolved.config).map(|_| ())
 }
 
 fn cmd_migrate(args: &[String]) -> Result<(), String> {
@@ -903,7 +1062,7 @@ fn cmd_migrate(args: &[String]) -> Result<(), String> {
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let Some((cmd, rest)) = args.split_first() else {
-        eprintln!("usage: eudkit <inspect|dump-ir|build|watch|migrate> [options]");
+        eprintln!("usage: eudkit <inspect|dump-ir|build|synth|compile|watch|migrate> [options]");
         process::exit(1);
     };
 
@@ -911,10 +1070,12 @@ fn main() {
         "inspect" => cmd_inspect(rest),
         "dump-ir" => cmd_dump_ir(rest),
         "build" => cmd_build(rest),
+        "synth" => cmd_synth(rest),
+        "compile" => cmd_compile(rest),
         "watch" => cmd_watch(rest),
         "migrate" => cmd_migrate(rest),
         "--help" | "-h" | "help" => {
-            println!("eudkit <inspect|dump-ir|build|watch|migrate>");
+            println!("eudkit <inspect|dump-ir|build|synth|compile|watch|migrate>");
             Ok(())
         }
         "--version" | "-v" | "version" => {
@@ -927,5 +1088,58 @@ fn main() {
     if let Err(err) = res {
         eprintln!("error: {err}");
         process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_python_report;
+    use eudkit_core::CompilationReport;
+
+    fn sample_report() -> CompilationReport {
+        CompilationReport {
+            trigger_count: 12,
+            byte_buf_count: 3,
+            vproc_count: 1,
+            payload_offset: 4096,
+            payload_size: 512,
+            payload_entry_addr: 285_278_210,
+            prt_offsets: vec![16, 32],
+            ort_offsets: vec![48],
+        }
+    }
+
+    #[test]
+    fn parses_the_typed_json_python_build_report_including_vproc_count() {
+        let text = sample_report().to_json().expect("report should serialize");
+        let report = parse_python_report(&text).expect("should parse report");
+        assert_eq!(report, sample_report());
+        assert_eq!(report.vproc_count, 1);
+    }
+
+    #[test]
+    fn rejects_reports_with_missing_required_fields() {
+        let text = sample_report().to_json().expect("report should serialize");
+
+        // `vproc_count` must not silently default to zero when absent.
+        let missing_vproc = text.replace("\"vproc_count\":1,", "");
+        assert_ne!(missing_vproc, text);
+        assert!(parse_python_report(&missing_vproc).is_err());
+
+        let missing_payload = text.replace("\"payload_size\":512,", "");
+        assert_ne!(missing_payload, text);
+        assert!(parse_python_report(&missing_payload).is_err());
+
+        // The old `key=value` format is no longer accepted.
+        assert!(parse_python_report("trigger_count=12\n").is_err());
+    }
+
+    #[test]
+    fn renders_the_shared_build_summary() {
+        let report = sample_report();
+        assert_eq!(
+            report.summary("out.scx"),
+            "Built out.scx (triggers=12, payload_bytes=512, entry=0x11010002)"
+        );
     }
 }

@@ -5,11 +5,13 @@
 //! expressions; Pylance, tsserver, and basedpyright remain the source of
 //! general type information.
 
-use eudkit_core::map_context::{stock_unit_id, MapContext, CANONICAL_UNIT_NAMES};
+use eudkit_core::canonical::CANONICAL_UNIT_NAMES;
+use eudkit_core::map_context::MapSymbol;
+use eudkit_core::symbols;
 
 use crate::analysis::function_docs::function_doc;
-use crate::analysis::validation::{canonical_location_id, canonical_switch_id};
 use crate::analysis::SymbolKind;
+use crate::analysis::{canonical_symbols, MapSymbolSources};
 
 /// First canonical Stock Unit Filter ID (`Any unit`).
 const STOCK_UNIT_FILTER_START: u16 = 229;
@@ -21,7 +23,7 @@ const STOCK_UNIT_FILTER_END: u16 = 232;
 pub fn symbol_hover(
     kind: SymbolKind,
     value: &str,
-    map_context: Option<&MapContext>,
+    sources: Option<MapSymbolSources<'_>>,
 ) -> Option<String> {
     let value = value.trim();
     if value.is_empty() || value.parse::<i64>().is_ok() {
@@ -29,16 +31,27 @@ pub fn symbol_hover(
     }
 
     match kind {
-        SymbolKind::Unit => unit_hover(value, map_context),
-        SymbolKind::Location => location_hover(value, map_context),
-        SymbolKind::Switch => switch_hover(value, map_context),
+        SymbolKind::Unit => unit_hover(value, sources),
+        SymbolKind::Location => location_hover(value, sources),
+        SymbolKind::Switch => switch_hover(value, sources),
     }
 }
 
-fn unit_hover(value: &str, map_context: Option<&MapContext>) -> Option<String> {
-    let map_id = map_context.and_then(|context| context.unit_id(value));
-    let stock_id = stock_unit_id(value);
-    let id = map_id.or(stock_id)?;
+fn unit_hover(value: &str, sources: Option<MapSymbolSources<'_>>) -> Option<String> {
+    let (id, map_id, stock_id) = match sources {
+        Some((map, canonical)) => {
+            let id = symbols::unit_id(map, canonical, value)?;
+            let map_id = match map.unit_symbol(value) {
+                MapSymbol::Unique(id) => Some(id),
+                MapSymbol::Ambiguous | MapSymbol::Missing => None,
+            };
+            (id, map_id, canonical.unit_id(value))
+        }
+        None => {
+            let id = canonical_symbols().unit_id(value)?;
+            (id, None, Some(id))
+        }
+    };
 
     if (STOCK_UNIT_FILTER_START..=STOCK_UNIT_FILTER_END).contains(&id) {
         return Some(format!("**{value}**\n\nStock Unit Filter · ID {id}"));
@@ -65,17 +78,18 @@ fn unit_hover(value: &str, map_context: Option<&MapContext>) -> Option<String> {
     Some(text)
 }
 
-fn location_hover(value: &str, map_context: Option<&MapContext>) -> Option<String> {
-    let map_location = map_context.and_then(|context| {
-        context
-            .locations()
-            .iter()
-            .find(|location| location.name.as_deref() == Some(value))
-    });
-    let id = map_location
-        .map(|location| location.id)
-        .or_else(|| map_context.and_then(|context| context.location_id(value)))
-        .or_else(|| canonical_location_id(value))?;
+fn location_hover(value: &str, sources: Option<MapSymbolSources<'_>>) -> Option<String> {
+    let (id, map_location) = match sources {
+        Some((map, canonical)) => {
+            let id = symbols::location_id(map, canonical, value)?;
+            let location = map
+                .locations()
+                .iter()
+                .find(|location| location.id == id && location.name.as_deref() == Some(value));
+            (id, location)
+        }
+        None => (canonical_symbols().location_id(value)?, None),
+    };
 
     if let Some(location) = map_location {
         return Some(format!(
@@ -89,17 +103,18 @@ fn location_hover(value: &str, map_context: Option<&MapContext>) -> Option<Strin
     ))
 }
 
-fn switch_hover(value: &str, map_context: Option<&MapContext>) -> Option<String> {
-    let map_switch = map_context.and_then(|context| {
-        context
-            .switches()
-            .iter()
-            .find(|switch| switch.name.as_deref() == Some(value))
-    });
-    let id = map_switch
-        .map(|switch| switch.id)
-        .or_else(|| map_context.and_then(|context| context.switch_id(value)))
-        .or_else(|| canonical_switch_id(value))?;
+fn switch_hover(value: &str, sources: Option<MapSymbolSources<'_>>) -> Option<String> {
+    let (id, map_switch) = match sources {
+        Some((map, canonical)) => {
+            let id = symbols::switch_id(map, canonical, value)?;
+            let switch = map
+                .switches()
+                .iter()
+                .find(|switch| switch.id == id && switch.name.as_deref() == Some(value));
+            (id, switch)
+        }
+        None => (canonical_symbols().switch_id(value)?, None),
+    };
     let index = id as u32 + 1;
 
     let label = if map_switch.is_some() {

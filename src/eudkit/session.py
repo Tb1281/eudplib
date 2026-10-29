@@ -195,58 +195,60 @@ class Session:
         return ef.lower_into(self, main_loop=main_loop, inline=inline)
 
     @contextlib.contextmanager
-    def main_loop(self, name: str = "main") -> Iterator[Session]:
+    def _scope(
+        self,
+        begin: Callable[[], None],
+        end: Callable[[], None],
+    ) -> Iterator[None]:
+        """Set the ambient session around one raw begin/end block."""
         tok = _active_builder_session.set(self)
-        self._raw.begin_function(name, True)
-        try:
-            yield self
-        finally:
-            self._raw.end_function()
-            _active_builder_session.reset(tok)
-
-    @contextlib.contextmanager
-    def if_(self, conditions: Condition | Sequence[Condition]) -> Iterator[None]:
-        tok = _active_builder_session.set(self)
-        self._raw.begin_if(coerce_conditions(conditions, self))
+        begin()
         try:
             yield
         finally:
-            self._raw.end_if()
+            end()
             _active_builder_session.reset(tok)
+
+    @contextlib.contextmanager
+    def main_loop(self, name: str = "main") -> Iterator[Session]:
+        with self._scope(
+            lambda: self._raw.begin_function(name, True),
+            lambda: self._raw.end_function(),
+        ):
+            yield self
+
+    @contextlib.contextmanager
+    def if_(self, conditions: Condition | Sequence[Condition]) -> Iterator[None]:
+        with self._scope(
+            lambda: self._raw.begin_if(coerce_conditions(conditions, self)),
+            self._raw.end_if,
+        ):
+            yield
 
     @contextlib.contextmanager
     def elif_(
         self, conditions: Condition | Sequence[Condition]
     ) -> Iterator[None]:
-        tok = _active_builder_session.set(self)
-        self._raw.begin_elif(coerce_conditions(conditions, self))
-        try:
+        with self._scope(
+            lambda: self._raw.begin_elif(coerce_conditions(conditions, self)),
+            self._raw.end_elif,
+        ):
             yield
-        finally:
-            self._raw.end_elif()
-            _active_builder_session.reset(tok)
 
     @contextlib.contextmanager
     def else_(self) -> Iterator[None]:
-        tok = _active_builder_session.set(self)
-        self._raw.begin_else()
-        try:
+        with self._scope(self._raw.begin_else, self._raw.end_else):
             yield
-        finally:
-            self._raw.end_else()
-            _active_builder_session.reset(tok)
 
     @contextlib.contextmanager
     def while_(
         self, conditions: Condition | Sequence[Condition]
     ) -> Iterator[None]:
-        tok = _active_builder_session.set(self)
-        self._raw.begin_while(coerce_conditions(conditions, self))
-        try:
+        with self._scope(
+            lambda: self._raw.begin_while(coerce_conditions(conditions, self)),
+            self._raw.end_while,
+        ):
             yield
-        finally:
-            self._raw.end_while()
-            _active_builder_session.reset(tok)
 
     @contextlib.contextmanager
     def once(
@@ -258,14 +260,13 @@ class Session:
         executes once, and permanently deactivates its guard.
         If `conditions` is None, executes on the very first trigger loop and permanently deactivates.
         """
-        tok = _active_builder_session.set(self)
-        raw_conds = coerce_conditions(conditions, self) if conditions is not None else []
-        self._raw.begin_once(raw_conds)
-        try:
+        with self._scope(
+            lambda: self._raw.begin_once(
+                coerce_conditions(conditions, self) if conditions is not None else []
+            ),
+            self._raw.end_reactive,
+        ):
             yield
-        finally:
-            self._raw.end_reactive()
-            _active_builder_session.reset(tok)
 
     @contextlib.contextmanager
     def when(
@@ -276,14 +277,11 @@ class Session:
         In StarCraft's polling-based trigger VM, `when(cond)` evaluates conditions at the start
         of each trigger loop pass. As long as the conditions remain true, the enclosed actions execute.
         """
-        tok = _active_builder_session.set(self)
-        raw_conds = coerce_conditions(conditions, self)
-        self._raw.begin_when(raw_conds)
-        try:
+        with self._scope(
+            lambda: self._raw.begin_when(coerce_conditions(conditions, self)),
+            self._raw.end_reactive,
+        ):
             yield
-        finally:
-            self._raw.end_reactive()
-            _active_builder_session.reset(tok)
 
     @contextlib.contextmanager
     def until(
@@ -294,14 +292,11 @@ class Session:
         Evaluated each trigger loop cycle. As soon as `condition` becomes true, the guard flips
         and the block will never execute again in subsequent trigger loops.
         """
-        tok = _active_builder_session.set(self)
-        raw_conds = coerce_conditions(condition, self)
-        self._raw.begin_until(raw_conds)
-        try:
+        with self._scope(
+            lambda: self._raw.begin_until(coerce_conditions(condition, self)),
+            self._raw.end_reactive,
+        ):
             yield
-        finally:
-            self._raw.end_reactive()
-            _active_builder_session.reset(tok)
 
     @contextlib.contextmanager
     def after(
@@ -322,13 +317,11 @@ class Session:
         
         :param loops: Number of trigger loop evaluation cycles to wait before executing (e.g. 24 loops = ~1 second under Turbo).
         """
-        tok = _active_builder_session.set(self)
-        self._raw.begin_after(int(loops))
-        try:
+        with self._scope(
+            lambda: self._raw.begin_after(int(loops)),
+            self._raw.end_reactive,
+        ):
             yield
-        finally:
-            self._raw.end_reactive()
-            _active_builder_session.reset(tok)
 
     @contextlib.contextmanager
     def every(
@@ -348,13 +341,11 @@ class Session:
         
         :param loops: Interval in trigger loop cycles between successive firings (e.g. 24 loops = every 1s under Turbo).
         """
-        tok = _active_builder_session.set(self)
-        self._raw.begin_every(int(loops))
-        try:
+        with self._scope(
+            lambda: self._raw.begin_every(int(loops)),
+            self._raw.end_reactive,
+        ):
             yield
-        finally:
-            self._raw.end_reactive()
-            _active_builder_session.reset(tok)
 
     def break_(self) -> None:
         self._raw.push_break()
@@ -386,6 +377,14 @@ class Session:
 
     def dump_hir(self) -> str:
         return self._raw.dump_hir()
+
+    def dump_plan(self) -> str:
+        """Returns the canonical, versioned HIR plan for this session."""
+        return self._raw.dump_plan()
+
+    def write_plan(self, output_path: str | Path) -> None:
+        """Writes the canonical HIR plan artifact (`.eudhir`) for this session."""
+        self._raw.write_plan(str(output_path))
 
     def dump_lir(self) -> str:
         return self._raw.dump_lir()
