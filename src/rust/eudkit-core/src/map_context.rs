@@ -2,6 +2,7 @@ pub use crate::canonical::{
     stock_unit_id, CanonicalSymbols, CanonicalUnit, CANONICAL_UNITS, CANONICAL_UNIT_NAMES,
 };
 use crate::chk::Chk;
+use crate::chk_layout::classic;
 use crate::error::{EudkitError, Result};
 use std::collections::{HashMap, HashSet};
 
@@ -715,38 +716,17 @@ impl MapData {
             }
         }
 
-        // Parse TRIG (2400B each)
+        // Parse classic TRIG entries.
         let mut triggers = Vec::new();
         if let Some(trig) = chk.section(b"TRIG") {
-            for (idx, rec) in trig.chunks_exact(2400).enumerate() {
-                let flags = u32::from_le_bytes(rec[2368..2372].try_into().unwrap());
-                let mut players = [0u8; 28];
-                players.copy_from_slice(&rec[2372..2400]);
-
-                let mut condition_count = 0;
-                for c in 0..16 {
-                    let cond_type = rec[c * 20 + 15];
-                    if cond_type == 0 {
-                        break;
-                    }
-                    condition_count += 1;
-                }
-
-                let mut action_count = 0;
-                for a in 0..64 {
-                    let act_type = rec[320 + a * 32 + 26];
-                    if act_type == 0 {
-                        break;
-                    }
-                    action_count += 1;
-                }
-
+            for (idx, rec) in trig.chunks_exact(classic::TRIGGER_SIZE).enumerate() {
+                let trigger = classic::unpack_trigger(rec);
                 triggers.push(MapTrigger {
                     index: idx,
-                    flags,
-                    players,
-                    condition_count,
-                    action_count,
+                    flags: trigger.flags(),
+                    players: trigger.players(),
+                    condition_count: trigger.condition_count(),
+                    action_count: trigger.action_count(),
                     raw: rec.to_vec(),
                 });
             }

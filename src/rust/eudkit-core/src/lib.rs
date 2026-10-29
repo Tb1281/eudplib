@@ -1,6 +1,7 @@
 pub mod allocator;
 pub mod canonical;
 pub mod chk;
+pub mod chk_layout;
 pub mod config;
 pub mod cp_string;
 pub mod dts;

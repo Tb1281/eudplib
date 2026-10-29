@@ -1,7 +1,12 @@
 use crate::chk::Chk;
+use crate::chk_layout::classic;
+use crate::chk_layout::classic::{
+    pack_action as pack_chk_action, pack_condition as pack_chk_condition,
+    pack_trigger as pack_chk_trigger,
+};
+use crate::chk_layout::{ACTION_COUNT, ACTION_SIZE};
 use crate::error::Result;
 use crate::hir::{epd, STRX_BASE_ADDR};
-use crate::injector::{pack_chk_action, pack_chk_condition, pack_chk_trigger};
 use crate::lir::{LirModule, LirObject, ValueExpr};
 use crate::map_context::MapContext;
 
@@ -236,15 +241,15 @@ pub fn protect_chk_sections(
     // 3. Strip debug comment actions from existing TRIG section
     if let Some(trig_data) = chk.section(b"TRIG") {
         let mut new_trig = trig_data.to_vec();
-        let trigger_count = new_trig.len() / 2400;
+        let trigger_count = new_trig.len() / classic::TRIGGER_SIZE;
         for t_idx in 0..trigger_count {
-            let t_base = t_idx * 2400;
-            for a_idx in 0..64 {
-                let act_base = t_base + 320 + a_idx * 32;
-                let acttype = new_trig[act_base + 26];
+            let t_base = t_idx * classic::TRIGGER_SIZE;
+            for a_idx in 0..ACTION_COUNT {
+                let act_base = t_base + classic::action_offset(a_idx);
+                let acttype = new_trig[act_base + classic::ACTION_TYPE_OFFSET];
                 if acttype == 47 {
                     // Strip Comment action
-                    new_trig[act_base..act_base + 32].fill(0);
+                    new_trig[act_base..act_base + ACTION_SIZE].fill(0);
                 }
             }
         }
@@ -259,7 +264,7 @@ pub fn protect_chk_sections(
 pub fn build_obscuration_restore_triggers(
     mrgn_info: Option<&MrgnRestoreInfo>,
     string_restores: &[StringRestoreItem],
-) -> Vec<[u8; 2400]> {
+) -> Vec<[u8; classic::TRIGGER_SIZE]> {
     let mut actions = Vec::new();
 
     // 1. MRGN restore actions (+ mrgn_mask to runtime 0x0058DC60)

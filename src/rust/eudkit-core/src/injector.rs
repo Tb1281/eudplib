@@ -1,9 +1,18 @@
 use crate::allocator::AllocatedPayload;
 use crate::chk::Chk;
+use crate::chk_layout::classic;
 use crate::error::Result;
 use crate::hir::{epd, CURRENT_PLAYER_ADDR, PTS_BASE_ADDR, STRX_BASE_ADDR};
 use crate::lir::EUDX_SIGNATURE;
 use crate::map_context::{MapContext, MapTrigger};
+
+pub use crate::chk_layout::classic::{
+    pack_action as pack_chk_action, pack_condition as pack_chk_condition,
+    pack_trigger as pack_chk_trigger,
+};
+
+/// Number of classic `TRIG` entries in the single-stage entry bootstrap.
+pub const BOOTSTRAP_TRIGGER_COUNT: usize = 70;
 
 /// The typed result of one compilation, shared by the Rust CLI, the Python
 /// runner, and the Python CLI.
@@ -74,7 +83,7 @@ pub fn inject_payload_into_chk_with_restores(
     trigger_count: usize,
     byte_buf_count: usize,
     vproc_count: usize,
-    restore_triggers: &[[u8; 2400]],
+    restore_triggers: &[[u8; classic::TRIGGER_SIZE]],
 ) -> Result<CompilationReport> {
     let mut strx_bytes = map_ctx.string_table().serialize_strx();
     let str_padding = (4 - (strx_bytes.len() & 3)) & 3;
@@ -123,91 +132,18 @@ pub fn inject_payload_into_chk_with_restores(
     })
 }
 
-pub fn pack_chk_condition(
-    locid: u32,
-    player: i32,
-    amount: u32,
-    unitid: u16,
-    comparison: u8,
-    condtype: u8,
-    restype: u8,
-    flag: u8,
-    eudx: u16,
-) -> [u8; 20] {
-    let mut out = [0u8; 20];
-    out[0..4].copy_from_slice(&locid.to_le_bytes());
-    out[4..8].copy_from_slice(&(player as u32).to_le_bytes());
-    out[8..12].copy_from_slice(&amount.to_le_bytes());
-    out[12..14].copy_from_slice(&unitid.to_le_bytes());
-    out[14] = comparison;
-    out[15] = condtype;
-    out[16] = restype;
-    out[17] = flag;
-    out[18..20].copy_from_slice(&eudx.to_le_bytes());
-    out
-}
-
-pub fn pack_chk_action(
-    locid1: u32,
-    strid: u32,
-    wavid: u32,
-    time: u32,
-    player1: i32,
-    player2: i32,
-    unitid: u16,
-    acttype: u8,
-    amount: u8,
-    flags: u8,
-    eudx: u16,
-) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out[0..4].copy_from_slice(&locid1.to_le_bytes());
-    out[4..8].copy_from_slice(&strid.to_le_bytes());
-    out[8..12].copy_from_slice(&wavid.to_le_bytes());
-    out[12..16].copy_from_slice(&time.to_le_bytes());
-    out[16..20].copy_from_slice(&(player1 as u32).to_le_bytes());
-    out[20..24].copy_from_slice(&(player2 as u32).to_le_bytes());
-    out[24..26].copy_from_slice(&unitid.to_le_bytes());
-    out[26] = acttype;
-    out[27] = amount;
-    out[28] = flags;
-    out[29] = 0;
-    out[30..32].copy_from_slice(&eudx.to_le_bytes());
-    out
-}
-
-pub fn pack_chk_trigger(
-    players: &[u8],
-    conditions: &[[u8; 20]],
-    actions: &[[u8; 32]],
-    flags: u32,
-) -> [u8; 2400] {
-    let mut out = [0u8; 2400];
-    for (i, cond) in conditions.iter().take(16).enumerate() {
-        out[i * 20..(i + 1) * 20].copy_from_slice(cond);
-    }
-    for (i, act) in actions.iter().take(64).enumerate() {
-        let base = 320 + i * 32;
-        out[base..base + 32].copy_from_slice(act);
-    }
-    out[2368..2372].copy_from_slice(&flags.to_le_bytes());
-    for &p in players {
-        if (p as usize) < 28 {
-            out[2372 + p as usize] = 1;
-        }
-    }
-    out
-}
-
 /// Builds the `TRIG` section: preserves classic map triggers followed by optional
 /// obscuration restore triggers and the 70-trigger single-stage `TRIG` entry bootstrap
 /// that redirects `pts[player]` (`0x51A280`) into `payload_entry_addr` in `STRx`.
 pub fn build_trig_section(
     payload_entry_addr: u32,
     classic_triggers: &[MapTrigger],
-    restore_triggers: &[[u8; 2400]],
+    restore_triggers: &[[u8; classic::TRIGGER_SIZE]],
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity((classic_triggers.len() + restore_triggers.len() + 70) * 2400);
+    let mut out = Vec::with_capacity(
+        (classic_triggers.len() + restore_triggers.len() + BOOTSTRAP_TRIGGER_COUNT)
+            * classic::TRIGGER_SIZE,
+    );
 
     // 1. Preserve classic map triggers intact
     for trig in classic_triggers {
