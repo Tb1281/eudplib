@@ -1,6 +1,7 @@
-use eudkit_core::hir::{HirStmt, Modifier, PlayerId, StockAction};
+use eudkit_core::hir::{HirModule, HirStmt, Modifier, PlayerId, ReactiveRule, StockAction};
 use eudkit_core::{CompilationConfig, CompilationSession};
 use eudkit_ts::compile_ts_to_hir;
+use std::fs;
 use std::path::PathBuf;
 
 fn repo_root() -> PathBuf {
@@ -19,7 +20,8 @@ fn compiles_typescript_functions_control_flow_and_actions_to_hir() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let ts_source = r#"
 import { var_, Player1, Add, SetDeaths, SetResources, Ore, Gas } from "@eudkit/sdk";
@@ -69,8 +71,8 @@ export function main() {
 }
 "#;
 
-    let hir =
-        compile_ts_to_hir(ts_source, "ts_test_module", map_ctx).expect("should compile TS to HIR");
+    let hir = compile_ts_to_hir(ts_source, "ts_test_module", map_data, canonical_symbols)
+        .expect("should compile TS to HIR");
 
     assert_eq!(hir.name, "ts_test_module");
     assert_eq!(hir.variables().len(), 3);
@@ -126,7 +128,8 @@ fn compiles_typescript_structs_helper_functions_and_arithmetic_ops() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let ts_source = r#"
 import { var_, CUnit, EPD, SetDeaths, Player1, Add } from "@eudkit/sdk";
@@ -151,7 +154,7 @@ export function main() {
 }
 "#;
 
-    let hir = compile_ts_to_hir(ts_source, "struct_test", map_ctx)
+    let hir = compile_ts_to_hir(ts_source, "struct_test", map_data, canonical_symbols)
         .expect("should compile TS struct test");
 
     // 2 global vars (hp, unit_epd) + 2 params (clampHp_val, clampHp_max) + 1 local var (next_hp) = 5 vars
@@ -193,7 +196,8 @@ fn compiles_typescript_format_print_and_user_cp() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let ts_source = r#"
 import { var_, IsUserCP, f_eprintln, print_at, display_at, displayAt } from "@eudkit/sdk";
@@ -210,7 +214,7 @@ export function main() {
 }
 "#;
 
-    let hir = compile_ts_to_hir(ts_source, "ts_print_test", map_ctx)
+    let hir = compile_ts_to_hir(ts_source, "ts_print_test", map_data, canonical_symbols)
         .expect("should compile TS print test");
 
     assert_eq!(hir.variables().len(), 1);
@@ -248,7 +252,8 @@ fn compiles_typescript_reactive_primitives_once_when_until_after_every() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let ts_source = r#"
 import { var_, once, when, until, after, every, DisplayText, SetResources, Player1, Add, Ore } from "@eudkit/sdk";
@@ -285,7 +290,7 @@ export function main() {
 }
 "#;
 
-    let mut hir = compile_ts_to_hir(ts_source, "ts_reactive_test", map_ctx)
+    let mut hir = compile_ts_to_hir(ts_source, "ts_reactive_test", map_data, canonical_symbols)
         .expect("should compile TS reactive primitives to HIR");
 
     let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
@@ -335,7 +340,8 @@ fn compiles_typescript_with_ambient_session_and_string_buffer() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let ts_source = r#"
 import { session, DisplayText, display_at, IsUserCP } from "eudkit";
@@ -352,8 +358,13 @@ export function main() {
 }
 "#;
 
-    let hir = compile_ts_to_hir(ts_source, "ts_ambient_session_test", map_ctx)
-        .expect("should compile TS ambient session test");
+    let hir = compile_ts_to_hir(
+        ts_source,
+        "ts_ambient_session_test",
+        map_data,
+        canonical_symbols,
+    )
+    .expect("should compile TS ambient session test");
 
     assert_eq!(hir.variables().len(), 1);
     assert_eq!(hir.variables()[0].name, "kills");
@@ -389,12 +400,162 @@ export function main() {
     );
 }
 
+fn collect_reactive_rules(stmts: &[HirStmt], out: &mut Vec<ReactiveRule>) {
+    for stmt in stmts {
+        match stmt {
+            HirStmt::Reactive(rule) => {
+                out.push(rule.clone());
+                let body = match rule {
+                    ReactiveRule::Once { body, .. }
+                    | ReactiveRule::When { body, .. }
+                    | ReactiveRule::Until { body, .. }
+                    | ReactiveRule::After { body, .. }
+                    | ReactiveRule::Every { body, .. } => body,
+                };
+                collect_reactive_rules(body, out);
+            }
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_reactive_rules(then_body, out);
+                collect_reactive_rules(else_body, out);
+            }
+            HirStmt::While { body, .. } => collect_reactive_rules(body, out),
+            _ => {}
+        }
+    }
+}
+
+fn reactive_rules(hir: &HirModule) -> Vec<ReactiveRule> {
+    let mut rules = Vec::new();
+    for function in &hir.functions {
+        for block in &function.blocks {
+            collect_reactive_rules(&block.stmts, &mut rules);
+        }
+    }
+    rules
+}
+
+#[test]
+fn reactive_conformance_fixture_matches_shared_golden_rules() {
+    let root = repo_root();
+    let fixture_dir = root.join("tests/fixtures/reactive_conformance");
+    let map_path = root.join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let source = fs::read_to_string(fixture_dir.join("main.ts"))
+        .expect("should read the TypeScript conformance fixture");
+
+    let hir = compile_ts_to_hir(
+        &source,
+        "reactive_conformance",
+        session.map_data(),
+        session.canonical_symbols(),
+    )
+    .expect("should compile the TypeScript conformance fixture");
+    let actual = serde_json::to_value(reactive_rules(&hir)).expect("rules should serialize");
+    let expected: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(fixture_dir.join("expected_rules.json"))
+            .expect("should read the shared expected rules"),
+    )
+    .expect("expected_rules.json should be valid JSON");
+
+    assert_eq!(
+        actual, expected,
+        "TypeScript reactive rules must match the shared Python/TypeScript fixture"
+    );
+
+    let second = compile_ts_to_hir(
+        &source,
+        "reactive_conformance",
+        session.map_data(),
+        session.canonical_symbols(),
+    )
+    .expect("should compile the conformance fixture twice");
+    assert_eq!(
+        serde_json::to_value(&hir).unwrap(),
+        serde_json::to_value(&second).unwrap(),
+        "compiling the same reactive fixture twice must emit identical HIR"
+    );
+}
+
+#[test]
+fn reactive_primitives_support_namespaced_calls_and_reject_invalid_shapes() {
+    let root = repo_root();
+    let map_path = root.join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
+
+    let namespaced = r#"
+import { var_, DisplayText } from "@eudkit/sdk";
+let flag = var_(0, "flag");
+export function main() {
+    eud.once(() => { DisplayText("eud once"); });
+    eudkit.when(flag.atLeast(1), () => { DisplayText("eudkit when"); });
+    once(null, () => { DisplayText("null once"); });
+    once(undefined, () => { DisplayText("undefined once"); });
+}
+"#;
+    let hir = compile_ts_to_hir(
+        namespaced,
+        "namespaced_reactive",
+        map_data,
+        canonical_symbols,
+    )
+    .expect("namespaced and nullish reactive forms should compile");
+    let rules = reactive_rules(&hir);
+    assert_eq!(rules.len(), 4, "must emit one rule per reactive call");
+    assert!(matches!(rules[0], ReactiveRule::Once { .. }));
+    assert!(matches!(rules[1], ReactiveRule::When { .. }));
+    for rule in &rules[2..] {
+        match rule {
+            ReactiveRule::Once { cond, .. } => {
+                assert!(cond.is_empty(), "nullish once must have no condition");
+            }
+            other => panic!("expected a nullish once rule, got {other:?}"),
+        }
+    }
+
+    let invalid_cases = [
+        ("once()", "once expects"),
+        ("once(1)", "once expects a function callback"),
+        ("once(flag.atLeast(1))", "once expects a function callback"),
+        (
+            "once(() => {}, () => {})",
+            "once(condition, callback) expects a condition",
+        ),
+        ("when(flag.atLeast(1))", "when expects"),
+        ("until(flag.atLeast(1))", "until expects"),
+        ("after(24)", "after expects"),
+        ("after(-1, () => {})", "non-negative"),
+        ("every(12)", "every expects"),
+        ("every(12, 42)", "every expects a function callback"),
+    ];
+
+    for (call, expected_message) in invalid_cases {
+        let source = format!(
+            "import {{ var_, DisplayText }} from \"@eudkit/sdk\";\nlet flag = var_(0, \"flag\");\nexport function main() {{ {call}; }}"
+        );
+        let error = compile_ts_to_hir(&source, "invalid_reactive", map_data, canonical_symbols)
+            .expect_err("an invalid reactive shape must fail instead of being ignored")
+            .to_string();
+        assert!(
+            error.contains(expected_message),
+            "expected {expected_message:?} in {error:?} for `{call}`"
+        );
+    }
+}
 #[test]
 fn compiles_typescript_memory_reads_consistently_for_declarations_and_assignments() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let ts_source = r#"
 import {
@@ -426,7 +587,7 @@ export function main() {
 }
 "#;
 
-    let hir = compile_ts_to_hir(ts_source, "ts_mem_read_test", map_ctx)
+    let hir = compile_ts_to_hir(ts_source, "ts_mem_read_test", map_data, canonical_symbols)
         .expect("should compile TS memory reads");
     let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
     let reads: Vec<&HirStmt> = main_fn.blocks[0]
@@ -482,4 +643,119 @@ export function main() {
         assert_eq!(*decl_mask, *mask);
         assert_eq!(*decl_init, *initial_val);
     }
+}
+
+#[test]
+fn compiles_player_groups_without_lossy_epd_fallback() {
+    let map_path = repo_root().join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
+
+    let ts_source = r#"
+import {
+    Add,
+    Allies,
+    AllPlayers,
+    Foes,
+    Force1,
+    Force2,
+    Force3,
+    Force4,
+    NeutralPlayers,
+    NonAlliedVictoryPlayers,
+    SetDeaths,
+} from "@eudkit/sdk";
+
+export function main() {
+    SetDeaths(Foes, Add, 1, "Terran Marine");
+    SetDeaths(Allies, Add, 1, "Terran Marine");
+    SetDeaths(NeutralPlayers, Add, 1, "Terran Marine");
+    SetDeaths(AllPlayers, Add, 1, "Terran Marine");
+    SetDeaths(Force1, Add, 1, "Terran Marine");
+    SetDeaths(Force2, Add, 1, "Terran Marine");
+    SetDeaths(Force3, Add, 1, "Terran Marine");
+    SetDeaths(Force4, Add, 1, "Terran Marine");
+    SetDeaths(NonAlliedVictoryPlayers, Add, 1, "Terran Marine");
+}
+"#;
+
+    let hir = compile_ts_to_hir(ts_source, "player_group_test", map_data, canonical_symbols)
+        .expect("should compile player groups");
+
+    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
+    let players: Vec<PlayerId> = main_fn.blocks[0]
+        .stmts
+        .iter()
+        .filter_map(|stmt| match stmt {
+            HirStmt::Action(StockAction::SetDeaths { player, .. }) => Some(*player),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        players,
+        vec![
+            PlayerId::Foes,
+            PlayerId::Allies,
+            PlayerId::NeutralPlayers,
+            PlayerId::AllPlayers,
+            PlayerId::Force1,
+            PlayerId::Force2,
+            PlayerId::Force3,
+            PlayerId::Force4,
+            PlayerId::NonAlliedVictoryPlayers,
+        ]
+    );
+}
+
+#[test]
+fn rejects_invalid_switch_actions_and_keeps_valid_aliases() {
+    let map_path = repo_root().join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
+
+    let error = compile_ts_to_hir(
+        r#"
+import { SetSwitch } from "@eudkit/sdk";
+
+export function main() {
+    SetSwitch(0, 8);
+}
+"#,
+        "invalid_switch_action",
+        map_data,
+        canonical_symbols,
+    )
+    .expect_err("invalid switch action must be a compile error");
+    assert!(
+        error.to_string().contains("invalid switch action 8"),
+        "unexpected error: {error}"
+    );
+
+    let hir = compile_ts_to_hir(
+        r#"
+import { Random, SetSwitch } from "@eudkit/sdk";
+
+export function main() {
+    SetSwitch(0, Random);
+}
+"#,
+        "valid_switch_action",
+        map_data,
+        canonical_symbols,
+    )
+    .expect("valid switch action alias should compile");
+
+    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
+    assert!(main_fn.blocks[0].stmts.iter().any(|stmt| matches!(
+        stmt,
+        HirStmt::Action(StockAction::SetSwitch {
+            action: eudkit_core::hir::SwitchAction::Random,
+            ..
+        })
+    )));
 }

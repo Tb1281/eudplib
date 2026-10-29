@@ -76,25 +76,6 @@ def reactive_projection(hir: str) -> list[str]:
     return projection
 
 
-def exported_function_body(source: str, name: str) -> str:
-    """Return the brace-delimited body of an exported TypeScript function."""
-    match = re.search(rf"export function {name}\(", source)
-    if match is None:
-        raise AssertionError(f"export function {name} not found in TS SDK")
-
-    start = source.index("{", match.end())
-    depth = 0
-    for index in range(start, len(source)):
-        char = source[index]
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return source[start + 1 : index]
-    raise AssertionError(f"unterminated body for export function {name}")
-
-
 class TestReactiveRuleParity(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -147,10 +128,16 @@ class TestReactiveRuleParity(unittest.TestCase):
         source = TS_SDK_INDEX.read_text(encoding="utf-8")
 
         for name in ("once", "when", "until", "after", "every"):
-            body = exported_function_body(source, name)
-            self.assertIn(f'compileTimeOnlyReactive("{name}")', body)
-            self.assertNotIn("var_(", body, f"{name} must not allocate runtime variables")
-            self.assertNotIn("callback()", body, f"{name} must not execute its callback")
+            self.assertRegex(
+                source,
+                rf"export declare function {name}\(",
+                f"{name} must be an ambient compile-time declaration",
+            )
+            self.assertNotRegex(
+                source,
+                rf"export function {name}\(",
+                f"{name} must not ship a runtime implementation",
+            )
 
         self.assertNotIn(
             "Boolean(condition)",

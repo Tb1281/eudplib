@@ -16,6 +16,7 @@ htmlcov/
 *.py[co]
 .hypothesis/
 target/
+node_modules/
 .rust-cov/
 src/rust/stormlib-rs/**/*.lock
 

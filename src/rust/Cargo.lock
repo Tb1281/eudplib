@@ -251,6 +251,8 @@ name = "eudkit-core"
 version = "0.1.2"
 dependencies = [
  "eudplib-stormlib",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 1.0.69",
 ]
@@ -292,6 +294,7 @@ dependencies = [
  "oxc_ast",
  "oxc_parser",
  "oxc_span",
+ "serde_json",
  "tempfile",
  "thiserror 1.0.69",
 ]

@@ -14,7 +14,7 @@ use crate::hir::{
     epd, Comparison, FormatPart, HirBinOp, HirExpr, HirModule, HirStmt, Modifier, PrintTarget,
     StockAction, StockCondition, StringBufferId, VarId,
 };
-use crate::map_context::MapContext;
+use crate::map_context::MapData;
 
 /// Capacity reserved for the shared scratch buffer used by `f_eprintln` and
 /// other formatted `DisplayText` actions.
@@ -648,7 +648,7 @@ fn module_has_formatting(hir: &HirModule) -> bool {
             .any(|f| f.blocks.iter().any(|block| stmts_have(&block.stmts)))
 }
 
-fn resolve_display_texts_in_stmts(stmts: &mut [HirStmt], map_ctx: &mut MapContext) {
+fn resolve_display_texts_in_stmts(stmts: &mut [HirStmt], map_ctx: &mut MapData) {
     for stmt in stmts {
         match stmt {
             HirStmt::Action(action) => resolve_display_text(action, map_ctx),
@@ -671,7 +671,7 @@ fn resolve_display_texts_in_stmts(stmts: &mut [HirStmt], map_ctx: &mut MapContex
     }
 }
 
-fn resolve_display_text(action: &mut StockAction, map_ctx: &mut MapContext) {
+fn resolve_display_text(action: &mut StockAction, map_ctx: &mut MapData) {
     if let StockAction::DisplayText {
         text,
         always_display,
@@ -687,7 +687,7 @@ fn resolve_display_text(action: &mut StockAction, map_ctx: &mut MapContext) {
 
 /// Registers every string used by runtime formatting, resolves the final
 /// string addresses, then rewrites formatted actions into primitive HIR.
-pub fn expand_format_actions(hir: &mut HirModule, map_ctx: &mut MapContext) -> Result<()> {
+pub fn expand_format_actions(hir: &mut HirModule, map_ctx: &mut MapData) -> Result<()> {
     // Resolve static `DisplayText` strings first.  They may reuse empty
     // string-table slots and therefore move data offsets around.
     for func in &mut hir.functions {

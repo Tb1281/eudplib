@@ -4,6 +4,8 @@ use eudkit_core::hir::{
     HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget, ResourceType, StockAction,
     StockCondition, SwitchAction, SwitchState, VarId,
 };
+use eudkit_core::plan::{HirPlan, PlanMap};
+use eudkit_core::symbols;
 use eudkit_core::{CompilationConfig, CompilationSession, EudkitError, HirBuilder};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -23,86 +25,32 @@ fn to_py_err(err: EudkitError) -> PyErr {
 }
 
 fn decode_comparison(code: u8) -> PyResult<Comparison> {
-    match code {
-        0 => Ok(Comparison::AtLeast),
-        1 => Ok(Comparison::AtMost),
-        10 => Ok(Comparison::Exactly),
-        other => Err(PyValueError::new_err(format!(
-            "invalid comparison code: {other}"
-        ))),
-    }
+    Comparison::from_code(code)
+        .ok_or_else(|| PyValueError::new_err(format!("invalid comparison code: {code}")))
 }
 
 fn decode_modifier(code: u8) -> PyResult<Modifier> {
-    match code {
-        7 => Ok(Modifier::SetTo),
-        8 => Ok(Modifier::Add),
-        9 => Ok(Modifier::Subtract),
-        other => Err(PyValueError::new_err(format!(
-            "invalid modifier code: {other}"
-        ))),
-    }
+    Modifier::from_code(code)
+        .ok_or_else(|| PyValueError::new_err(format!("invalid modifier code: {code}")))
 }
 
 fn decode_resource(code: u8) -> PyResult<ResourceType> {
-    match code {
-        0 => Ok(ResourceType::Ore),
-        1 => Ok(ResourceType::Gas),
-        2 => Ok(ResourceType::OreAndGas),
-        other => Err(PyValueError::new_err(format!(
-            "invalid resource code: {other}"
-        ))),
-    }
+    ResourceType::from_code(code)
+        .ok_or_else(|| PyValueError::new_err(format!("invalid resource code: {code}")))
 }
 
 fn decode_switch_state(code: u8) -> PyResult<SwitchState> {
-    match code {
-        2 => Ok(SwitchState::Set),
-        3 => Ok(SwitchState::Cleared),
-        other => Err(PyValueError::new_err(format!(
-            "invalid switch state code: {other}"
-        ))),
-    }
+    SwitchState::from_code(code)
+        .ok_or_else(|| PyValueError::new_err(format!("invalid switch state code: {code}")))
 }
 
 fn decode_switch_action(code: u8) -> PyResult<SwitchAction> {
-    match code {
-        4 | 2 => Ok(SwitchAction::Set),
-        5 | 3 => Ok(SwitchAction::Clear),
-        6 => Ok(SwitchAction::Toggle),
-        11 | 7 => Ok(SwitchAction::Random),
-        other => Err(PyValueError::new_err(format!(
-            "invalid switch action code: {other}"
-        ))),
-    }
+    SwitchAction::from_code(code)
+        .ok_or_else(|| PyValueError::new_err(format!("invalid switch action code: {code}")))
 }
 
 fn decode_player(code: i32) -> PlayerId {
-    match code {
-        0 => PlayerId::Player1,
-        1 => PlayerId::Player2,
-        2 => PlayerId::Player3,
-        3 => PlayerId::Player4,
-        4 => PlayerId::Player5,
-        5 => PlayerId::Player6,
-        6 => PlayerId::Player7,
-        7 => PlayerId::Player8,
-        8 => PlayerId::Player9,
-        9 => PlayerId::Player10,
-        10 => PlayerId::Player11,
-        11 => PlayerId::Player12,
-        13 => PlayerId::CurrentPlayer,
-        14 => PlayerId::Foes,
-        15 => PlayerId::Allies,
-        16 => PlayerId::NeutralPlayers,
-        17 => PlayerId::AllPlayers,
-        18 => PlayerId::Force1,
-        19 => PlayerId::Force2,
-        20 => PlayerId::Force3,
-        21 => PlayerId::Force4,
-        26 => PlayerId::NonAlliedVictoryPlayers,
-        other => PlayerId::Epd(other),
-    }
+    PlayerId::from_code(code)
 }
 
 fn decode_bin_op(code: u8) -> PyResult<HirBinOp> {
@@ -678,29 +626,79 @@ impl PyAction {
     }
 }
 
+/// The typed compilation result exposed to Python.
+///
+/// It wraps the core `CompilationReport` so the summary text and JSON wire
+/// format have exactly one implementation, shared with the Rust CLI.
 #[derive(Clone, Debug)]
 #[pyclass(from_py_object, name = "CompilationReport", module = "eudkit._rust")]
 pub struct PyCompilationReport {
-    #[pyo3(get)]
-    pub trigger_count: usize,
-    #[pyo3(get)]
-    pub byte_buf_count: usize,
-    #[pyo3(get)]
-    pub vproc_count: usize,
-    #[pyo3(get)]
-    pub payload_offset: usize,
-    #[pyo3(get)]
-    pub payload_size: usize,
-    #[pyo3(get)]
-    pub payload_entry_addr: u32,
-    #[pyo3(get)]
-    pub prt_count: usize,
-    #[pyo3(get)]
-    pub ort_count: usize,
-    #[pyo3(get)]
-    pub prt_offsets: Vec<usize>,
-    #[pyo3(get)]
-    pub ort_offsets: Vec<usize>,
+    report: eudkit_core::CompilationReport,
+}
+
+#[pymethods]
+impl PyCompilationReport {
+    #[getter]
+    fn trigger_count(&self) -> usize {
+        self.report.trigger_count
+    }
+
+    #[getter]
+    fn byte_buf_count(&self) -> usize {
+        self.report.byte_buf_count
+    }
+
+    #[getter]
+    fn vproc_count(&self) -> usize {
+        self.report.vproc_count
+    }
+
+    #[getter]
+    fn payload_offset(&self) -> usize {
+        self.report.payload_offset
+    }
+
+    #[getter]
+    fn payload_size(&self) -> usize {
+        self.report.payload_size
+    }
+
+    #[getter]
+    fn payload_entry_addr(&self) -> u32 {
+        self.report.payload_entry_addr
+    }
+
+    #[getter]
+    fn prt_count(&self) -> usize {
+        self.report.prt_offsets.len()
+    }
+
+    #[getter]
+    fn ort_count(&self) -> usize {
+        self.report.ort_offsets.len()
+    }
+
+    #[getter]
+    fn prt_offsets(&self) -> Vec<usize> {
+        self.report.prt_offsets.clone()
+    }
+
+    #[getter]
+    fn ort_offsets(&self) -> Vec<usize> {
+        self.report.ort_offsets.clone()
+    }
+
+    /// Renders the same one-line summary as the Rust CLI.
+    fn summary(&self, output_map: &str) -> String {
+        self.report.summary(output_map)
+    }
+
+    /// Serializes the typed report as JSON for the Rust CLI.
+    fn to_json(&self) -> PyResult<String> {
+        self.report
+            .to_json()
+            .map_err(|e| PyRuntimeError::new_err(format!("failed to serialize build report: {e}")))
+    }
 }
 
 #[pyclass(unsendable, name = "RawSession", module = "eudkit._rust")]
@@ -762,29 +760,35 @@ impl PyCompilationSession {
     }
 
     fn location_id(&self, name: &str) -> PyResult<u32> {
-        self.session
-            .map_context()
-            .location_id(name)
-            .ok_or_else(|| PyKeyError::new_err(format!("unknown location: {name:?}")))
+        symbols::location_id(
+            self.session.map_data(),
+            self.session.canonical_symbols(),
+            name,
+        )
+        .ok_or_else(|| PyKeyError::new_err(format!("unknown location: {name:?}")))
     }
 
     fn unit_id(&self, name: &str) -> PyResult<u16> {
-        self.session
-            .map_context()
-            .unit_id(name)
-            .ok_or_else(|| PyKeyError::new_err(format!("unknown unit: {name:?}")))
+        symbols::unit_id(
+            self.session.map_data(),
+            self.session.canonical_symbols(),
+            name,
+        )
+        .ok_or_else(|| PyKeyError::new_err(format!("unknown unit: {name:?}")))
     }
 
     fn switch_id(&self, name: &str) -> PyResult<u8> {
-        self.session
-            .map_context()
-            .switch_id(name)
-            .ok_or_else(|| PyKeyError::new_err(format!("unknown switch: {name:?}")))
+        symbols::switch_id(
+            self.session.map_data(),
+            self.session.canonical_symbols(),
+            name,
+        )
+        .ok_or_else(|| PyKeyError::new_err(format!("unknown switch: {name:?}")))
     }
 
     fn get_or_insert_string(&mut self, text: &str) -> u32 {
         self.session
-            .map_context_mut()
+            .map_data_mut()
             .get_or_insert_string(text.as_bytes())
     }
 
@@ -799,7 +803,7 @@ impl PyCompilationSession {
     }
 
     fn classic_trigger_count(&self) -> usize {
-        self.session.map_context().triggers().len()
+        self.session.map_data().triggers().len()
     }
 
     fn strx_byte_len(&self) -> usize {
@@ -811,11 +815,11 @@ impl PyCompilationSession {
     }
 
     fn locations_count(&self) -> usize {
-        self.session.map_context().locations().len()
+        self.session.map_data().locations().len()
     }
 
     fn placed_units_count(&self) -> usize {
-        self.session.map_context().placed_units().len()
+        self.session.map_data().placed_units().len()
     }
 
     fn add_var(&mut self, name: &str, init_val: i32) -> u32 {
@@ -1075,6 +1079,48 @@ impl PyCompilationSession {
         Ok(self.session.dump_hir())
     }
 
+    fn dump_plan(&mut self) -> PyResult<String> {
+        self.sync_hir()?;
+        let module = self
+            .session
+            .hir_module()
+            .ok_or_else(|| PyRuntimeError::new_err("no HIR module is available"))?
+            .clone();
+        let mut plan = HirPlan::new(module);
+        let mut map = PlanMap::new(self.session.map_fingerprint());
+        if let Some(name) = self
+            .session
+            .input_map_path()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+        {
+            map = map.with_name(name);
+        }
+        plan = plan.with_map(map);
+        plan.to_json().map_err(to_py_err)
+    }
+
+    fn write_plan(&mut self, path: &str) -> PyResult<()> {
+        let json = self.dump_plan()?;
+        let output = std::path::Path::new(path);
+        if let Some(parent) = output.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    PyRuntimeError::new_err(format!(
+                        "failed to create plan directory {}: {e}",
+                        parent.display()
+                    ))
+                })?;
+            }
+        }
+        std::fs::write(output, json).map_err(|e| {
+            PyRuntimeError::new_err(format!(
+                "failed to write HIR plan {}: {e}",
+                output.display()
+            ))
+        })
+    }
+
     fn dump_lir(&mut self) -> PyResult<String> {
         self.sync_hir()?;
         self.session.dump_lir().map_err(to_py_err)
@@ -1083,24 +1129,21 @@ impl PyCompilationSession {
     fn compile(&mut self, output_path: &str) -> PyResult<PyCompilationReport> {
         self.sync_hir()?;
         let report = self.session.compile_map(output_path).map_err(to_py_err)?;
-        let vproc_count = self
-            .session
-            .lir_module()
-            .map(|l| l.vproc_count())
-            .unwrap_or(0);
-        Ok(PyCompilationReport {
-            trigger_count: report.trigger_count,
-            byte_buf_count: report.byte_buf_count,
-            vproc_count,
-            payload_offset: report.payload_offset,
-            payload_size: report.payload_size,
-            payload_entry_addr: report.payload_entry_addr,
-            prt_count: report.prt_offsets.len(),
-            ort_count: report.ort_offsets.len(),
-            prt_offsets: report.prt_offsets,
-            ort_offsets: report.ort_offsets,
-        })
+        Ok(PyCompilationReport { report })
     }
+}
+
+/// Returns the shared Frontend vocabulary constants.
+///
+/// The Python Frontend uses this manifest instead of maintaining a second copy
+/// of player, comparison, modifier, switch, resource, order, and score names.
+#[pyfunction]
+pub(crate) fn vocabulary_constants(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
+    let constants = PyDict::new(py);
+    for constant in eudkit_core::vocabulary::frontend_constants() {
+        constants.set_item(constant.name, constant.code)?;
+    }
+    Ok(constants)
 }
 
 /// Resolves `eudkit.toml` and flag overrides into one build configuration.
@@ -1165,6 +1208,7 @@ fn path_string(path: Option<&Path>) -> Option<String> {
 pub(crate) mod eudkit_mod {
     #[pymodule_export]
     use super::{
-        PyAction, PyCompilationReport, PyCompilationSession, PyCondition, PyExpr, PyMapString,
+        vocabulary_constants, PyAction, PyCompilationReport, PyCompilationSession, PyCondition,
+        PyExpr, PyMapString,
     };
 }

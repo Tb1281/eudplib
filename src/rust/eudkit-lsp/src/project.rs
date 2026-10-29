@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use eudkit_core::canonical::CanonicalSymbols;
 use eudkit_core::config::ProjectConfig;
-use eudkit_core::map_context::MapContext;
+use eudkit_core::map_context::MapData;
 use eudkit_core::session::{CompilationConfig, CompilationSession};
 
 /// Project file searched for from each document's directory upwards.
@@ -38,23 +39,33 @@ pub struct ProjectCache {
     projects: HashMap<PathBuf, CachedProject>,
 }
 
+/// An owned snapshot of the two Map Context halves cached for one project.
+///
+/// The snapshot only stores Map Data and Canonical Symbols; symbol resolution
+/// stays in [`eudkit_core::symbols`].
+#[derive(Debug, Clone)]
+pub struct MapContextSnapshot {
+    pub map_data: Arc<MapData>,
+    pub canonical_symbols: Arc<CanonicalSymbols>,
+}
+
 #[derive(Debug, Default)]
 struct CachedProject {
     toml_modified: Option<SystemTime>,
     map_path: Option<PathBuf>,
     map_modified: Option<SystemTime>,
-    context: Option<Arc<MapContext>>,
+    context: Option<MapContextSnapshot>,
 }
 
 impl ProjectCache {
     /// Resolve the nearest project for `document_path` and return its Map
     /// Context, reloading it when the project file or input map changed.
-    pub fn map_context_for_document(&mut self, document_path: &Path) -> Option<Arc<MapContext>> {
+    pub fn map_context_for_document(&mut self, document_path: &Path) -> Option<MapContextSnapshot> {
         let toml_path = find_project_toml(document_path)?;
         self.map_context_for_project(&toml_path)
     }
 
-    fn map_context_for_project(&mut self, toml_path: &Path) -> Option<Arc<MapContext>> {
+    fn map_context_for_project(&mut self, toml_path: &Path) -> Option<MapContextSnapshot> {
         let toml_path = if toml_path.is_absolute() {
             toml_path.to_path_buf()
         } else {
@@ -119,13 +130,16 @@ fn load_project(toml_path: &Path) -> CachedProject {
     }
 }
 
-fn load_map_context(map_path: &Path, toml_path: &Path) -> Option<Arc<MapContext>> {
+fn load_map_context(map_path: &Path, toml_path: &Path) -> Option<MapContextSnapshot> {
     let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         CompilationSession::from_map(map_path, CompilationConfig::default())
     }));
 
     match loaded {
-        Ok(Ok(session)) => Some(Arc::new(session.map_context().clone())),
+        Ok(Ok(session)) => Some(MapContextSnapshot {
+            map_data: Arc::new(session.map_data().clone()),
+            canonical_symbols: Arc::new(session.canonical_symbols().clone()),
+        }),
         Ok(Err(error)) => {
             eprintln!(
                 "eudkit-lsp: failed to load input map {} for {}: {error}",

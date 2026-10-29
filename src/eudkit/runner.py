@@ -19,6 +19,7 @@ def run_build(
     preserve_classic_triggers: bool = True,
     dump_hir: bool = False,
     dump_lir: bool = False,
+    plan: str | Path | None = None,
 ) -> Any:
     input_path = Path(input_map).resolve()
     if not input_path.exists():
@@ -42,6 +43,12 @@ def run_build(
                 sys.path.insert(0, entry_dir)
 
             runpy.run_path(str(entry_path), run_name="__main__")
+
+        if plan is not None:
+            plan_path = Path(plan).resolve()
+            sess.write_plan(plan_path)
+            print(f"Wrote HIR plan {plan_path}")
+            return None
 
         if dump_hir:
             print(sess.dump_hir())
@@ -90,13 +97,16 @@ def main() -> None:
     parser.add_argument(
         "--report",
         metavar="PATH",
-        help="Write the compilation report to this path for the Rust CLI",
+        help="Write the typed JSON compilation report to this path for the Rust CLI",
     )
     parser.add_argument(
         "--dump-hir", action="store_true", help="Dump High-Level IR (HIR)"
     )
     parser.add_argument(
         "--dump-lir", action="store_true", help="Dump Low-Level IR (LIR)"
+    )
+    parser.add_argument(
+        "--plan", help="Write the canonical HIR plan artifact (.eudhir)"
     )
 
     args = parser.parse_args()
@@ -111,12 +121,10 @@ def main() -> None:
             preserve_classic_triggers=args.preserve_classic_triggers,
             dump_hir=args.dump_hir,
             dump_lir=args.dump_lir,
+            plan=args.plan,
         )
         if report is not None:
-            print(
-                f"Built {args.output} (triggers={report.trigger_count}, "
-                f"payload_bytes={report.payload_size}, entry={report.payload_entry_addr:#010X})"
-            )
+            print(report.summary(str(args.output)))
             if args.report:
                 _write_report(Path(args.report), report)
     except Exception as e:
@@ -125,18 +133,12 @@ def main() -> None:
 
 
 def _write_report(path: Path, report: Any) -> None:
-    """Writes the key=value report consumed by the Rust CLI."""
-    lines = [
-        f"trigger_count={report.trigger_count}",
-        f"byte_buf_count={report.byte_buf_count}",
-        f"vproc_count={report.vproc_count}",
-        f"payload_offset={report.payload_offset}",
-        f"payload_size={report.payload_size}",
-        f"payload_entry_addr={report.payload_entry_addr}",
-        f"prt_offsets={','.join(str(offset) for offset in report.prt_offsets)}",
-        f"ort_offsets={','.join(str(offset) for offset in report.ort_offsets)}",
-    ]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    """Writes the typed JSON report consumed by the Rust CLI.
+
+    The JSON schema is the core `CompilationReport` wire format; the Rust CLI
+    requires every field, so a partial report is an error rather than zeros.
+    """
+    path.write_text(report.to_json() + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

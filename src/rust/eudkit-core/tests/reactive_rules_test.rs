@@ -1,4 +1,4 @@
-use eudkit_core::hir::{Comparison, HirBuilder, HirStmt, StockCondition};
+use eudkit_core::hir::{Comparison, HirBuilder, HirModule, HirStmt, StockCondition, VarId};
 
 #[test]
 fn test_reactive_rules_builder_and_lowering() {
@@ -94,11 +94,11 @@ fn test_reactive_rules_builder_and_lowering() {
 }
 
 #[test]
-fn test_reactive_lowering_guard_and_timer_shapes() {
-    let mut builder = HirBuilder::new("test_reactive_shape");
-    let value = builder.add_var("value", 0);
+fn test_reactive_lowering_places_guards_conditions_and_bodies() {
+    let mut builder = HirBuilder::new("test_reactive_shapes");
+    let test_var = builder.add_var("test_var", 0);
     let cond = StockCondition::VarCmp {
-        var: value,
+        var: test_var,
         comparison: Comparison::AtLeast,
         value: 5,
         mask: None,
@@ -106,335 +106,280 @@ fn test_reactive_lowering_guard_and_timer_shapes() {
 
     builder.begin_once(vec![cond.clone()]);
     builder.push_stmt(HirStmt::VarAddConst {
-        var: value,
-        value: 1,
+        var: test_var,
+        value: 10,
     });
     builder.end_reactive().expect("end_reactive once");
 
     builder.begin_when(vec![cond.clone()]);
     builder.push_stmt(HirStmt::VarAddConst {
-        var: value,
-        value: 2,
+        var: test_var,
+        value: 1,
     });
     builder.end_reactive().expect("end_reactive when");
 
     builder.begin_until(vec![cond.clone()]);
     builder.push_stmt(HirStmt::VarAddConst {
-        var: value,
-        value: 3,
+        var: test_var,
+        value: 2,
     });
     builder.end_reactive().expect("end_reactive until");
 
     builder.begin_after(24);
-    builder.push_stmt(HirStmt::VarAddConst {
-        var: value,
-        value: 4,
+    builder.push_stmt(HirStmt::VarAssignConst {
+        var: test_var,
+        value: 99,
     });
     builder.end_reactive().expect("end_reactive after");
 
     builder.begin_every(12);
     builder.push_stmt(HirStmt::VarAddConst {
-        var: value,
-        value: 5,
+        var: test_var,
+        value: 3,
     });
     builder.end_reactive().expect("end_reactive every");
 
     let mut module = builder.finish().expect("finish HIR");
+    assert_eq!(
+        module.variables().len(),
+        1,
+        "lowering is the only place that allocates reactive guards and timers"
+    );
+
     module.lower_reactive_rules().expect("lower reactive rules");
 
-    let once_guard = module
-        .variables()
-        .iter()
-        .find(|v| v.name == "once_guard")
-        .expect("once_guard allocated")
-        .id;
-    let until_guard = module
-        .variables()
-        .iter()
-        .find(|v| v.name == "until_guard")
-        .expect("until_guard allocated")
-        .id;
-    let after_timer = module
-        .variables()
-        .iter()
-        .find(|v| v.name == "after_timer")
-        .expect("after_timer allocated")
-        .id;
-    let after_done = module
-        .variables()
-        .iter()
-        .find(|v| v.name == "after_done")
-        .expect("after_done allocated")
-        .id;
-    let every_timer = module
-        .variables()
-        .iter()
-        .find(|v| v.name == "every_timer")
-        .expect("every_timer allocated")
-        .id;
-
-    let init_of = |name: &str| {
+    let var_id = |module: &HirModule, name: &str| {
         module
             .variables()
             .iter()
             .find(|v| v.name == name)
-            .expect("variable allocated")
-            .init_val
+            .unwrap_or_else(|| panic!("missing reactive variable {name}"))
+            .id
     };
-    assert_eq!(init_of("once_guard"), 1);
-    assert_eq!(init_of("until_guard"), 0);
-    assert_eq!(init_of("after_timer"), 24);
-    assert_eq!(init_of("after_done"), 0);
-    assert_eq!(init_of("every_timer"), 12);
+    let init_val = |module: &HirModule, id: VarId| module.variables()[id.0 as usize].init_val;
+    let var_cmp = |var, comparison, value| StockCondition::VarCmp {
+        var,
+        comparison,
+        value,
+        mask: None,
+    };
 
-    let main = module
+    let once_guard = var_id(&module, "once_guard");
+    let until_guard = var_id(&module, "until_guard");
+    let after_timer = var_id(&module, "after_timer");
+    let after_done = var_id(&module, "after_done");
+    let every_timer = var_id(&module, "every_timer");
+
+    assert_eq!(init_val(&module, once_guard), 1);
+    assert_eq!(init_val(&module, until_guard), 0);
+    assert_eq!(init_val(&module, after_timer), 24);
+    assert_eq!(init_val(&module, after_done), 0);
+    assert_eq!(init_val(&module, every_timer), 12);
+
+    let main_fn = module
         .functions()
         .iter()
         .find(|f| f.name == "main")
         .expect("main function");
-    let stmts = &main.blocks[0].stmts;
+    let stmts = &main_fn.blocks[0].stmts;
     assert_eq!(
         stmts.len(),
         6,
-        "once, when, until, after, and every(decr+fire)"
+        "once/when/until/after emit one statement and every emits two"
     );
 
-    // Once: guard == 1 AND user condition, then clear the guard before the body.
-    match &stmts[0] {
-        HirStmt::If {
-            conditions,
-            then_body,
-            else_body,
-        } => {
-            assert_eq!(
-                conditions.as_slice(),
-                &[
-                    StockCondition::VarCmp {
-                        var: once_guard,
-                        comparison: Comparison::Exactly,
-                        value: 1,
-                        mask: None,
-                    },
-                    cond.clone(),
-                ]
-            );
-            assert_eq!(
-                then_body.as_slice(),
-                &[
-                    HirStmt::VarAssignConst {
-                        var: once_guard,
-                        value: 0,
-                    },
-                    HirStmt::VarAddConst {
-                        var: value,
-                        value: 1,
-                    },
-                ]
-            );
-            assert!(else_body.is_empty());
-        }
-        other => panic!("expected once guard If, got {other:?}"),
-    }
+    // once: guard == 1 && condition, then clear the guard before the body.
+    let HirStmt::If {
+        conditions,
+        then_body,
+        else_body,
+    } = &stmts[0]
+    else {
+        panic!("once must lower to an If, got {:?}", stmts[0]);
+    };
+    assert!(else_body.is_empty());
+    assert_eq!(conditions[0], var_cmp(once_guard, Comparison::Exactly, 1));
+    assert_eq!(&conditions[1..], &[cond.clone()]);
+    assert_eq!(
+        then_body,
+        &[
+            HirStmt::VarAssignConst {
+                var: once_guard,
+                value: 0,
+            },
+            HirStmt::VarAddConst {
+                var: test_var,
+                value: 10,
+            },
+        ]
+    );
 
-    // When: the user condition is the only guard.
-    match &stmts[1] {
-        HirStmt::If {
-            conditions,
-            then_body,
-            else_body,
-        } => {
-            assert_eq!(conditions.as_slice(), &[cond.clone()]);
-            assert_eq!(
-                then_body.as_slice(),
-                &[HirStmt::VarAddConst {
-                    var: value,
-                    value: 2
-                }]
-            );
-            assert!(else_body.is_empty());
-        }
-        other => panic!("expected when If, got {other:?}"),
-    }
+    // when: the user condition is the only condition and the body is inline.
+    let HirStmt::If {
+        conditions,
+        then_body,
+        else_body,
+    } = &stmts[1]
+    else {
+        panic!("when must lower to an If, got {:?}", stmts[1]);
+    };
+    assert!(else_body.is_empty());
+    assert_eq!(conditions, &vec![cond.clone()]);
+    assert_eq!(
+        then_body,
+        &[HirStmt::VarAddConst {
+            var: test_var,
+            value: 1,
+        }]
+    );
 
-    // Until: guard == 0 wraps an If that sets the guard when the condition holds,
-    // and runs the body in its else branch.
-    match &stmts[2] {
-        HirStmt::If {
-            conditions,
-            then_body,
-            else_body,
-        } => {
-            assert_eq!(
-                conditions.as_slice(),
-                &[StockCondition::VarCmp {
-                    var: until_guard,
-                    comparison: Comparison::Exactly,
-                    value: 0,
-                    mask: None,
-                }]
-            );
-            assert!(else_body.is_empty());
-            match then_body.as_slice() {
-                [HirStmt::If {
-                    conditions: inner_conditions,
-                    then_body: inner_then,
-                    else_body: inner_else,
-                }] => {
-                    assert_eq!(inner_conditions.as_slice(), &[cond.clone()]);
-                    assert_eq!(
-                        inner_then.as_slice(),
-                        &[HirStmt::VarAssignConst {
-                            var: until_guard,
-                            value: 1,
-                        }]
-                    );
-                    assert_eq!(
-                        inner_else.as_slice(),
-                        &[HirStmt::VarAddConst {
-                            var: value,
-                            value: 3
-                        }]
-                    );
-                }
-                other => panic!("expected until inner If, got {other:?}"),
-            }
-        }
-        other => panic!("expected until guard If, got {other:?}"),
-    }
+    // until: guard == 0 wraps an If that either sets the guard or runs the body.
+    let HirStmt::If {
+        conditions,
+        then_body,
+        else_body,
+    } = &stmts[2]
+    else {
+        panic!("until must lower to an If, got {:?}", stmts[2]);
+    };
+    assert!(else_body.is_empty());
+    assert_eq!(
+        conditions,
+        &vec![var_cmp(until_guard, Comparison::Exactly, 0)]
+    );
+    let HirStmt::If {
+        conditions,
+        then_body,
+        else_body,
+    } = &then_body[0]
+    else {
+        panic!("until must nest the user condition, got {:?}", then_body[0]);
+    };
+    assert_eq!(conditions, &vec![cond.clone()]);
+    assert_eq!(
+        then_body,
+        &[HirStmt::VarAssignConst {
+            var: until_guard,
+            value: 1,
+        }]
+    );
+    assert_eq!(
+        else_body,
+        &[HirStmt::VarAddConst {
+            var: test_var,
+            value: 2,
+        }]
+    );
 
-    // After: done == 0 wraps a timer decrement and a fire branch.
-    match &stmts[3] {
-        HirStmt::If {
-            conditions,
-            then_body,
-            else_body,
-        } => {
-            assert_eq!(
-                conditions.as_slice(),
-                &[StockCondition::VarCmp {
-                    var: after_done,
-                    comparison: Comparison::Exactly,
-                    value: 0,
-                    mask: None,
-                }]
-            );
-            assert!(else_body.is_empty());
-            match then_body.as_slice() {
-                [HirStmt::If {
-                    conditions: decr_conditions,
-                    then_body: decr_body,
-                    else_body: decr_else,
-                }, HirStmt::If {
-                    conditions: fire_conditions,
-                    then_body: fire_body,
-                    else_body: fire_else,
-                }] => {
-                    assert_eq!(
-                        decr_conditions.as_slice(),
-                        &[StockCondition::VarCmp {
-                            var: after_timer,
-                            comparison: Comparison::AtLeast,
-                            value: 1,
-                            mask: None,
-                        }]
-                    );
-                    assert_eq!(
-                        decr_body.as_slice(),
-                        &[HirStmt::VarSubConst {
-                            var: after_timer,
-                            value: 1,
-                        }]
-                    );
-                    assert!(decr_else.is_empty());
-                    assert_eq!(
-                        fire_conditions.as_slice(),
-                        &[StockCondition::VarCmp {
-                            var: after_timer,
-                            comparison: Comparison::Exactly,
-                            value: 0,
-                            mask: None,
-                        }]
-                    );
-                    assert_eq!(
-                        fire_body.as_slice(),
-                        &[
-                            HirStmt::VarAssignConst {
-                                var: after_done,
-                                value: 1,
-                            },
-                            HirStmt::VarAddConst {
-                                var: value,
-                                value: 4
-                            },
-                        ]
-                    );
-                    assert!(fire_else.is_empty());
-                }
-                other => panic!("expected after timer/fire Ifs, got {other:?}"),
-            }
-        }
-        other => panic!("expected after done If, got {other:?}"),
-    }
+    // after: done == 0 wraps the countdown and the fire check.
+    let HirStmt::If {
+        conditions,
+        then_body: after_body,
+        else_body,
+    } = &stmts[3]
+    else {
+        panic!("after must lower to an If, got {:?}", stmts[3]);
+    };
+    assert!(else_body.is_empty());
+    assert_eq!(
+        conditions,
+        &vec![var_cmp(after_done, Comparison::Exactly, 0)]
+    );
+    assert_eq!(after_body.len(), 2);
+    let HirStmt::If {
+        conditions,
+        then_body,
+        else_body,
+    } = &after_body[0]
+    else {
+        panic!("after must count down the timer, got {:?}", after_body[0]);
+    };
+    assert!(else_body.is_empty());
+    assert_eq!(
+        conditions,
+        &vec![var_cmp(after_timer, Comparison::AtLeast, 1)]
+    );
+    assert_eq!(
+        then_body,
+        &[HirStmt::VarSubConst {
+            var: after_timer,
+            value: 1,
+        }]
+    );
+    let HirStmt::If {
+        conditions,
+        then_body,
+        else_body,
+    } = &after_body[1]
+    else {
+        panic!("after must check the timer, got {:?}", after_body[1]);
+    };
+    assert!(else_body.is_empty());
+    assert_eq!(
+        conditions,
+        &vec![var_cmp(after_timer, Comparison::Exactly, 0)]
+    );
+    assert_eq!(
+        then_body,
+        &[
+            HirStmt::VarAssignConst {
+                var: after_done,
+                value: 1,
+            },
+            HirStmt::VarAssignConst {
+                var: test_var,
+                value: 99,
+            },
+        ]
+    );
 
-    // Every: a timer decrement followed by a fire branch that reloads the period.
-    match &stmts[4] {
-        HirStmt::If {
-            conditions,
-            then_body,
-            else_body,
-        } => {
-            assert_eq!(
-                conditions.as_slice(),
-                &[StockCondition::VarCmp {
-                    var: every_timer,
-                    comparison: Comparison::AtLeast,
-                    value: 1,
-                    mask: None,
-                }]
-            );
-            assert_eq!(
-                then_body.as_slice(),
-                &[HirStmt::VarSubConst {
-                    var: every_timer,
-                    value: 1,
-                }]
-            );
-            assert!(else_body.is_empty());
-        }
-        other => panic!("expected every decrement If, got {other:?}"),
-    }
-    match &stmts[5] {
-        HirStmt::If {
-            conditions,
-            then_body,
-            else_body,
-        } => {
-            assert_eq!(
-                conditions.as_slice(),
-                &[StockCondition::VarCmp {
-                    var: every_timer,
-                    comparison: Comparison::Exactly,
-                    value: 0,
-                    mask: None,
-                }]
-            );
-            assert_eq!(
-                then_body.as_slice(),
-                &[
-                    HirStmt::VarAssignConst {
-                        var: every_timer,
-                        value: 12,
-                    },
-                    HirStmt::VarAddConst {
-                        var: value,
-                        value: 5
-                    },
-                ]
-            );
-            assert!(else_body.is_empty());
-        }
-        other => panic!("expected every fire If, got {other:?}"),
-    }
+    // every: countdown then reload the timer and run the body.
+    let HirStmt::If {
+        conditions,
+        then_body,
+        else_body,
+    } = &stmts[4]
+    else {
+        panic!("every must count down the timer, got {:?}", stmts[4]);
+    };
+    assert!(else_body.is_empty());
+    assert_eq!(
+        conditions,
+        &vec![var_cmp(every_timer, Comparison::AtLeast, 1)]
+    );
+    assert_eq!(
+        then_body,
+        &[HirStmt::VarSubConst {
+            var: every_timer,
+            value: 1,
+        }]
+    );
+    let HirStmt::If {
+        conditions,
+        then_body,
+        else_body,
+    } = &stmts[5]
+    else {
+        panic!("every must check the timer, got {:?}", stmts[5]);
+    };
+    assert!(else_body.is_empty());
+    assert_eq!(
+        conditions,
+        &vec![var_cmp(every_timer, Comparison::Exactly, 0)]
+    );
+    assert_eq!(
+        then_body,
+        &[
+            HirStmt::VarAssignConst {
+                var: every_timer,
+                value: 12,
+            },
+            HirStmt::VarAddConst {
+                var: test_var,
+                value: 3,
+            },
+        ]
+    );
 }
 
 #[test]

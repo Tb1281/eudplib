@@ -59,6 +59,7 @@ fn allocates_unified_72_byte_stride_vproc_buffer_and_stacks_objects_into_gaps() 
     let entry_trig = LirTrigger {
         id: eudkit_core::lir::ObjectId(0),
         label: Some("entry".to_string()),
+        role: eudkit_core::lir::TriggerRole::Normal,
         prev_ptr: ValueExpr::Const(0),
         next_ptr: ValueExpr::FieldAddress(FieldRef::vproc_slot(1, 0, VProcSlotField::TriggerBase)),
         conditions: Vec::new(),

@@ -1,12 +1,13 @@
 """Parity between the Rust and Python build CLIs and the Python runner report.
 
 Both CLIs resolve `eudkit.toml` through `BuildRequest`, and the Python runner
-hands its real `CompilationReport` back to the Rust CLI instead of the Rust CLI
-reconstructing a zeroed report from the output map.
+hands its real `CompilationReport` back to the Rust CLI as typed JSON instead of
+the Rust CLI reconstructing a zeroed report from the output map.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -123,18 +124,20 @@ preserve_classic_triggers = false
                 0,
                 f"Rust CLI build failed:\n{rust_build.stderr}",
             )
+            self.assertIn("Built", rust_build.stdout)
+            self.assertIn("triggers=", rust_build.stdout)
 
             python_bytes = (cwd / "python_out.scx").read_bytes()
             rust_bytes = (cwd / "rust_out.scx").read_bytes()
             self.assertEqual(python_bytes, rust_bytes)
 
-    def test_runner_writes_real_payload_fields_for_the_rust_cli(self) -> None:
+    def test_runner_writes_typed_json_report_and_summary_for_the_rust_cli(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cwd = Path(tmpdir)
             entry = cwd / "entry.py"
             entry.write_text(ENTRY, encoding="utf-8")
             output = cwd / "out.scx"
-            report_path = cwd / "report.txt"
+            report_path = cwd / "report.json"
 
             result = subprocess.run(
                 [
@@ -161,19 +164,28 @@ preserve_classic_triggers = false
                 f"Python runner failed:\n{result.stderr}",
             )
 
-            values = dict(
-                line.split("=", 1)
-                for line in report_path.read_text(encoding="utf-8").splitlines()
-            )
-            self.assertGreater(int(values["trigger_count"]), 0)
-            self.assertGreater(int(values["payload_size"]), 0)
-            self.assertGreater(int(values["payload_entry_addr"]), 0)
-            self.assertIn("prt_offsets", values)
-            self.assertNotEqual(values["prt_offsets"], "")
+            values = json.loads(report_path.read_text(encoding="utf-8"))
+            for field in (
+                "trigger_count",
+                "byte_buf_count",
+                "vproc_count",
+                "payload_offset",
+                "payload_size",
+                "payload_entry_addr",
+                "prt_offsets",
+                "ort_offsets",
+            ):
+                self.assertIn(field, values)
+            self.assertGreater(values["trigger_count"], 0)
+            self.assertGreater(values["payload_size"], 0)
+            self.assertGreater(values["payload_entry_addr"], 0)
+            self.assertGreater(len(values["prt_offsets"]), 0)
 
             direct = run_build(input_map=BASEMAP, output_map=output, entry=entry)
             self.assertEqual(direct.prt_count, len(direct.prt_offsets))
             self.assertEqual(direct.ort_count, len(direct.ort_offsets))
+            self.assertEqual(values, json.loads(direct.to_json()))
+            self.assertIn(direct.summary(str(output)), result.stdout)
 
 
 if __name__ == "__main__":

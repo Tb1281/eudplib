@@ -4,6 +4,7 @@ use eudkit_core::hir::{
     HirValue, Modifier, PlayerId, StockAction, StockCondition,
 };
 use eudkit_core::lir::{ActField, FieldRef};
+use eudkit_core::plan::{HirPlan, PlanMap};
 use eudkit_core::{CompilationConfig, CompilationSession};
 use std::env;
 use std::fs;
@@ -268,8 +269,13 @@ fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
         CompilationSession::from_map(&resolved_map, comp_cfg).map_err(|e| e.to_string())?;
 
     if let Some(entry) = resolved_entry {
-        let hir = eudkit_ts::compile_ts_file(&entry, &mod_name, session.map_context())
-            .map_err(|e| e.to_string())?;
+        let hir = eudkit_ts::compile_ts_file(
+            &entry,
+            &mod_name,
+            session.map_data(),
+            session.canonical_symbols(),
+        )
+        .map_err(|e| e.to_string())?;
         session.set_hir_module(hir);
     } else {
         session.set_hir_module(default_tracer_hir(&mod_name));
@@ -299,7 +305,11 @@ fn execute_python_build(
     proj_cfg: &ProjectConfig,
     entry_path: &Path,
 ) -> Result<eudkit_core::CompilationReport, String> {
-    let report_path = env::temp_dir().join(format!("eudkit-python-report-{}.txt", process::id()));
+    // The Python runner writes one typed JSON `CompilationReport` here. This is
+    // an implementation detail of the Python Frontend handoff; the Rust CLI
+    // never interprets the file as ad-hoc text. A file is used instead of
+    // stdout because the entry script may print arbitrary user output there.
+    let report_path = env::temp_dir().join(format!("eudkit-python-report-{}.json", process::id()));
     let _ = fs::remove_file(&report_path);
 
     let py_bin = find_python_bin();
@@ -348,58 +358,334 @@ fn execute_python_build(
     })?;
     let _ = fs::remove_file(&report_path);
     parse_python_report(&report_text)
+        .map_err(|e| format!("invalid Python build report {}: {e}", report_path.display()))
 }
 
-/// Reads the `key=value` report written by `python -m eudkit.runner --report`.
+/// Parses the typed JSON report written by `python -m eudkit.runner --report`.
+///
+/// Every field is required; a missing key is an error rather than a zeroed
+/// value.
 fn parse_python_report(text: &str) -> Result<eudkit_core::CompilationReport, String> {
-    let mut report = eudkit_core::CompilationReport {
-        trigger_count: 0,
-        byte_buf_count: 0,
-        payload_offset: 0,
-        payload_size: 0,
-        payload_entry_addr: 0,
-        prt_offsets: Vec::new(),
-        ort_offsets: Vec::new(),
-    };
+    eudkit_core::CompilationReport::from_json(text).map_err(|e| e.to_string())
+}
 
-    for line in text.lines() {
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let value = value.trim();
-        match key.trim() {
-            "trigger_count" => report.trigger_count = parse_report_value(key, value)?,
-            "byte_buf_count" => report.byte_buf_count = parse_report_value(key, value)?,
-            "payload_offset" => report.payload_offset = parse_report_value(key, value)?,
-            "payload_size" => report.payload_size = parse_report_value(key, value)?,
-            "payload_entry_addr" => report.payload_entry_addr = parse_report_value(key, value)?,
-            "prt_offsets" => report.prt_offsets = parse_report_offsets(value)?,
-            "ort_offsets" => report.ort_offsets = parse_report_offsets(value)?,
-            _ => {}
+fn plan_for_session(session: &CompilationSession, module: HirModule) -> HirPlan {
+    let mut map = PlanMap::new(session.map_fingerprint());
+    if let Some(name) = session
+        .input_map_path()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+    {
+        map = map.with_name(name);
+    }
+    HirPlan::new(module).with_map(map)
+}
+
+fn read_plan(path: &Path) -> Result<HirPlan, String> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read HIR plan {}: {e}", path.display()))?;
+    HirPlan::from_json(&text).map_err(|e| e.to_string())
+}
+
+fn write_plan(path: &Path, plan: &HirPlan) -> Result<(), String> {
+    let json = plan.to_json().map_err(|e| e.to_string())?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
     }
-
-    Ok(report)
+    fs::write(path, &json)
+        .map_err(|e| format!("failed to write HIR plan {}: {e}", path.display()))?;
+    println!("Wrote HIR plan {} ({} bytes)", path.display(), json.len());
+    Ok(())
 }
 
-fn parse_report_value<T: std::str::FromStr>(key: &str, value: &str) -> Result<T, String> {
-    value
-        .parse()
-        .map_err(|_| format!("invalid Python build report value for {key}: {value}"))
-}
+fn run_python_plan(
+    proj_cfg: &ProjectConfig,
+    entry_path: &Path,
+    plan_path: &Path,
+) -> Result<(), String> {
+    let py_bin = find_python_bin();
+    let mut cmd = std::process::Command::new(&py_bin);
+    configure_python_cmd(&mut cmd);
+    cmd.arg("-m")
+        .arg("eudkit.runner")
+        .arg("--input")
+        .arg(&proj_cfg.input_map)
+        .arg("--entry")
+        .arg(entry_path)
+        .arg("--plan")
+        .arg(plan_path);
 
-fn parse_report_offsets(value: &str) -> Result<Vec<usize>, String> {
-    if value.is_empty() {
-        return Ok(Vec::new());
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to execute python runner ({py_bin}): {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("Python synthesis failed:\n{stderr}\n{stdout}"));
     }
-    value
-        .split(',')
-        .map(|item| {
-            item.trim()
-                .parse()
-                .map_err(|_| format!("invalid Python build report offset: {item}"))
-        })
-        .collect()
+    if !plan_path.exists() {
+        return Err(format!(
+            "Python runner reported success but did not write {}",
+            plan_path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn synth_ts_plan(proj_cfg: &ProjectConfig, entry_path: &Path) -> Result<HirPlan, String> {
+    let session =
+        CompilationSession::from_map(&proj_cfg.input_map, proj_cfg.to_compilation_config())
+            .map_err(|e| e.to_string())?;
+    let hir = eudkit_ts::compile_ts_file(
+        entry_path,
+        &proj_cfg.name,
+        session.map_data(),
+        session.canonical_symbols(),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(plan_for_session(&session, hir))
+}
+
+fn temporary_plan_path() -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("eudkit-plan-{}-{nanos}.eudhir", std::process::id()))
+}
+
+fn cmd_synth(args: &[String]) -> Result<(), String> {
+    let mut config_path: Option<PathBuf> = None;
+    let mut input_map: Option<PathBuf> = None;
+    let mut entry_path: Option<PathBuf> = None;
+    let mut plan_path: Option<PathBuf> = None;
+    let mut check = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--config" | "-c" => {
+                i += 1;
+                config_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --config")?,
+                ));
+            }
+            "--input" | "-i" => {
+                i += 1;
+                input_map = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --input")?,
+                ));
+            }
+            "--entry" | "-e" => {
+                i += 1;
+                entry_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --entry")?,
+                ));
+            }
+            "--plan" | "-p" | "--output" | "-o" => {
+                i += 1;
+                plan_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --plan")?,
+                ));
+            }
+            "--check" => check = true,
+            "--help" | "-h" => {
+                println!("usage: eudkit synth [--config <eudkit.toml>] [--input <in.scx>] [--entry <script.(ts|py)>] [--plan <out.eudhir>] [--check]");
+                return Ok(());
+            }
+            other => return Err(format!("unknown argument for synth: {other}")),
+        }
+        i += 1;
+    }
+
+    let mut proj_cfg = if let Some(cfg_file) = config_path {
+        ProjectConfig::from_file(cfg_file).map_err(|e| e.to_string())?
+    } else if Path::new("eudkit.toml").exists() && (input_map.is_none() || entry_path.is_none()) {
+        ProjectConfig::from_file("eudkit.toml").map_err(|e| e.to_string())?
+    } else {
+        ProjectConfig::default()
+    };
+
+    if let Some(input) = input_map {
+        proj_cfg.input_map = input;
+    }
+    if let Some(entry) = entry_path {
+        proj_cfg.entry = Some(entry);
+    }
+
+    if proj_cfg.input_map.as_os_str().is_empty() {
+        return Err(
+            "usage: eudkit synth --input <in.scx> --entry <script.(ts|py)> --plan <out.eudhir>"
+                .to_string(),
+        );
+    }
+    let entry = proj_cfg.entry.clone().ok_or(
+        "usage: eudkit synth --input <in.scx> --entry <script.(ts|py)> --plan <out.eudhir>",
+    )?;
+    let plan_path = plan_path.unwrap_or_else(|| {
+        if proj_cfg.output_map.as_os_str().is_empty() {
+            PathBuf::from("plan.eudhir")
+        } else {
+            proj_cfg.output_map.with_extension("eudhir")
+        }
+    });
+
+    let ext = entry
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let generated = if ext == "py" {
+        let generated_path = if check {
+            temporary_plan_path()
+        } else {
+            plan_path.clone()
+        };
+        let result = run_python_plan(&proj_cfg, &entry, &generated_path)
+            .and_then(|_| read_plan(&generated_path));
+        if check {
+            let _ = fs::remove_file(&generated_path);
+        }
+        result?
+    } else if ext == "ts" || ext == "js" {
+        synth_ts_plan(&proj_cfg, &entry)?
+    } else {
+        return Err(format!(
+            "unsupported entry extension '.{ext}': expected .py, .ts, or .js"
+        ));
+    };
+
+    if check {
+        let existing = read_plan(&plan_path)
+            .map_err(|e| format!("cannot check {}: {e}", plan_path.display()))?;
+        if existing != generated {
+            return Err(format!(
+                "HIR plan {} is out of date; run `eudkit synth` and commit the result",
+                plan_path.display()
+            ));
+        }
+        println!("HIR plan {} is up to date", plan_path.display());
+    } else {
+        write_plan(&plan_path, &generated)?;
+    }
+
+    Ok(())
+}
+
+fn cmd_compile(args: &[String]) -> Result<(), String> {
+    let mut config_path: Option<PathBuf> = None;
+    let mut input_map: Option<PathBuf> = None;
+    let mut output_map: Option<PathBuf> = None;
+    let mut plan_path: Option<PathBuf> = None;
+    let mut obscurate: Option<bool> = None;
+    let mut seed: Option<u64> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--config" | "-c" => {
+                i += 1;
+                config_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --config")?,
+                ));
+            }
+            "--input" | "-i" => {
+                i += 1;
+                input_map = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --input")?,
+                ));
+            }
+            "--output" | "-o" => {
+                i += 1;
+                output_map = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --output")?,
+                ));
+            }
+            "--plan" | "-p" => {
+                i += 1;
+                plan_path = Some(PathBuf::from(
+                    args.get(i).ok_or("missing value for --plan")?,
+                ));
+            }
+            "--obscurate" => obscurate = Some(true),
+            "--seed" => {
+                i += 1;
+                let value = args.get(i).ok_or("missing value for --seed")?;
+                seed = Some(value.parse::<u64>().map_err(|e| e.to_string())?);
+            }
+            "--help" | "-h" => {
+                println!("usage: eudkit compile --plan <plan.eudhir> --input <in.scx> --output <out.scx>");
+                return Ok(());
+            }
+            other => return Err(format!("unknown argument for compile: {other}")),
+        }
+        i += 1;
+    }
+
+    let mut proj_cfg = if let Some(cfg_file) = config_path {
+        ProjectConfig::from_file(cfg_file).map_err(|e| e.to_string())?
+    } else if Path::new("eudkit.toml").exists() && (input_map.is_none() || output_map.is_none()) {
+        ProjectConfig::from_file("eudkit.toml").map_err(|e| e.to_string())?
+    } else {
+        ProjectConfig::default()
+    };
+
+    if let Some(input) = input_map {
+        proj_cfg.input_map = input;
+    }
+    if let Some(output) = output_map {
+        proj_cfg.output_map = output;
+    }
+    if let Some(obscurate) = obscurate {
+        proj_cfg.obscurate = obscurate;
+    }
+    if let Some(seed) = seed {
+        proj_cfg.obscurate_seed = Some(seed);
+    }
+
+    if proj_cfg.input_map.as_os_str().is_empty() || proj_cfg.output_map.as_os_str().is_empty() {
+        return Err(
+            "usage: eudkit compile --plan <plan.eudhir> --input <in.scx> --output <out.scx>"
+                .to_string(),
+        );
+    }
+    let plan_path = plan_path
+        .ok_or("usage: eudkit compile --plan <plan.eudhir> --input <in.scx> --output <out.scx>")?;
+    let plan = read_plan(&plan_path)?;
+
+    let mut session =
+        CompilationSession::from_map(&proj_cfg.input_map, proj_cfg.to_compilation_config())
+            .map_err(|e| e.to_string())?;
+
+    if let Some(map) = &plan.map {
+        let actual = session.map_fingerprint();
+        if map.fingerprint != actual {
+            return Err(format!(
+                "HIR plan map fingerprint mismatch: plan was synthesized for {}, input map is {}. Re-run `eudkit synth`.",
+                map.fingerprint, actual
+            ));
+        }
+    } else {
+        eprintln!(
+            "warning: HIR plan has no map fingerprint; compiling without a Map Context identity check"
+        );
+    }
+
+    session.set_hir_module(plan.module);
+    let report = session
+        .compile_map(&proj_cfg.output_map)
+        .map_err(|e| e.to_string())?;
+    println!(
+        "Compiled {} (triggers={}, payload_bytes={}, entry={:#010X})",
+        proj_cfg.output_map.display(),
+        report.trigger_count,
+        report.payload_size,
+        report.payload_entry_addr
+    );
+    Ok(())
 }
 
 fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationReport, String> {
@@ -439,8 +725,13 @@ fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationRep
     }
 
     if let Some(entry_path) = &proj_cfg.entry {
-        let hir = eudkit_ts::compile_ts_file(entry_path, &proj_cfg.name, session.map_context())
-            .map_err(|e| e.to_string())?;
+        let hir = eudkit_ts::compile_ts_file(
+            entry_path,
+            &proj_cfg.name,
+            session.map_data(),
+            session.canonical_symbols(),
+        )
+        .map_err(|e| e.to_string())?;
         session.set_hir_module(hir);
     } else {
         session.set_hir_module(default_tracer_hir(&proj_cfg.name));
@@ -450,13 +741,7 @@ fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationRep
         .compile_map(&proj_cfg.output_map)
         .map_err(|e| e.to_string())?;
 
-    println!(
-        "Built {} (triggers={}, payload_bytes={}, entry={:#010X})",
-        proj_cfg.output_map.display(),
-        report.trigger_count,
-        report.payload_size,
-        report.payload_entry_addr
-    );
+    println!("{}", report.summary(proj_cfg.output_map.display()));
     Ok(report)
 }
 
@@ -777,7 +1062,7 @@ fn cmd_migrate(args: &[String]) -> Result<(), String> {
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let Some((cmd, rest)) = args.split_first() else {
-        eprintln!("usage: eudkit <inspect|dump-ir|build|watch|migrate> [options]");
+        eprintln!("usage: eudkit <inspect|dump-ir|build|synth|compile|watch|migrate> [options]");
         process::exit(1);
     };
 
@@ -785,10 +1070,12 @@ fn main() {
         "inspect" => cmd_inspect(rest),
         "dump-ir" => cmd_dump_ir(rest),
         "build" => cmd_build(rest),
+        "synth" => cmd_synth(rest),
+        "compile" => cmd_compile(rest),
         "watch" => cmd_watch(rest),
         "migrate" => cmd_migrate(rest),
         "--help" | "-h" | "help" => {
-            println!("eudkit <inspect|dump-ir|build|watch|migrate>");
+            println!("eudkit <inspect|dump-ir|build|synth|compile|watch|migrate>");
             Ok(())
         }
         "--version" | "-v" | "version" => {
@@ -806,35 +1093,53 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_python_report, parse_report_offsets};
+    use super::parse_python_report;
+    use eudkit_core::CompilationReport;
 
-    #[test]
-    fn parses_the_python_build_report_including_patch_sites() {
-        let report = parse_python_report(
-            "trigger_count=12\n\
-             byte_buf_count=3\n\
-             vproc_count=1\n\
-             payload_offset=4096\n\
-             payload_size=512\n\
-             payload_entry_addr=285278210\n\
-             prt_offsets=16,32\n\
-             ort_offsets=48\n",
-        )
-        .expect("should parse report");
-
-        assert_eq!(report.trigger_count, 12);
-        assert_eq!(report.byte_buf_count, 3);
-        assert_eq!(report.payload_offset, 4096);
-        assert_eq!(report.payload_size, 512);
-        assert_eq!(report.payload_entry_addr, 285_278_210);
-        assert_eq!(report.prt_offsets, vec![16, 32]);
-        assert_eq!(report.ort_offsets, vec![48]);
+    fn sample_report() -> CompilationReport {
+        CompilationReport {
+            trigger_count: 12,
+            byte_buf_count: 3,
+            vproc_count: 1,
+            payload_offset: 4096,
+            payload_size: 512,
+            payload_entry_addr: 285_278_210,
+            prt_offsets: vec![16, 32],
+            ort_offsets: vec![48],
+        }
     }
 
     #[test]
-    fn rejects_malformed_python_build_reports() {
-        assert!(parse_python_report("trigger_count=many\n").is_err());
-        assert!(parse_report_offsets("16,fast").is_err());
-        assert_eq!(parse_report_offsets("").unwrap(), Vec::<usize>::new());
+    fn parses_the_typed_json_python_build_report_including_vproc_count() {
+        let text = sample_report().to_json().expect("report should serialize");
+        let report = parse_python_report(&text).expect("should parse report");
+        assert_eq!(report, sample_report());
+        assert_eq!(report.vproc_count, 1);
+    }
+
+    #[test]
+    fn rejects_reports_with_missing_required_fields() {
+        let text = sample_report().to_json().expect("report should serialize");
+
+        // `vproc_count` must not silently default to zero when absent.
+        let missing_vproc = text.replace("\"vproc_count\":1,", "");
+        assert_ne!(missing_vproc, text);
+        assert!(parse_python_report(&missing_vproc).is_err());
+
+        let missing_payload = text.replace("\"payload_size\":512,", "");
+        assert_ne!(missing_payload, text);
+        assert!(parse_python_report(&missing_payload).is_err());
+
+        // The old `key=value` format is no longer accepted.
+        assert!(parse_python_report("trigger_count=12\n").is_err());
+    }
+
+    #[test]
+    fn renders_the_shared_build_summary() {
+        let report = sample_report();
+        assert_eq!(
+            report.summary("out.scx"),
+            "Built out.scx (triggers=12, payload_bytes=512, entry=0x11010002)"
+        );
     }
 }

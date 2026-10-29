@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use crate::analysis::{symbol_slot_at, ts_symbol_slot_at, ParsedDocument, SymbolKind, TsLanguage};
 use eudkit_core::canonical::CANONICAL_UNIT_NAMES;
-use eudkit_core::map_context::MapContext;
+use eudkit_core::map_context::MapData;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionTextEdit, Position, Range as LspRange, TextEdit,
 };
@@ -20,14 +20,14 @@ pub fn completions_at(document: &ParsedDocument<'_>, offset: usize) -> Option<Ve
 pub fn completions_at_with_context(
     document: &ParsedDocument<'_>,
     offset: usize,
-    map_context: Option<&MapContext>,
+    map_data: Option<&MapData>,
 ) -> Option<Vec<CompletionItem>> {
     let slot = symbol_slot_at(document, offset)?;
     Some(completion_items(
         document.source(),
         slot.content_range(),
         slot.kind,
-        map_context,
+        map_data,
     ))
 }
 
@@ -36,14 +36,14 @@ pub fn ts_completions_at(
     source: &str,
     language: TsLanguage,
     offset: usize,
-    map_context: Option<&MapContext>,
+    map_data: Option<&MapData>,
 ) -> Option<Vec<CompletionItem>> {
     let slot = ts_symbol_slot_at(source, language, offset)?;
     Some(completion_items(
         source,
         slot.content_range(),
         slot.kind(),
-        map_context,
+        map_data,
     ))
 }
 
@@ -51,10 +51,10 @@ fn completion_items(
     source: &str,
     content_range: Range<usize>,
     kind: SymbolKind,
-    map_context: Option<&MapContext>,
+    map_data: Option<&MapData>,
 ) -> Vec<CompletionItem> {
     let range = byte_range_to_lsp(source, content_range.start, content_range.end);
-    symbol_names(kind, map_context)
+    symbol_names(kind, map_data)
         .into_iter()
         .map(|name| CompletionItem {
             label: name.clone(),
@@ -69,11 +69,11 @@ fn completion_items(
         .collect()
 }
 
-fn symbol_names(kind: SymbolKind, map_context: Option<&MapContext>) -> Vec<String> {
+fn symbol_names(kind: SymbolKind, map_data: Option<&MapData>) -> Vec<String> {
     match kind {
         SymbolKind::Unit => canonical_unit_names(),
-        SymbolKind::Location => location_names(map_context),
-        SymbolKind::Switch => switch_names(map_context),
+        SymbolKind::Location => location_names(map_data),
+        SymbolKind::Switch => switch_names(map_data),
     }
 }
 
@@ -94,13 +94,13 @@ fn canonical_unit_names() -> Vec<String> {
         .collect()
 }
 
-fn location_names(map_context: Option<&MapContext>) -> Vec<String> {
+fn location_names(map_data: Option<&MapData>) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
     push_unique(&mut names, &mut seen, "Anywhere");
 
-    if let Some(context) = map_context {
-        for location in context.locations() {
+    if let Some(map_data) = map_data {
+        for location in map_data.locations() {
             if let Some(name) = &location.name {
                 push_unique(&mut names, &mut seen, name);
             }
@@ -110,12 +110,12 @@ fn location_names(map_context: Option<&MapContext>) -> Vec<String> {
     names
 }
 
-fn switch_names(map_context: Option<&MapContext>) -> Vec<String> {
+fn switch_names(map_data: Option<&MapData>) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
 
-    if let Some(context) = map_context {
-        for switch in context.switches() {
+    if let Some(map_data) = map_data {
+        for switch in map_data.switches() {
             if let Some(name) = &switch.name {
                 push_unique(&mut names, &mut seen, name);
             }

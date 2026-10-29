@@ -1,7 +1,7 @@
 use crate::hir::{epd, Comparison, Modifier, CURRENT_PLAYER_ADDR};
 use crate::lir::types::{
-    ActField, FieldRef, LirAction, LirCondition, LirTrigger, ObjectId, TriggerSlotField, ValueExpr,
-    EUDX_SIGNATURE,
+    ActField, FieldRef, LirAction, LirCondition, LirTrigger, ObjectId, TriggerRole,
+    TriggerSlotField, ValueExpr, EUDX_SIGNATURE,
 };
 use std::collections::HashMap;
 
@@ -10,6 +10,19 @@ pub struct ReadTable {
     pub read_end_id: ObjectId,
     pub triggers: Vec<LirTrigger>,
     pub entries: HashMap<(u32, i32), ObjectId>,
+    /// `(shift, most_significant_bit) -> first trigger of that bit chain`.
+    ///
+    /// Built while constructing the chains so `entry()` never scans trigger
+    /// labels, which are diagnostic only.
+    pub bit_entries: HashMap<(i32, u32), ObjectId>,
+}
+
+fn record_chain(
+    entries: &mut HashMap<(i32, u32), ObjectId>,
+    shift: i32,
+    chain: &HashMap<u32, ObjectId>,
+) {
+    entries.extend(chain.iter().map(|(&bit, &id)| ((shift, bit), id)));
 }
 
 impl ReadTable {
@@ -20,6 +33,7 @@ impl ReadTable {
 
         let mut triggers = Vec::new();
         let mut entries = HashMap::new();
+        let mut bit_entries = HashMap::new();
 
         let copy_ret_action = LirAction {
             locid1: ValueExpr::Const(0),
@@ -66,6 +80,7 @@ impl ReadTable {
         let read_end_trig = LirTrigger {
             id: read_end_id,
             label: Some("ReadTable_end".to_string()),
+            role: TriggerRole::ReadTableEnd,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: ValueExpr::Const(0),
             conditions: Vec::new(),
@@ -130,6 +145,7 @@ impl ReadTable {
                 triggers.push(LirTrigger {
                     id,
                     label: Some(format!("ReadTable_s{shift}_b{bit}")),
+                    role: TriggerRole::ReadTable,
                     prev_ptr: ValueExpr::Const(0),
                     next_ptr: ValueExpr::ObjectAddress {
                         object: next_obj,
@@ -145,69 +161,58 @@ impl ReadTable {
 
         // Chain 1: shift 0, bits 31..0
         let s0 = build_chain(31, 0, 0, &mut triggers, &mut cur_id);
+        record_chain(&mut bit_entries, 0, &s0);
         entries.insert((0xFFFF_FFFF, 0), s0[&31]);
         entries.insert((0x0000_FFFF, 0), s0[&15]);
         entries.insert((0x0000_00FF, 0), s0[&7]);
 
         // Chain 2: shift -2, bits 31..2
         let s_2 = build_chain(31, 2, -2, &mut triggers, &mut cur_id);
+        record_chain(&mut bit_entries, -2, &s_2);
         entries.insert((0xFFFF_FFFC, -2), s_2[&31]);
 
         // Chain 3: shift -8, bits 15..8
         let s_8 = build_chain(15, 8, -8, &mut triggers, &mut cur_id);
+        record_chain(&mut bit_entries, -8, &s_8);
         entries.insert((0x0000_FF00, -8), s_8[&15]);
 
         // Chain 4: shift -16, bits 31..16
         let s_16 = build_chain(31, 16, -16, &mut triggers, &mut cur_id);
+        record_chain(&mut bit_entries, -16, &s_16);
         entries.insert((0xFFFF_0000, -16), s_16[&31]);
         entries.insert((0x00FF_0000, -16), s_16[&23]);
 
         // Chain 5: shift -24, bits 31..24
         let s_24 = build_chain(31, 24, -24, &mut triggers, &mut cur_id);
+        record_chain(&mut bit_entries, -24, &s_24);
         entries.insert((0xFF00_0000, -24), s_24[&31]);
 
         ReadTable {
             read_end_id,
             triggers,
             entries,
+            bit_entries,
         }
     }
 
+    /// Resolves an arbitrary `(mask, shift)` to the first read-table trigger.
+    ///
+    /// Exact-mask entries come from `entries`; other masks resolve through the
+    /// precomputed `(shift, msb)` map. Trigger labels are never inspected.
     pub fn entry(&self, mask: u32, shift: i32) -> ObjectId {
         if let Some(&id) = self.entries.get(&(mask, shift)) {
             return id;
         }
-        let msb = 31 - mask.leading_zeros();
+        let msb = if mask == 0 {
+            u32::MAX
+        } else {
+            31 - mask.leading_zeros()
+        };
         match shift {
-            0 => self
-                .triggers
-                .iter()
-                .find(|t| t.label.as_deref() == Some(&format!("ReadTable_s0_b{msb}")))
-                .map(|t| t.id)
-                .unwrap_or(self.read_end_id),
-            -2 => self
-                .triggers
-                .iter()
-                .find(|t| t.label.as_deref() == Some(&format!("ReadTable_s-2_b{msb}")))
-                .map(|t| t.id)
-                .unwrap_or(self.read_end_id),
-            -8 => self
-                .triggers
-                .iter()
-                .find(|t| t.label.as_deref() == Some(&format!("ReadTable_s-8_b{msb}")))
-                .map(|t| t.id)
-                .unwrap_or(self.read_end_id),
-            -16 => self
-                .triggers
-                .iter()
-                .find(|t| t.label.as_deref() == Some(&format!("ReadTable_s-16_b{msb}")))
-                .map(|t| t.id)
-                .unwrap_or(self.read_end_id),
-            -24 => self
-                .triggers
-                .iter()
-                .find(|t| t.label.as_deref() == Some(&format!("ReadTable_s-24_b{msb}")))
-                .map(|t| t.id)
+            0 | -2 | -8 | -16 | -24 => self
+                .bit_entries
+                .get(&(shift, msb))
+                .copied()
                 .unwrap_or(self.read_end_id),
             _ => self
                 .entries

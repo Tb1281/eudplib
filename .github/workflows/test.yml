@@ -108,6 +108,29 @@ jobs:
           rustup toolchain install 1.97.0 --profile minimal
           cargo +1.97.0 check --workspace --all-targets
 
+  ts-sdk:
+    name: TypeScript SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: packages/ts-sdk
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/ts-sdk/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Check TSDoc coverage
+        run: npm run check-docs
+      - name: Type-check the reactive SDK surface
+        run: npm run test:types
+
   vscode-extension:
     name: VS Code extension
     runs-on: ubuntu-latest
@@ -135,21 +158,6 @@ jobs:
         run: |
           npm run package
           npm run verify:vsix
-
-  ts-sdk:
-    name: TypeScript SDK
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Check TSDoc coverage
-        working-directory: packages/ts-sdk
-        run: npm test
 
   zed-extension:
     name: Zed extension

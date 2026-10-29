@@ -4,7 +4,7 @@ use crate::error::{EudkitError, Result};
 use crate::hir::HirModule;
 use crate::injector::CompilationReport;
 use crate::lir::{lower_hir_to_lir, LirModule, LirObject};
-use crate::map_context::{MapContext, MapData, MapString};
+use crate::map_context::{MapData, MapString};
 use eudplib_stormlib::{Archive, OpenArchiveFlags};
 use std::fs;
 use std::io::Write;
@@ -22,7 +22,8 @@ pub struct CompilationSession {
     input_map_path: Option<PathBuf>,
     raw_mpq_bytes: Option<Vec<u8>>,
     chk: Chk,
-    map_context: MapContext,
+    map_data: MapData,
+    canonical_symbols: CanonicalSymbols,
     config: CompilationConfig,
     hir_module: Option<HirModule>,
     lir_module: Option<LirModule>,
@@ -50,13 +51,14 @@ impl CompilationSession {
         drop(archive);
 
         let chk = Chk::parse(&raw_chk)?;
-        let map_context = MapContext::from_chk(&chk)?;
+        let map_data = MapData::from_chk(&chk)?;
 
         Ok(Self {
             input_map_path: Some(path_ref.to_path_buf()),
             raw_mpq_bytes: Some(raw_mpq_bytes),
             chk,
-            map_context,
+            map_data,
+            canonical_symbols: CanonicalSymbols::new(),
             config,
             hir_module: None,
             lir_module: None,
@@ -65,12 +67,13 @@ impl CompilationSession {
 
     pub fn from_chk_bytes(raw_chk: &[u8], config: CompilationConfig) -> Result<Self> {
         let chk = Chk::parse(raw_chk)?;
-        let map_context = MapContext::from_chk(&chk)?;
+        let map_data = MapData::from_chk(&chk)?;
         Ok(Self {
             input_map_path: None,
             raw_mpq_bytes: None,
             chk,
-            map_context,
+            map_data,
+            canonical_symbols: CanonicalSymbols::new(),
             config,
             hir_module: None,
             lir_module: None,
@@ -85,27 +88,25 @@ impl CompilationSession {
         &self.chk
     }
 
-    pub fn map_context(&self) -> &MapContext {
-        &self.map_context
-    }
-
-    pub fn map_context_mut(&mut self) -> &mut MapContext {
-        &mut self.map_context
-    }
-
     /// Returns the map-dependent half of the Map Context.
     pub fn map_data(&self) -> &MapData {
-        self.map_context.data()
+        &self.map_data
     }
 
     /// Returns the mutable map-dependent half of the Map Context.
     pub fn map_data_mut(&mut self) -> &mut MapData {
-        self.map_context.data_mut()
+        &mut self.map_data
     }
 
     /// Returns the canonical half of the Map Context.
     pub fn canonical_symbols(&self) -> &CanonicalSymbols {
-        self.map_context.canonical_symbols()
+        &self.canonical_symbols
+    }
+
+    /// Stable identity of the input map's `scenario.chk`, used to bind a
+    /// frozen HIR plan to the Map Context it was synthesized against.
+    pub fn map_fingerprint(&self) -> String {
+        crate::plan::fingerprint_bytes(&self.chk.to_bytes())
     }
 
     pub fn config(&self) -> &CompilationConfig {
@@ -121,7 +122,7 @@ impl CompilationSession {
     }
 
     pub fn register_map_string(&mut self, text: &str) -> Result<MapString> {
-        self.map_context.register_map_string(text)
+        self.map_data.register_map_string(text)
     }
 
     pub fn set_hir_module(&mut self, hir: HirModule) {
@@ -141,7 +142,7 @@ impl CompilationSession {
         let hir = self.hir_module.as_ref().ok_or_else(|| {
             EudkitError::Ir("no HIR module set in CompilationSession".to_string())
         })?;
-        let lir = lower_hir_to_lir(hir, &mut self.map_context)?;
+        let lir = lower_hir_to_lir(hir, &mut self.map_data)?;
         self.lir_module = Some(lir);
         Ok(self.lir_module.as_ref().unwrap())
     }
@@ -216,7 +217,7 @@ impl CompilationSession {
 
         let mut out_chk = self.chk.clone();
         out_chk.set_has_isom_footer(obscurate);
-        let mut map_ctx = self.map_context.clone();
+        let mut map_data = self.map_data.clone();
 
         let restore_triggers = if let Some(s) = seed {
             let mut rng = crate::obscurate::ObscureRng::new(s);
@@ -224,8 +225,8 @@ impl CompilationSession {
             // 1. EPD unit-offset randomization on LIR
             crate::obscurate::apply_unit_offset_randomization(&mut lir, &mut rng);
 
-            // 2. String protection: Seeded XOR scrambling of static strings in map_ctx
-            let string_restores = crate::obscurate::encrypt_static_strings(&mut map_ctx, &mut rng);
+            // 2. String protection: Seeded XOR scrambling of static strings in Map Data
+            let string_restores = crate::obscurate::encrypt_static_strings(&mut map_data, &mut rng);
 
             // 3. CHK protection: scramble MRGN, strip SWNM, strip comments
             let mrgn_info = crate::obscurate::protect_chk_sections(&mut out_chk, &mut rng)?;
@@ -252,13 +253,15 @@ impl CompilationSession {
             .iter()
             .filter(|o| matches!(o, LirObject::ByteBuf(_)))
             .count();
+        let vproc_count = lir.vproc_count();
 
         let report = crate::injector::inject_payload_into_chk_with_restores(
             &mut out_chk,
-            &map_ctx,
+            &map_data,
             &allocated,
             trigger_count,
             byte_buf_count,
+            vproc_count,
             &restore_triggers,
         )?;
         Ok((out_chk.to_bytes(), report))

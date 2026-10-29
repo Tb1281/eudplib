@@ -1131,6 +1131,62 @@ class TestEudkitPythonFrontend(unittest.TestCase):
         if out_path.exists():
             out_path.unlink()
 
+    def test_reactive_conformance_fixture_matches_shared_golden_rules(self):
+        """Both Python reactive syntaxes must match the shared TypeScript fixture."""
+        from eudkit.runner import run_build
+
+        fixture_dir = REPO_ROOT / "tests" / "fixtures" / "reactive_conformance"
+        expected = json.loads(
+            (fixture_dir / "expected_rules.json").read_text(encoding="utf-8")
+        )
+
+        def reactive_rules(plan):
+            rules = []
+
+            def walk(stmts):
+                for stmt in stmts:
+                    if "Reactive" in stmt:
+                        rule = stmt["Reactive"]
+                        rules.append(rule)
+                        for payload in rule.values():
+                            if isinstance(payload, dict):
+                                walk(payload.get("body", []))
+                    elif "If" in stmt:
+                        walk(stmt["If"]["then_body"])
+                        walk(stmt["If"].get("else_body", []))
+                    elif "While" in stmt:
+                        walk(stmt["While"]["body"])
+
+            for function in plan["module"]["functions"]:
+                for block in function["blocks"]:
+                    walk(block["stmts"])
+            return rules
+
+        plans = {}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for fixture in ("main.py", "main_callbacks.py"):
+                plan_path = Path(tmpdir) / f"{fixture}.eudhir"
+                report = run_build(
+                    input_map=TESTMAP_PATH,
+                    entry=fixture_dir / fixture,
+                    plan=plan_path,
+                )
+                self.assertIsNone(report)
+                plans[fixture] = json.loads(plan_path.read_text(encoding="utf-8"))
+
+        for fixture, plan in plans.items():
+            self.assertEqual(
+                reactive_rules(plan),
+                expected,
+                f"{fixture} must emit the shared Python/TypeScript reactive rules",
+            )
+
+        self.assertEqual(
+            plans["main.py"]["module"],
+            plans["main_callbacks.py"]["module"],
+            "context-manager and callback Python syntaxes must emit identical HIR",
+        )
+
     def test_string_buffer_single_api(self):
         """Verify modern StringBuffer single public API."""
         import eudkit

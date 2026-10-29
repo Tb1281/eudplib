@@ -29,6 +29,10 @@ def main(argv: list[str] | None = None) -> None:
     build_parser.add_argument("--entry", "-e", help="Path to entry script (.py/.ts)")
     build_parser.add_argument("--obscurate", action="store_true", help="Enable bytecode obscuration")
     build_parser.add_argument("--seed", type=int, help="Deterministic seed for obscuration")
+    build_parser.add_argument(
+        "--plan",
+        help="Write the canonical HIR plan artifact (.eudhir) instead of building",
+    )
 
     dump_parser = subparsers.add_parser("dump-ir", help="Dump Intermediate Representation (HIR/LIR)")
     dump_parser.add_argument("--config", "-c", help="Path to eudkit.toml configuration file")
@@ -55,9 +59,10 @@ def main(argv: list[str] | None = None) -> None:
 
         input_map = resolved["input_map"]
         output_map = resolved["output_map"]
-        if not input_map or not output_map:
+        plan = args.plan
+        if not input_map or (not output_map and not plan):
             print(
-                "usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <script>]",
+                "usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <script>] [--plan <out.eudhir>]",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -70,12 +75,10 @@ def main(argv: list[str] | None = None) -> None:
                 obscurate=resolved["obscurate"],
                 obscurate_seed=resolved["obscurate_seed"],
                 preserve_classic_triggers=resolved["preserve_classic_triggers"],
+                plan=plan,
             )
             if report is not None:
-                print(
-                    f"Built {output_map} (triggers={report.trigger_count}, "
-                    f"payload_bytes={report.payload_size}, entry={report.payload_entry_addr:#010X})"
-                )
+                print(report.summary(str(output_map)))
         except Exception as e:
             print(f"error: {e}", file=sys.stderr)
             sys.exit(1)

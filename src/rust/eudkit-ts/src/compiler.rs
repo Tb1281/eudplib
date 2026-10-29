@@ -1,10 +1,13 @@
 use crate::error::{EudkitTsError, Result};
+use eudkit_core::canonical::CanonicalSymbols;
 use eudkit_core::hir::{
     epd, parse_format_template, CmpOp, Comparison, HirBinOp, HirBuilder, HirExpr, HirModule,
     HirStmt, HirStringBuffer, HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget, ReactiveRule,
-    ResourceType, StockAction, StockCondition, StringBufferId, SwitchAction, VarId,
+    ResourceType, StockAction, StockCondition, StringBufferId, SwitchAction, SwitchState, VarId,
 };
-use eudkit_core::map_context::MapContext;
+use eudkit_core::map_context::MapData;
+use eudkit_core::symbols;
+use eudkit_core::vocabulary::{frontend_constant, frontend_constants};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::*;
 use oxc_parser::Parser;
@@ -57,7 +60,8 @@ fn address_to_epd(ptr: HirExpr) -> HirExpr {
 
 pub struct TsCompiler<'a> {
     builder: HirBuilder,
-    map_ctx: &'a MapContext,
+    map_data: &'a MapData,
+    canonical_symbols: &'a CanonicalSymbols,
     constants: HashMap<String, i32>,
     array_constants: HashMap<String, Vec<i32>>,
     local_constants: HashMap<String, i32>,
@@ -72,72 +76,23 @@ pub struct TsCompiler<'a> {
 }
 
 impl<'a> TsCompiler<'a> {
-    pub fn new(module_name: &str, map_ctx: &'a MapContext) -> Self {
+    pub fn new(
+        module_name: &str,
+        map_data: &'a MapData,
+        canonical_symbols: &'a CanonicalSymbols,
+    ) -> Self {
         let mut constants = HashMap::new();
-        // Register SDK standard constants
-        constants.insert("Player1".to_string(), 0);
-        constants.insert("Player2".to_string(), 1);
-        constants.insert("Player3".to_string(), 2);
-        constants.insert("Player4".to_string(), 3);
-        constants.insert("Player5".to_string(), 4);
-        constants.insert("Player6".to_string(), 5);
-        constants.insert("Player7".to_string(), 6);
-        constants.insert("Player8".to_string(), 7);
-        constants.insert("Player9".to_string(), 8);
-        constants.insert("Player10".to_string(), 9);
-        constants.insert("Player11".to_string(), 10);
-        constants.insert("Player12".to_string(), 11);
-
-        constants.insert("P1".to_string(), 0);
-        constants.insert("P2".to_string(), 1);
-        constants.insert("P3".to_string(), 2);
-        constants.insert("P4".to_string(), 3);
-        constants.insert("P5".to_string(), 4);
-        constants.insert("P6".to_string(), 5);
-        constants.insert("P7".to_string(), 6);
-        constants.insert("P8".to_string(), 7);
-        constants.insert("P9".to_string(), 8);
-        constants.insert("P10".to_string(), 9);
-        constants.insert("P11".to_string(), 10);
-        constants.insert("P12".to_string(), 11);
-
-        constants.insert("CurrentPlayer".to_string(), 13);
-        constants.insert("Foes".to_string(), 14);
-        constants.insert("Allies".to_string(), 15);
-        constants.insert("NeutralPlayers".to_string(), 16);
-        constants.insert("AllPlayers".to_string(), 17);
-        constants.insert("Force1".to_string(), 18);
-        constants.insert("Force2".to_string(), 19);
-        constants.insert("Force3".to_string(), 20);
-        constants.insert("Force4".to_string(), 21);
-        constants.insert("NonAlliedVictoryPlayers".to_string(), 26);
-
-        constants.insert("AtLeast".to_string(), 0);
-        constants.insert("AtMost".to_string(), 1);
-        constants.insert("Exactly".to_string(), 10);
-
-        constants.insert("SetTo".to_string(), 7);
-        constants.insert("Add".to_string(), 8);
-        constants.insert("Subtract".to_string(), 9);
-
-        constants.insert("Ore".to_string(), 0);
-        constants.insert("Gas".to_string(), 1);
-        constants.insert("OreAndGas".to_string(), 2);
-
-        constants.insert("Set".to_string(), 2);
-        constants.insert("Cleared".to_string(), 3);
-        constants.insert("Clear".to_string(), 5);
-        constants.insert("Toggle".to_string(), 6);
-        constants.insert("Random".to_string(), 7);
-
+        // Register every Frontend spelling from the core vocabulary manifest.
+        for constant in frontend_constants() {
+            constants.insert(constant.name.to_string(), constant.code);
+        }
+        // Unit-count pseudo-values are not part of the vocabulary manifest.
         constants.insert("All".to_string(), 0);
-        constants.insert("Move".to_string(), 0);
-        constants.insert("Patrol".to_string(), 1);
-        constants.insert("Attack".to_string(), 2);
 
         Self {
             builder: HirBuilder::new(module_name),
-            map_ctx,
+            map_data,
+            canonical_symbols,
             constants,
             array_constants: HashMap::new(),
             local_constants: HashMap::new(),
@@ -1376,100 +1331,152 @@ impl<'a> TsCompiler<'a> {
             _ => return Ok(None),
         };
 
-        match fn_name {
-            "once" => {
-                let (cond_opt, cb_arg) = if call.arguments.len() == 1 {
-                    (None, call.arguments.first())
-                } else if call.arguments.len() >= 2 {
-                    let first = call.arguments.first().and_then(|a| a.as_expression());
-                    let is_null_or_undef = match first {
-                        Some(Expression::NullLiteral(_)) => true,
-                        Some(Expression::Identifier(id)) if id.name.as_str() == "undefined" => true,
-                        _ => false,
-                    };
-                    if is_null_or_undef {
-                        (None, call.arguments.get(1))
-                    } else {
-                        (first, call.arguments.get(1))
-                    }
-                } else {
-                    return Ok(None);
-                };
+        // Only the five known primitives are reactive. Any other name is a
+        // normal call and must keep its previous lowering path.
+        if !matches!(fn_name, "once" | "when" | "until" | "after" | "every") {
+            return Ok(None);
+        }
 
-                let mut conds = Vec::new();
-                if let Some(cond_expr) = cond_opt {
-                    conds.extend(self.lower_condition(cond_expr)?);
+        // From here on the call names a reactive primitive. A malformed call is
+        // a diagnostic; silently returning `None` would drop the user's rule.
+        let args = reactive_arguments(call, fn_name)?;
+        match fn_name {
+            "once" => self.lower_reactive_once(&args),
+            "when" => self.lower_reactive_when(&args),
+            "until" => self.lower_reactive_until(&args),
+            "after" => self.lower_reactive_after(&args),
+            "every" => self.lower_reactive_every(&args),
+            _ => unreachable!("reactive primitive was checked above"),
+        }
+    }
+
+    fn lower_reactive_once(&mut self, args: &[&Expression]) -> Result<Option<Vec<HirStmt>>> {
+        let (condition, callback) = match args {
+            [callback] => (None, *callback),
+            [condition, callback] => {
+                if self.is_reactive_callback(condition) {
+                    return Err(EudkitTsError::Compile(
+                        "once(condition, callback) expects a condition as its first argument; use once(callback) for an unguarded rule".to_string(),
+                    ));
                 }
-                let mut body = Vec::new();
-                if let Some(cb) = cb_arg.and_then(|a| a.as_expression()) {
-                    self.lower_callback(cb, &mut body)?;
-                }
-                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Once {
-                    cond: conds,
-                    body,
-                })]))
+                let condition = if is_null_or_undefined(condition) {
+                    None
+                } else {
+                    Some(*condition)
+                };
+                (condition, *callback)
             }
-            "when" => {
-                let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let conds = self.lower_condition(arg0)?;
-                let mut body = Vec::new();
-                self.lower_callback(arg1, &mut body)?;
-                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::When {
-                    cond: conds,
-                    body,
-                })]))
+            _ => {
+                return Err(EudkitTsError::Compile(format!(
+                    "once expects once(callback) or once(condition, callback), got {} argument(s)",
+                    args.len()
+                )));
             }
-            "until" => {
-                let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let conds = self.lower_condition(arg0)?;
-                let mut body = Vec::new();
-                self.lower_callback(arg1, &mut body)?;
-                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Until {
-                    cond: conds,
-                    body,
-                })]))
-            }
-            "after" => {
-                let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let loops_val = self.eval_const_expr(arg0)?;
-                let mut body = Vec::new();
-                self.lower_callback(arg1, &mut body)?;
-                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::After {
-                    delay_ticks: loops_val as u32,
-                    body,
-                })]))
-            }
-            "every" => {
-                let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let loops_val = self.eval_const_expr(arg0)?;
-                let mut body = Vec::new();
-                self.lower_callback(arg1, &mut body)?;
-                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Every {
-                    period_ticks: loops_val as u32,
-                    body,
-                })]))
-            }
-            _ => Ok(None),
+        };
+
+        self.ensure_reactive_callback(callback, "once")?;
+        let conds = match condition {
+            Some(condition) => self.lower_condition(condition)?,
+            None => Vec::new(),
+        };
+        let mut body = Vec::new();
+        self.lower_callback(callback, &mut body)?;
+        Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Once {
+            cond: conds,
+            body,
+        })]))
+    }
+
+    fn lower_reactive_when(&mut self, args: &[&Expression]) -> Result<Option<Vec<HirStmt>>> {
+        let (condition, callback) = reactive_condition_and_callback(args, "when")?;
+        self.ensure_reactive_condition(condition, "when")?;
+        self.ensure_reactive_callback(callback, "when")?;
+        let conds = self.lower_condition(condition)?;
+        let mut body = Vec::new();
+        self.lower_callback(callback, &mut body)?;
+        Ok(Some(vec![HirStmt::Reactive(ReactiveRule::When {
+            cond: conds,
+            body,
+        })]))
+    }
+
+    fn lower_reactive_until(&mut self, args: &[&Expression]) -> Result<Option<Vec<HirStmt>>> {
+        let (condition, callback) = reactive_condition_and_callback(args, "until")?;
+        self.ensure_reactive_condition(condition, "until")?;
+        self.ensure_reactive_callback(callback, "until")?;
+        let conds = self.lower_condition(condition)?;
+        let mut body = Vec::new();
+        self.lower_callback(callback, &mut body)?;
+        Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Until {
+            cond: conds,
+            body,
+        })]))
+    }
+
+    fn lower_reactive_after(&mut self, args: &[&Expression]) -> Result<Option<Vec<HirStmt>>> {
+        let (loops, callback) = reactive_loop_and_callback(args, "after")?;
+        let loops = self.reactive_loop_count(loops, "after")?;
+        self.ensure_reactive_callback(callback, "after")?;
+        let mut body = Vec::new();
+        self.lower_callback(callback, &mut body)?;
+        Ok(Some(vec![HirStmt::Reactive(ReactiveRule::After {
+            delay_ticks: loops,
+            body,
+        })]))
+    }
+
+    fn lower_reactive_every(&mut self, args: &[&Expression]) -> Result<Option<Vec<HirStmt>>> {
+        let (loops, callback) = reactive_loop_and_callback(args, "every")?;
+        let loops = self.reactive_loop_count(loops, "every")?;
+        self.ensure_reactive_callback(callback, "every")?;
+        let mut body = Vec::new();
+        self.lower_callback(callback, &mut body)?;
+        Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Every {
+            period_ticks: loops,
+            body,
+        })]))
+    }
+
+    fn reactive_loop_count(&mut self, loops: &Expression, primitive: &str) -> Result<u32> {
+        if self.is_reactive_callback(loops) {
+            return Err(EudkitTsError::Compile(format!(
+                "{primitive}(loops, callback) expects a compile-time loop count as its first argument, not a function"
+            )));
+        }
+        let loops = self.eval_const_expr(loops)?;
+        if loops < 0 {
+            return Err(EudkitTsError::Compile(format!(
+                "{primitive} loop count must be non-negative, got {loops}"
+            )));
+        }
+        Ok(loops as u32)
+    }
+
+    fn ensure_reactive_condition(&self, expr: &Expression, primitive: &str) -> Result<()> {
+        if self.is_reactive_callback(expr) {
+            Err(EudkitTsError::Compile(format!(
+                "{primitive}(condition, callback) expects a condition as its first argument, not a function"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_reactive_callback(&self, expr: &Expression, primitive: &str) -> Result<()> {
+        if self.is_reactive_callback(expr) {
+            Ok(())
+        } else {
+            Err(EudkitTsError::Compile(format!(
+                "{primitive} expects a function callback as its final argument"
+            )))
+        }
+    }
+
+    fn is_reactive_callback(&self, expr: &Expression) -> bool {
+        match expr {
+            Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => true,
+            Expression::Identifier(id) => self.functions.contains_key(id.name.as_str()),
+            _ => false,
         }
     }
 
@@ -1501,9 +1508,19 @@ impl<'a> TsCompiler<'a> {
                         args: Vec::new(),
                         rets: Vec::new(),
                     });
+                } else {
+                    return Err(EudkitTsError::Compile(format!(
+                        "unknown reactive callback function '{}'",
+                        id.name
+                    )));
                 }
             }
-            _ => {}
+            _ => {
+                return Err(EudkitTsError::Compile(
+                    "reactive callback must be an arrow function, a function expression, or a function name"
+                        .to_string(),
+                ));
+            }
         }
         Ok(())
     }
@@ -1650,7 +1667,7 @@ impl<'a> TsCompiler<'a> {
                 let amount_expr = self.lower_expr(amount_arg)?;
 
                 if let (HirExpr::Const(p), HirExpr::Const(a)) = (&player_expr, &amount_expr) {
-                    let pid = PlayerId::from_player_slot(*p as u8);
+                    let pid = PlayerId::from_code(*p);
                     if let Some(m) = mask {
                         Ok(Some(StockCondition::DeathsX {
                             player: pid,
@@ -1748,7 +1765,7 @@ impl<'a> TsCompiler<'a> {
                     ResourceType::Ore
                 };
                 Ok(Some(StockCondition::Accumulate {
-                    player: PlayerId::from_player_slot(p as u8),
+                    player: PlayerId::from_code(p),
                     comparison: cmp,
                     amount: amt,
                     resource: res,
@@ -1765,7 +1782,7 @@ impl<'a> TsCompiler<'a> {
                     0
                 };
                 Ok(Some(StockCondition::Command {
-                    player: PlayerId::from_player_slot(p as u8),
+                    player: PlayerId::from_code(p),
                     comparison: cmp,
                     amount: amt,
                     unit,
@@ -1778,7 +1795,7 @@ impl<'a> TsCompiler<'a> {
                 let unit = self.resolve_unit_id(call.arguments[3].as_expression().unwrap())?;
                 let loc = self.resolve_location_id(call.arguments[4].as_expression().unwrap())?;
                 Ok(Some(StockCondition::Bring {
-                    player: PlayerId::from_player_slot(p as u8),
+                    player: PlayerId::from_code(p),
                     comparison: cmp,
                     amount: amt,
                     unit,
@@ -1801,7 +1818,7 @@ impl<'a> TsCompiler<'a> {
                 let cmp = self.resolve_comparison(call.arguments[2].as_expression().unwrap())?;
                 let amt = self.eval_const_expr(call.arguments[3].as_expression().unwrap())? as u32;
                 Ok(Some(StockCondition::Score {
-                    player: PlayerId::from_player_slot(p as u8),
+                    player: PlayerId::from_code(p),
                     score_type,
                     comparison: cmp,
                     amount: amt,
@@ -1822,15 +1839,12 @@ impl<'a> TsCompiler<'a> {
                     .ok_or_else(|| EudkitTsError::Compile("Switch requires state".to_string()))?;
                 let switch = self.eval_const_expr(sw_arg)? as u8;
                 let state_val = self.eval_const_expr(state_arg)?;
-                let state = match state_val {
-                    2 | 1 => eudkit_core::hir::SwitchState::Set,
-                    3 | 0 => eudkit_core::hir::SwitchState::Cleared,
-                    _ => {
-                        return Err(EudkitTsError::Compile(format!(
-                            "invalid switch state {state_val}"
-                        )))
-                    }
-                };
+                let state = u8::try_from(state_val)
+                    .ok()
+                    .and_then(SwitchState::from_code)
+                    .ok_or_else(|| {
+                        EudkitTsError::Compile(format!("invalid switch state {state_val}"))
+                    })?;
                 Ok(Some(StockCondition::Switch { switch, state }))
             }
             _ => Ok(None),
@@ -2016,7 +2030,7 @@ impl<'a> TsCompiler<'a> {
                 let epd_expr = self.lower_expr(epd_arg)?;
                 let val_expr = self.lower_expr(val_arg)?;
                 if let (HirExpr::Const(p), HirExpr::Const(v)) = (&epd_expr, &val_expr) {
-                    let pid = PlayerId::from_player_slot(*p as u8);
+                    let pid = PlayerId::from_code(*p);
                     Ok(Some(StockAction::SetDeaths {
                         player: pid,
                         modifier: Modifier::SetTo,
@@ -2153,7 +2167,7 @@ impl<'a> TsCompiler<'a> {
                 let val_expr = self.lower_expr(val_arg)?;
 
                 if let (HirExpr::Const(p), HirExpr::Const(v)) = (&p_expr, &val_expr) {
-                    let pid = PlayerId::from_player_slot(*p as u8);
+                    let pid = PlayerId::from_code(*p);
                     if let Some(m) = mask {
                         Ok(Some(StockAction::SetDeathsX {
                             player: pid,
@@ -2256,7 +2270,7 @@ impl<'a> TsCompiler<'a> {
                         ResourceType::Ore
                     };
                 Ok(Some(StockAction::SetResources {
-                    player: PlayerId::from_player_slot(p_arg as u8),
+                    player: PlayerId::from_code(p_arg),
                     modifier: mod_arg,
                     amount: amt_arg,
                     resource: res_arg,
@@ -2363,7 +2377,7 @@ impl<'a> TsCompiler<'a> {
                     count,
                     unit,
                     location: loc,
-                    player: PlayerId::from_player_slot(player),
+                    player: PlayerId::from_code(i32::from(player)),
                 }))
             }
             "KillUnitAt" => {
@@ -2376,7 +2390,7 @@ impl<'a> TsCompiler<'a> {
                     count,
                     unit,
                     location: loc,
-                    player: PlayerId::from_player_slot(player),
+                    player: PlayerId::from_code(i32::from(player)),
                 }))
             }
             "MinimapPing" => {
@@ -2395,7 +2409,7 @@ impl<'a> TsCompiler<'a> {
                         0
                     };
                 Ok(Some(StockAction::SetScore {
-                    player: PlayerId::from_player_slot(p as u8),
+                    player: PlayerId::from_code(p),
                     modifier,
                     amount,
                     score_type,
@@ -2404,14 +2418,13 @@ impl<'a> TsCompiler<'a> {
             "SetSwitch" => {
                 let sw = self.eval_const_expr(call.arguments[0].as_expression().unwrap())? as u8;
                 let action_code =
-                    self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u8;
-                let action = match action_code {
-                    4 | 2 => SwitchAction::Set,
-                    5 | 3 => SwitchAction::Clear,
-                    6 => SwitchAction::Toggle,
-                    11 | 7 => SwitchAction::Random,
-                    _ => SwitchAction::Set,
-                };
+                    self.eval_const_expr(call.arguments[1].as_expression().unwrap())?;
+                let action = u8::try_from(action_code)
+                    .ok()
+                    .and_then(SwitchAction::from_code)
+                    .ok_or_else(|| {
+                        EudkitTsError::Compile(format!("invalid switch action {action_code}"))
+                    })?;
                 Ok(Some(StockAction::SetSwitch { switch: sw, action }))
             }
             "MoveLocation" => {
@@ -2424,7 +2437,7 @@ impl<'a> TsCompiler<'a> {
                 Ok(Some(StockAction::MoveLocation {
                     location: loc,
                     unit,
-                    player: PlayerId::from_player_slot(player),
+                    player: PlayerId::from_code(i32::from(player)),
                     dest_location: dest_loc,
                 }))
             }
@@ -2438,7 +2451,7 @@ impl<'a> TsCompiler<'a> {
                     count,
                     unit,
                     location: loc,
-                    player: PlayerId::from_player_slot(player),
+                    player: PlayerId::from_code(i32::from(player)),
                 }))
             }
             "KillUnit" => {
@@ -2447,7 +2460,7 @@ impl<'a> TsCompiler<'a> {
                     self.eval_const_expr(call.arguments[1].as_expression().unwrap())? as u8;
                 Ok(Some(StockAction::KillUnit {
                     unit,
-                    player: PlayerId::from_player_slot(player),
+                    player: PlayerId::from_code(i32::from(player)),
                 }))
             }
             "MoveUnit" => {
@@ -2462,7 +2475,7 @@ impl<'a> TsCompiler<'a> {
                 Ok(Some(StockAction::MoveUnit {
                     count,
                     unit,
-                    player: PlayerId::from_player_slot(player),
+                    player: PlayerId::from_code(i32::from(player)),
                     start_location: start_loc,
                     dest_location: dest_loc,
                 }))
@@ -2478,9 +2491,9 @@ impl<'a> TsCompiler<'a> {
                 Ok(Some(StockAction::GiveUnits {
                     count,
                     unit,
-                    player: PlayerId::from_player_slot(player),
+                    player: PlayerId::from_code(i32::from(player)),
                     location: loc,
-                    new_player: PlayerId::from_player_slot(new_player),
+                    new_player: PlayerId::from_code(i32::from(new_player)),
                 }))
             }
             "Order" => {
@@ -2495,7 +2508,7 @@ impl<'a> TsCompiler<'a> {
                     self.resolve_location_id(call.arguments[4].as_expression().unwrap())?;
                 Ok(Some(StockAction::Order {
                     unit,
-                    player: PlayerId::from_player_slot(player),
+                    player: PlayerId::from_code(i32::from(player)),
                     start_location: start_loc,
                     order_type,
                     dest_location: dest_loc,
@@ -2670,52 +2683,7 @@ impl<'a> TsCompiler<'a> {
     }
 
     pub fn builtin_const(name: &str) -> Option<i32> {
-        match name {
-            "Custom" => Some(7),
-            "Total" => Some(0),
-            "Units" => Some(1),
-            "Buildings" => Some(2),
-            "UnitsAndBuildings" => Some(3),
-            "Kills" => Some(4),
-            "Razings" => Some(5),
-            "KillsAndRazings" => Some(6),
-            "Ore" => Some(0),
-            "Gas" => Some(1),
-            "OreAndGas" => Some(2),
-            "SetTo" => Some(7),
-            "Add" => Some(8),
-            "Subtract" => Some(9),
-            "AtLeast" => Some(0),
-            "AtMost" => Some(1),
-            "Exactly" => Some(10),
-            "Set" => Some(2),
-            "Cleared" => Some(3),
-            "Clear" => Some(5),
-            "Toggle" => Some(6),
-            "Random" => Some(7),
-            "All" => Some(0),
-            "Move" => Some(0),
-            "Patrol" => Some(1),
-            "Attack" => Some(2),
-            "Player1" | "P1" => Some(0),
-            "Player2" | "P2" => Some(1),
-            "Player3" | "P3" => Some(2),
-            "Player4" | "P4" => Some(3),
-            "Player5" | "P5" => Some(4),
-            "Player6" | "P6" => Some(5),
-            "Player7" | "P7" => Some(6),
-            "Player8" | "P8" => Some(7),
-            "Player9" | "P9" => Some(8),
-            "Player10" | "P10" => Some(9),
-            "Player11" | "P11" => Some(10),
-            "Player12" | "P12" => Some(11),
-            "AllPlayers" => Some(17),
-            "Force1" => Some(18),
-            "Force2" => Some(19),
-            "Force3" => Some(20),
-            "Force4" => Some(21),
-            _ => None,
-        }
+        frontend_constant(name).or_else(|| (name == "All").then_some(0))
     }
 
     fn eval_const_expr(&self, expr: &Expression) -> Result<i32> {
@@ -2724,13 +2692,13 @@ impl<'a> TsCompiler<'a> {
             Expression::StringLiteral(slit) => {
                 let s = slit.value.as_str().unwrap_or("");
                 // If unit or location or switch name used in place of int
-                if let Some(uid) = self.map_ctx.unit_id(s) {
+                if let Some(uid) = symbols::unit_id(self.map_data, self.canonical_symbols, s) {
                     return Ok(uid as i32);
                 }
-                if let Some(lid) = self.map_ctx.location_id(s) {
+                if let Some(lid) = symbols::location_id(self.map_data, self.canonical_symbols, s) {
                     return Ok(lid as i32);
                 }
-                if let Some(sid) = self.map_ctx.switch_id(s) {
+                if let Some(sid) = symbols::switch_id(self.map_data, self.canonical_symbols, s) {
                     return Ok(sid as i32);
                 }
                 Err(EudkitTsError::Compile(format!(
@@ -2831,44 +2799,32 @@ impl<'a> TsCompiler<'a> {
 
     fn resolve_comparison(&self, expr: &Expression) -> Result<Comparison> {
         let val = self.eval_const_expr(expr)?;
-        match val {
-            0 => Ok(Comparison::AtLeast),
-            1 => Ok(Comparison::AtMost),
-            10 => Ok(Comparison::Exactly),
-            _ => Err(EudkitTsError::Compile(format!(
-                "invalid comparison value {val}"
-            ))),
-        }
+        u8::try_from(val)
+            .ok()
+            .and_then(Comparison::from_code)
+            .ok_or_else(|| EudkitTsError::Compile(format!("invalid comparison value {val}")))
     }
 
     fn resolve_modifier(&self, expr: &Expression) -> Result<Modifier> {
         let val = self.eval_const_expr(expr)?;
-        match val {
-            7 => Ok(Modifier::SetTo),
-            8 => Ok(Modifier::Add),
-            9 => Ok(Modifier::Subtract),
-            _ => Err(EudkitTsError::Compile(format!(
-                "invalid modifier value {val}"
-            ))),
-        }
+        u8::try_from(val)
+            .ok()
+            .and_then(Modifier::from_code)
+            .ok_or_else(|| EudkitTsError::Compile(format!("invalid modifier value {val}")))
     }
 
     fn resolve_resource(&self, expr: &Expression) -> Result<ResourceType> {
         let val = self.eval_const_expr(expr)?;
-        match val {
-            0 => Ok(ResourceType::Ore),
-            1 => Ok(ResourceType::Gas),
-            2 => Ok(ResourceType::OreAndGas),
-            _ => Err(EudkitTsError::Compile(format!(
-                "invalid resource type {val}"
-            ))),
-        }
+        u8::try_from(val)
+            .ok()
+            .and_then(ResourceType::from_code)
+            .ok_or_else(|| EudkitTsError::Compile(format!("invalid resource type {val}")))
     }
 
     fn resolve_unit_id(&self, expr: &Expression) -> Result<u16> {
         if let Expression::StringLiteral(slit) = expr {
             let s = slit.value.as_str().unwrap_or("");
-            if let Some(id) = self.map_ctx.unit_id(s) {
+            if let Some(id) = symbols::unit_id(self.map_data, self.canonical_symbols, s) {
                 return Ok(id);
             }
             return Err(EudkitTsError::Compile(format!("unknown unit name {:?}", s)));
@@ -2880,7 +2836,7 @@ impl<'a> TsCompiler<'a> {
     fn resolve_location_id(&self, expr: &Expression) -> Result<u32> {
         if let Expression::StringLiteral(slit) = expr {
             let s = slit.value.as_str().unwrap_or("");
-            if let Some(id) = self.map_ctx.location_id(s) {
+            if let Some(id) = symbols::location_id(self.map_data, self.canonical_symbols, s) {
                 return Ok(id);
             }
             return Err(EudkitTsError::Compile(format!(
@@ -2893,10 +2849,61 @@ impl<'a> TsCompiler<'a> {
     }
 }
 
+fn reactive_arguments<'a>(
+    call: &'a CallExpression<'a>,
+    primitive: &str,
+) -> Result<Vec<&'a Expression<'a>>> {
+    let mut args = Vec::with_capacity(call.arguments.len());
+    for argument in &call.arguments {
+        let Some(expression) = argument.as_expression() else {
+            return Err(EudkitTsError::Compile(format!(
+                "{primitive} does not accept spread arguments"
+            )));
+        };
+        args.push(expression);
+    }
+    Ok(args)
+}
+
+fn reactive_condition_and_callback<'a>(
+    args: &[&'a Expression<'a>],
+    primitive: &str,
+) -> Result<(&'a Expression<'a>, &'a Expression<'a>)> {
+    match args {
+        [condition, callback] => Ok((*condition, *callback)),
+        _ => Err(EudkitTsError::Compile(format!(
+            "{primitive} expects {primitive}(condition, callback), got {} argument(s)",
+            args.len()
+        ))),
+    }
+}
+
+fn reactive_loop_and_callback<'a>(
+    args: &[&'a Expression<'a>],
+    primitive: &str,
+) -> Result<(&'a Expression<'a>, &'a Expression<'a>)> {
+    match args {
+        [loops, callback] => Ok((*loops, *callback)),
+        _ => Err(EudkitTsError::Compile(format!(
+            "{primitive} expects {primitive}(loops, callback), got {} argument(s)",
+            args.len()
+        ))),
+    }
+}
+
+fn is_null_or_undefined(expr: &Expression) -> bool {
+    match expr {
+        Expression::NullLiteral(_) => true,
+        Expression::Identifier(id) => id.name.as_str() == "undefined",
+        _ => false,
+    }
+}
+
 pub fn compile_ts_to_hir(
     source: &str,
     module_name: &str,
-    map_context: &MapContext,
+    map_data: &MapData,
+    canonical_symbols: &CanonicalSymbols,
 ) -> Result<HirModule> {
     let allocator = Allocator::default();
     let source_type = SourceType::ts();
@@ -2909,6 +2916,6 @@ pub fn compile_ts_to_hir(
         )));
     }
 
-    let compiler = TsCompiler::new(module_name, map_context);
+    let compiler = TsCompiler::new(module_name, map_data, canonical_symbols);
     compiler.compile(&ret.program)
 }

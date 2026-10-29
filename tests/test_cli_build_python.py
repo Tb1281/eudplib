@@ -168,5 +168,50 @@ output_map = "project_out1.scx"
             self.assertIn("usage: eudkit build", res.stderr)
 
 
+    def test_python_session_emits_versioned_hir_plan(self) -> None:
+        import json
+
+        with Session(BASEMAP) as sess:
+            sess.var(7, name="score")
+            sess.var(0, name="flag")
+
+        plan = json.loads(sess.dump_plan())
+        self.assertEqual(plan["format"], "eudkit-hir-plan")
+        self.assertEqual(plan["schema_version"], 1)
+        self.assertEqual(plan["module"]["name"], "eudkit_module")
+        self.assertEqual(
+            [v["name"] for v in plan["module"]["vars"]], ["score", "flag"]
+        )
+        self.assertEqual(len(plan["map"]["fingerprint"]), 16)
+        self.assertEqual(plan["map"]["name"], BASEMAP.name)
+
+    def test_python_runner_writes_plan_without_compiling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script_path = Path(tmpdir) / "logic.py"
+            plan_path = Path(tmpdir) / "plan.eudhir"
+
+            script_path.write_text(
+                """from eudkit import session
+
+counter = session.var(0, name="counter")
+
+@session.fn
+def game_loop():
+    counter += 1
+"""
+            )
+
+            report = run_build(
+                input_map=BASEMAP,
+                entry=script_path,
+                plan=plan_path,
+            )
+            self.assertIsNone(report)
+            self.assertTrue(plan_path.exists())
+            text = plan_path.read_text()
+            self.assertIn('"format": "eudkit-hir-plan"', text)
+            self.assertIn('"name": "counter"', text)
+
+
 if __name__ == "__main__":
     unittest.main()

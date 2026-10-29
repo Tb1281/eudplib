@@ -15,20 +15,10 @@ use ruff_text_size::Ranged;
 
 use crate::analysis::document::ParsedDocument;
 use crate::analysis::ts::{call_name, TsLanguage};
+use eudkit_core::hir::PlayerId;
+use eudkit_core::vocabulary::{VocabEntry, PLAYER_ENTRIES};
 
 const EUD_FUNCTIONS: &[&str] = &["Deaths", "DeathsX", "SetDeaths", "SetDeathsX"];
-
-const GROUP_PLAYERS: &[(&str, i64)] = &[
-    ("Foes", 14),
-    ("Allies", 15),
-    ("NeutralPlayers", 16),
-    ("AllPlayers", 17),
-    ("Force1", 18),
-    ("Force2", 19),
-    ("Force3", 20),
-    ("Force4", 21),
-    ("NonAlliedVictoryPlayers", 26),
-];
 
 const STOCK_UNIT_ID_MAX: i64 = 232;
 
@@ -150,23 +140,25 @@ fn parse_group_player(expression: &str) -> Option<GroupPlayer> {
     group_player_by_name(name)
 }
 
+fn group_players() -> impl Iterator<Item = &'static VocabEntry<PlayerId>> {
+    PLAYER_ENTRIES.iter().filter(|entry| entry.value.is_group())
+}
+
 fn group_player_by_name(name: &str) -> Option<GroupPlayer> {
-    GROUP_PLAYERS
-        .iter()
-        .find(|(candidate, _)| *candidate == name)
-        .map(|(name, id)| GroupPlayer {
-            name: Some(name),
-            id: *id,
+    group_players()
+        .find(|entry| entry.name == name)
+        .map(|entry| GroupPlayer {
+            name: Some(entry.name),
+            id: i64::from(entry.code),
         })
 }
 
 fn group_player_by_id(id: i64) -> Option<GroupPlayer> {
-    GROUP_PLAYERS
-        .iter()
-        .find(|(_, candidate)| *candidate == id)
-        .map(|(name, id)| GroupPlayer {
-            name: Some(name),
-            id: *id,
+    group_players()
+        .find(|entry| i64::from(entry.code) == id)
+        .map(|entry| GroupPlayer {
+            name: Some(entry.name),
+            id: i64::from(entry.code),
         })
 }
 
@@ -543,6 +535,7 @@ mod tests {
     fn warns_for_all_eud_functions_group_players_and_literal_forms() {
         let cases = [
             ("Deaths(Foes, Exactly, 15, 300)", "Foes"),
+            ("Deaths(Force1, Exactly, 15, 300)", "Force1"),
             ("Deaths(AllPlayers, Exactly, 15, 300)", "AllPlayers"),
             ("DeathsX(AllPlayers, Exactly, 15, 300)", "AllPlayers"),
             ("SetDeaths(c.Foes, Exactly, 15, 0x12C)", "c.Foes"),

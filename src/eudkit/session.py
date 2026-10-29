@@ -378,6 +378,14 @@ class Session:
     def dump_hir(self) -> str:
         return self._raw.dump_hir()
 
+    def dump_plan(self) -> str:
+        """Returns the canonical, versioned HIR plan for this session."""
+        return self._raw.dump_plan()
+
+    def write_plan(self, output_path: str | Path) -> None:
+        """Writes the canonical HIR plan artifact (`.eudhir`) for this session."""
+        self._raw.write_plan(str(output_path))
+
     def dump_lir(self) -> str:
         return self._raw.dump_lir()
 

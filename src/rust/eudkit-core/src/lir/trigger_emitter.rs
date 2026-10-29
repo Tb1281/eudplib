@@ -6,8 +6,9 @@ use crate::hir::{
 };
 use crate::lir::emission_plan::EmissionPlan;
 use crate::lir::storage_selection::VarStorage;
+use crate::lir::trigger_shape::DYNAMIC_DIV_FILL_TRIGGERS;
 use crate::lir::types::*;
-use crate::map_context::MapContext;
+use crate::map_context::MapData;
 use std::collections::HashMap;
 
 fn make_set_deaths_action(
@@ -93,7 +94,7 @@ fn vproc_trigger_addr(src_storage: VarStorage) -> ValueExpr {
 pub fn emit_lir(
     hir: &HirModule,
     expanded_cfg: ExpandedCfg,
-    map_ctx: &mut MapContext,
+    map_data: &mut MapData,
 ) -> Result<LirModule> {
     let main_fn_id = hir
         .main_loop
@@ -360,7 +361,7 @@ pub fn emit_lir(
         }
     };
 
-    let lower_single_act = |a: &StockAction, map_ctx: &mut MapContext| -> LirAction {
+    let lower_single_act = |a: &StockAction, map_data: &mut MapData| -> LirAction {
         match a {
             StockAction::SetDeaths {
                 player,
@@ -482,7 +483,7 @@ pub fn emit_lir(
                 text,
                 always_display,
             } => {
-                let str_id = map_ctx.get_or_insert_string(text.as_bytes());
+                let str_id = map_data.get_or_insert_string(text.as_bytes());
                 LirAction {
                     locid1: ValueExpr::Const(0),
                     strid: ValueExpr::Const(str_id as i32),
@@ -700,7 +701,7 @@ pub fn emit_lir(
                 eudx: 0,
             },
             StockAction::PlayWAV { path } => {
-                let wav_id = map_ctx.get_or_insert_string(path.as_bytes());
+                let wav_id = map_data.get_or_insert_string(path.as_bytes());
                 LirAction {
                     locid1: ValueExpr::Const(0),
                     strid: ValueExpr::Const(0),
@@ -716,7 +717,7 @@ pub fn emit_lir(
                 }
             }
             StockAction::Comment { text } => {
-                let str_id = map_ctx.get_or_insert_string(text.as_bytes());
+                let str_id = map_data.get_or_insert_string(text.as_bytes());
                 LirAction {
                     locid1: ValueExpr::Const(0),
                     strid: ValueExpr::Const(str_id as i32),
@@ -785,7 +786,7 @@ pub fn emit_lir(
     };
 
     let var_inits: HashMap<VarId, i32> = hir.vars.iter().map(|v| (v.id, v.init_val)).collect();
-    let lower_act = |a: &StockAction, map_ctx: &mut MapContext| -> Vec<LirAction> {
+    let lower_act = |a: &StockAction, map_data: &mut MapData| -> Vec<LirAction> {
         match a {
             StockAction::PrintAt { line, parts } => {
                 let dest_epd = ValueExpr::Const(epd(0x640B60 + 218 * (*line as u32)));
@@ -801,7 +802,7 @@ pub fn emit_lir(
                         (ValueExpr::Const(epd(0x640B60 + 218 * (*line as u32))), None)
                     }
                     crate::hir::PrintTarget::MapString(str_id) => {
-                        let off = map_ctx.string_table().string_offset(*str_id).unwrap_or(0);
+                        let off = map_data.string_table().string_offset(*str_id).unwrap_or(0);
                         (
                             ValueExpr::Const(epd(crate::hir::STRX_BASE_ADDR + off)),
                             None,
@@ -809,8 +810,8 @@ pub fn emit_lir(
                     }
                     crate::hir::PrintTarget::DisplayText => {
                         let buf_text = "\r\n                                                                                                                        \0";
-                        let str_id = map_ctx.get_or_insert_string(buf_text.as_bytes());
-                        let off = map_ctx.string_table().string_offset(str_id).unwrap_or(0);
+                        let str_id = map_data.get_or_insert_string(buf_text.as_bytes());
+                        let off = map_data.string_table().string_offset(str_id).unwrap_or(0);
                         (
                             ValueExpr::Const(epd(crate::hir::STRX_BASE_ADDR + off)),
                             Some(str_id),
@@ -833,7 +834,7 @@ pub fn emit_lir(
                     &var_inits,
                 )
             }
-            other => vec![lower_single_act(other, map_ctx)],
+            other => vec![lower_single_act(other, map_data)],
         }
     };
 
@@ -862,6 +863,7 @@ pub fn emit_lir(
                 out.push(LirTrigger {
                     id,
                     label: Some(format!("{blk_label}_coalesced_{}", id.0)),
+                    role: TriggerRole::Normal,
                     prev_ptr: ValueExpr::Const(0),
                     next_ptr: ValueExpr::ObjectAddress {
                         object: ObjectId(*cur_id),
@@ -897,6 +899,7 @@ pub fn emit_lir(
             out.push(LirTrigger {
                 id,
                 label: Some(label),
+                role: TriggerRole::Normal,
                 prev_ptr: ValueExpr::Const(0),
                 next_ptr,
                 conditions,
@@ -970,10 +973,14 @@ pub fn emit_lir(
             }
         };
 
-        for op in &block.ops {
+        for (op_index, op) in block.ops.iter().enumerate() {
+            let op_span = block_plan.op_span(op_index);
+            let op_start = block_plan.first_trigger.0 + op_span.first_trigger;
+            let op_end = block_plan.first_trigger.0 + op_span.end_trigger();
+            debug_assert_eq!(cur_obj_id, op_start);
             match op {
                 ExpandedOp::LeafAction(act) => {
-                    let acts = lower_act(act, map_ctx);
+                    let acts = lower_act(act, map_data);
                     for la in acts {
                         ensure_capacity(
                             1,
@@ -1007,7 +1014,7 @@ pub fn emit_lir(
                     );
                     let mut lowered_actions = Vec::new();
                     for a in actions {
-                        lowered_actions.extend(lower_act(a, map_ctx));
+                        lowered_actions.extend(lower_act(a, map_data));
                     }
                     if conditions.len() > 16 {
                         return Err(EudkitError::Ir(
@@ -1049,7 +1056,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                         &block.label,
                     );
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     if let Some(m) = mask {
                         pending_actions.push(make_vproc_set_mask(src_st, *m));
                     }
@@ -1081,7 +1088,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                         &block.label,
                     );
-                    let mask_trig_id = ObjectId(cur_obj_id + 1);
+                    let mask_trig_id = ObjectId(op_end - 1);
                     let mask_field_epd =
                         ValueExpr::FieldEpd(FieldRef::action(mask_trig_id.0, 0, ActField::LocId1));
                     // mask_field = ~0; mask_field -= src
@@ -1115,7 +1122,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                     );
                     debug_assert_eq!(ObjectId(cur_obj_id), mask_trig_id);
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     emit_custom_trigger(
                         format!("{}_bitand_apply_{}", block.label, cur_obj_id),
                         ret_addr,
@@ -1141,7 +1148,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                         &block.label,
                     );
-                    let mask_trig_id = ObjectId(cur_obj_id + 1);
+                    let mask_trig_id = ObjectId(op_end - 1);
                     let mask_field_epd =
                         ValueExpr::FieldEpd(FieldRef::action(mask_trig_id.0, 0, ActField::LocId1));
                     pending_actions.push(make_vproc_set_dest(
@@ -1168,7 +1175,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                     );
                     debug_assert_eq!(ObjectId(cur_obj_id), mask_trig_id);
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     emit_custom_trigger(
                         format!("{}_bitor_apply_{}", block.label, cur_obj_id),
                         ret_addr,
@@ -1194,7 +1201,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                         &block.label,
                     );
-                    let pass2_trig_id = ObjectId(cur_obj_id + 1);
+                    let pass2_trig_id = ObjectId(op_end - 1);
                     pending_actions.push(make_vproc_set_mask(src_st, 0x5555_5555));
                     pending_actions.push(make_vproc_set_dest(src_st, dst_epd, Modifier::SetTo));
                     pending_actions.push(make_vproc_set_modifier(src_st, Modifier::Add));
@@ -1216,7 +1223,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                     );
                     debug_assert_eq!(ObjectId(cur_obj_id), pass2_trig_id);
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     emit_custom_trigger(
                         format!("{}_bitxor_p2_{}", block.label, cur_obj_id),
                         vproc_trigger_addr(src_st),
@@ -1243,7 +1250,7 @@ pub fn emit_lir(
                     );
                     let loopstart_id = ObjectId(cur_obj_id + 1);
                     let loopcnt_id = ObjectId(cur_obj_id + 2);
-                    let loopend_addr = next_return_addr(cur_obj_id + 3);
+                    let loopend_addr = next_return_addr(op_end);
 
                     pending_actions.push(make_vproc_set_nextptr(
                         dst_st,
@@ -1313,7 +1320,7 @@ pub fn emit_lir(
                                     value: 1,
                                     mask: None,
                                 },
-                                map_ctx,
+                                map_data,
                             ),
                             make_set_deaths_action(
                                 loopstart_nptr_epd,
@@ -1339,8 +1346,9 @@ pub fn emit_lir(
                     let rhs_epd = rhs_st.value_epd();
                     let dst_epd = var_storage[dst].value_epd();
 
-                    // Total triggers emitted by DynamicMul: 1 + 32*2 + 31*2 + 1 = 128
-                    let endmul_id = ObjectId(cur_obj_id + 127);
+                    // The trigger-shape policy reserves the last trigger of this
+                    // op for the end trigger.
+                    let endmul_id = ObjectId(op_end - 1);
                     let reset_p1_epd =
                         ValueExpr::FieldEpd(FieldRef::action(endmul_id.0, 0, ActField::Player1));
                     let reset_p2_epd =
@@ -1512,7 +1520,7 @@ pub fn emit_lir(
                     }
 
                     debug_assert_eq!(ObjectId(cur_obj_id), endmul_id);
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     let first_p1_nptr_epd =
                         ValueExpr::FieldEpd(FieldRef::new(first_p1, TriggerSlotField::NextPtr));
                     emit_custom_trigger(
@@ -1574,12 +1582,13 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                         &block.label,
                     );
-                    // Total triggers: 2 + 1 + 32 + 193 = 228 triggers? Wait:
-                    // In count_block_triggers we counted 2 + 1 + 32 + (1 + 32*5 + 32) = 228 triggers!
+                    // The trigger-shape policy reserves the whole op span:
+                    // skip check + skip target + pow2 init + 32 pow2 triggers
+                    // + one dynamic division chain.
                     let skip_check_id = ObjectId(cur_obj_id);
                     let skip_to_here_id = ObjectId(cur_obj_id + 1);
                     let exponential_id = ObjectId(cur_obj_id + 2);
-                    let after_all_id = cur_obj_id + 2 + 1 + 32 + 193;
+                    let after_all_id = op_end;
                     let ret_addr = next_return_addr(after_all_id);
                     let skip_check_nptr_epd = ValueExpr::FieldEpd(FieldRef::new(
                         skip_check_id,
@@ -1730,7 +1739,7 @@ pub fn emit_lir(
                     // after the 1 branch_reset trigger, so at +1)!
                     // Even simpler: we can record a fixup `(trigger_vec_idx, act_idx_for_dest, cond_idx, field)`
                     // and resolve it as soon as the next real Trigger (or Branch cond trigger) is emitted!
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     pending_actions.push(make_vproc_set_dest(
                         src_st,
                         ValueExpr::FieldEpd(FieldRef::condition(
@@ -1752,6 +1761,10 @@ pub fn emit_lir(
                         &mut block_triggers,
                         &mut cur_obj_id,
                     );
+                    block_triggers
+                        .last_mut()
+                        .expect("patch trigger was just emitted")
+                        .role = TriggerRole::PatchCondition;
                 }
                 ExpandedOp::PatchNextTriggerAct {
                     src,
@@ -1769,7 +1782,7 @@ pub fn emit_lir(
                         &block.label,
                     );
                     let _ = is_epd;
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     pending_actions.push(make_vproc_set_dest(
                         src_st,
                         ValueExpr::FieldEpd(FieldRef::action(
@@ -1791,6 +1804,10 @@ pub fn emit_lir(
                         &mut block_triggers,
                         &mut cur_obj_id,
                     );
+                    block_triggers
+                        .last_mut()
+                        .expect("patch trigger was just emitted")
+                        .role = TriggerRole::PatchAction;
                 }
                 ExpandedOp::CallSetup {
                     callee,
@@ -1973,8 +1990,7 @@ pub fn emit_lir(
                             &mut cur_obj_id,
                             &block.label,
                         );
-                        let next_id = cur_obj_id + 1;
-                        let ret_addr = next_return_addr(next_id);
+                        let ret_addr = next_return_addr(op_end);
                         pending_actions.push(make_vproc_set_dest(
                             src_st,
                             val_field_epd,
@@ -2142,7 +2158,17 @@ pub fn emit_lir(
                     }
                 }
             }
+            debug_assert_eq!(
+                cur_obj_id, op_end,
+                "op {op_index} of {} did not match its planned trigger span",
+                block.label
+            );
         }
+
+        let terminator_span = block_plan.terminator_span();
+        let terminator_start = block_plan.first_trigger.0 + terminator_span.first_trigger;
+        let terminator_end = block_plan.first_trigger.0 + terminator_span.end_trigger();
+        debug_assert_eq!(cur_obj_id, terminator_start);
 
         match &block.terminator {
             ExpandedTerminator::Jump(target_block) => {
@@ -2158,6 +2184,7 @@ pub fn emit_lir(
                     block_triggers.push(LirTrigger {
                         id,
                         label: Some(format!("{}_jump", block.label)),
+                        role: TriggerRole::Normal,
                         prev_ptr: ValueExpr::Const(0),
                         next_ptr: ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32),
                         conditions: Vec::new(),
@@ -2189,6 +2216,7 @@ pub fn emit_lir(
                     block_triggers.push(LirTrigger {
                         id,
                         label: Some(format!("{}_ret", block.label)),
+                        role: TriggerRole::Normal,
                         prev_ptr: ValueExpr::Const(0),
                         next_ptr: ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32),
                         conditions: Vec::new(),
@@ -2215,6 +2243,7 @@ pub fn emit_lir(
                     block_triggers.push(LirTrigger {
                         id,
                         label: Some(format!("{}_fret", block.label)),
+                        role: TriggerRole::Normal,
                         prev_ptr: ValueExpr::Const(0),
                         next_ptr: ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32),
                         conditions: Vec::new(),
@@ -2265,7 +2294,7 @@ pub fn emit_lir(
                     &mut cur_obj_id,
                     &block.label,
                 );
-                let branch_id = ObjectId(cur_obj_id + 1);
+                let branch_id = ObjectId(terminator_end - 1);
                 let then_obj = plan.first_trigger(*then_block);
                 let else_obj = plan.first_trigger(*else_block);
                 let branch_next_field = FieldRef::new(branch_id, TriggerSlotField::NextPtr);
@@ -2299,6 +2328,7 @@ pub fn emit_lir(
                 let branch_trig = LirTrigger {
                     id: branch_id,
                     label: Some(format!("{}_branch_cond", block.label)),
+                    role: TriggerRole::Normal,
                     prev_ptr: ValueExpr::Const(0),
                     next_ptr: ValueExpr::ObjectAddress {
                         object: else_obj,
@@ -2345,6 +2375,7 @@ pub fn emit_lir(
                     block_triggers.push(LirTrigger {
                         id,
                         label: Some(format!("{}_readtable_jump", block.label)),
+                        role: TriggerRole::Normal,
                         prev_ptr: ValueExpr::Const(0),
                         next_ptr: entry_addr.clone(),
                         conditions: Vec::new(),
@@ -2361,61 +2392,11 @@ pub fn emit_lir(
             }
         }
 
+        debug_assert_eq!(cur_obj_id, terminator_end);
         debug_assert_eq!(cur_obj_id, block_plan.end_trigger().0);
         debug_assert_eq!(patch_sites, block_plan.patch_sites);
 
-        // Resolve any placeholder `ObjectId(u32::MAX)` in `PatchNextTriggerCond` / `PatchNextTriggerAct`:
-        // For any trigger i with a placeholder FieldRef, scan forward to the first subsequent trigger j > i
-        // that is NOT a patch trigger (for Cond, a trigger with non-empty conditions; for Act, the next non-patch trigger).
-        for i in 0..block_triggers.len() {
-            let has_placeholder = block_triggers[i].actions.iter().any(|a| {
-                matches!(
-                    a.player2,
-                    ValueExpr::FieldEpd(FieldRef {
-                        object: ObjectId(u32::MAX),
-                        ..
-                    })
-                )
-            });
-            if !has_placeholder {
-                continue;
-            }
-            let is_cond_patch = block_triggers[i].actions.iter().any(|a| {
-                matches!(
-                    a.player2,
-                    ValueExpr::FieldEpd(FieldRef {
-                        object: ObjectId(u32::MAX),
-                        field: TriggerSlotField::Condition(_, _),
-                    })
-                )
-            });
-            let target_id = block_triggers[i + 1..]
-                .iter()
-                .find(|t| {
-                    let is_patch = t
-                        .label
-                        .as_deref()
-                        .is_some_and(|l| l.contains("_patch_cond_") || l.contains("_patch_act_"));
-                    if is_patch {
-                        return false;
-                    }
-                    if is_cond_patch {
-                        !t.conditions.is_empty()
-                    } else {
-                        true
-                    }
-                })
-                .map(|t| t.id)
-                .expect("patch trigger must be followed by target trigger");
-
-            for act in &mut block_triggers[i].actions {
-                if let ValueExpr::FieldEpd(fr) = &mut act.player2 {
-                    if fr.object == ObjectId(u32::MAX) {
-                        fr.object = target_id;
-                    }
-                }
-            }
-        }
+        resolve_patch_targets(&mut block_triggers);
 
         for t in block_triggers {
             objects.push(LirObject::Trigger(t));
@@ -2429,6 +2410,7 @@ pub fn emit_lir(
         objects.push(LirObject::Trigger(LirTrigger {
             id: *void_id,
             label: Some(format!("void_ret_{}", fid.0)),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32),
             conditions: Vec::new(),
@@ -2457,6 +2439,56 @@ pub fn emit_lir(
     Ok(LirModule::new(&hir.name, objects, planned.entry_trigger))
 }
 
+/// Resolves placeholder `ObjectId(u32::MAX)` targets in patch triggers.
+///
+/// The target is the next trigger in the same block that is not itself a patch
+/// trigger. Condition patches require a trigger with at least one condition;
+/// action patches accept the next trigger of any shape. Patch detection uses
+/// the typed [`TriggerRole`], so `LirTrigger::label` stays debug-only text and
+/// may be absent.
+fn resolve_patch_targets(block_triggers: &mut [LirTrigger]) {
+    for i in 0..block_triggers.len() {
+        if !block_triggers[i].role.is_patch() {
+            continue;
+        }
+        let has_placeholder = block_triggers[i].actions.iter().any(|a| {
+            matches!(
+                a.player2,
+                ValueExpr::FieldEpd(FieldRef {
+                    object: ObjectId(u32::MAX),
+                    ..
+                })
+            )
+        });
+        if !has_placeholder {
+            continue;
+        }
+        let is_cond_patch = block_triggers[i].role == TriggerRole::PatchCondition;
+        let target_id = block_triggers[i + 1..]
+            .iter()
+            .find(|t| {
+                if t.role.is_patch() {
+                    return false;
+                }
+                if is_cond_patch {
+                    !t.conditions.is_empty()
+                } else {
+                    true
+                }
+            })
+            .map(|t| t.id)
+            .expect("patch trigger must be followed by target trigger");
+
+        for act in &mut block_triggers[i].actions {
+            if let ValueExpr::FieldEpd(fr) = &mut act.player2 {
+                if fr.object == ObjectId(u32::MAX) {
+                    fr.object = target_id;
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_dynamic_div_chain(
     dividend: VarId,
@@ -2476,8 +2508,9 @@ fn emit_dynamic_div_chain(
     let quot_epd = var_storage[&quot_dst].value_epd();
     let dividend_epd = var_storage[&dividend].value_epd();
 
-    // Total triggers: 1 (init) + 32 * 5 (fill & double) + 32 (subtraction chain) = 193 triggers
-    let chain_base_id = *cur_obj_id + 1 + 32 * 5;
+    // The fill iterations own `DYNAMIC_DIV_FILL_TRIGGERS` slots; the policy in
+    // `trigger_shape` owns the total chain length.
+    let chain_base_id = *cur_obj_id + 1 + DYNAMIC_DIV_FILL_TRIGGERS;
 
     // 1. Init trigger: quot_dst = 0, and VProc(divisor -> div_x_scratch)
     let first_loop_id = ObjectId(*cur_obj_id + 1);
@@ -2486,6 +2519,7 @@ fn emit_dynamic_div_chain(
     block_triggers.push(LirTrigger {
         id: init_id,
         label: Some(format!("{blk_label}_div_init_{}", init_id.0)),
+        role: TriggerRole::Normal,
         prev_ptr: ValueExpr::Const(0),
         next_ptr: vproc_trigger_addr(divisor_st),
         conditions: Vec::new(),
@@ -2529,6 +2563,7 @@ fn emit_dynamic_div_chain(
         block_triggers.push(LirTrigger {
             id: t0_id,
             label: Some(format!("{blk_label}_div_fill0_{i}")),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: vproc_trigger_addr(x_st),
             conditions: Vec::new(),
@@ -2549,6 +2584,7 @@ fn emit_dynamic_div_chain(
         block_triggers.push(LirTrigger {
             id: t1_id,
             label: Some(format!("{blk_label}_div_fill1_{i}")),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: vproc_trigger_addr(x_st),
             conditions: Vec::new(),
@@ -2569,6 +2605,7 @@ fn emit_dynamic_div_chain(
         block_triggers.push(LirTrigger {
             id: p1_id,
             label: Some(format!("{blk_label}_div_p1_{i}")),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: ValueExpr::ObjectAddress {
                 object: p2_id,
@@ -2595,6 +2632,7 @@ fn emit_dynamic_div_chain(
         block_triggers.push(LirTrigger {
             id: p3_id,
             label: Some(format!("{blk_label}_div_p3_{i}")),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: ValueExpr::ObjectAddress {
                 object: chain_i_id,
@@ -2616,6 +2654,7 @@ fn emit_dynamic_div_chain(
         block_triggers.push(LirTrigger {
             id: p2_id,
             label: Some(format!("{blk_label}_div_p2_{i}")),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: vproc_trigger_addr(x_st),
             conditions: Vec::new(),
@@ -2663,6 +2702,7 @@ fn emit_dynamic_div_chain(
         block_triggers.push(LirTrigger {
             id: cid,
             label: Some(format!("{blk_label}_div_chain_{i}")),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: next_addr,
             conditions: vec![lower_cond(&StockCondition::VarCmp {
@@ -2674,5 +2714,95 @@ fn emit_dynamic_div_chain(
             actions: acts,
             flags: 4,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn placeholder_patch(id: u32, role: TriggerRole, field: TriggerSlotField) -> LirTrigger {
+        LirTrigger {
+            id: ObjectId(id),
+            label: None,
+            role,
+            prev_ptr: ValueExpr::Const(0),
+            next_ptr: ValueExpr::Const(0),
+            conditions: Vec::new(),
+            actions: vec![LirAction {
+                locid1: ValueExpr::Const(0),
+                strid: ValueExpr::Const(0),
+                wavid: ValueExpr::Const(0),
+                time: ValueExpr::Const(0),
+                player1: ValueExpr::Const(0),
+                player2: ValueExpr::FieldEpd(FieldRef::new(ObjectId(u32::MAX), field)),
+                unitid: 0,
+                acttype: 45,
+                amount: Modifier::SetTo.encode(),
+                flags: 20,
+                eudx: 0,
+            }],
+            flags: 4,
+        }
+    }
+
+    fn trigger(id: u32, label: Option<&str>, conditions: Vec<LirCondition>) -> LirTrigger {
+        LirTrigger {
+            id: ObjectId(id),
+            label: label.map(str::to_string),
+            role: TriggerRole::Normal,
+            prev_ptr: ValueExpr::Const(0),
+            next_ptr: ValueExpr::Const(0),
+            conditions,
+            actions: Vec::new(),
+            flags: 4,
+        }
+    }
+
+    fn condition() -> LirCondition {
+        LirCondition {
+            locid: ValueExpr::Const(0),
+            player: ValueExpr::Const(0),
+            amount: ValueExpr::Const(1),
+            unitid: 0,
+            comparison: Comparison::AtLeast.encode(),
+            condtype: 15,
+            restype: 0,
+            flags: 0,
+            eudx: EUDX_SIGNATURE,
+        }
+    }
+
+    #[test]
+    fn patch_targets_resolve_from_roles_without_labels() {
+        let mut triggers = vec![
+            placeholder_patch(
+                0,
+                TriggerRole::PatchCondition,
+                TriggerSlotField::Condition(1, CondField::Amount),
+            ),
+            placeholder_patch(
+                1,
+                TriggerRole::PatchAction,
+                TriggerSlotField::Action(2, ActField::Player2),
+            ),
+            // A normal trigger whose debug label resembles a patch trigger must
+            // not be skipped; label text is not codegen input.
+            trigger(2, Some("user_patch_cond_not_a_patch_site"), Vec::new()),
+            trigger(3, None, vec![condition()]),
+        ];
+
+        resolve_patch_targets(&mut triggers);
+
+        let cond_target = match triggers[0].actions[0].player2 {
+            ValueExpr::FieldEpd(fr) => fr.object,
+            _ => panic!("condition patch target must stay a FieldEpd"),
+        };
+        let act_target = match triggers[1].actions[0].player2 {
+            ValueExpr::FieldEpd(fr) => fr.object,
+            _ => panic!("action patch target must stay a FieldEpd"),
+        };
+        assert_eq!(cond_target, ObjectId(3));
+        assert_eq!(act_target, ObjectId(2));
     }
 }
