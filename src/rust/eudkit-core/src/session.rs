@@ -252,6 +252,7 @@ impl CompilationSession {
             .iter()
             .filter(|o| matches!(o, LirObject::ByteBuf(_)))
             .count();
+        let vproc_count = lir.vproc_count();
 
         let report = crate::injector::inject_payload_into_chk_with_restores(
             &mut out_chk,
@@ -259,6 +260,7 @@ impl CompilationSession {
             &allocated,
             trigger_count,
             byte_buf_count,
+            vproc_count,
             &restore_triggers,
         )?;
         Ok((out_chk.to_bytes(), report))

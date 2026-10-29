@@ -90,7 +90,7 @@ def main() -> None:
     parser.add_argument(
         "--report",
         metavar="PATH",
-        help="Write the compilation report to this path for the Rust CLI",
+        help="Write the typed JSON compilation report to this path for the Rust CLI",
     )
     parser.add_argument(
         "--dump-hir", action="store_true", help="Dump High-Level IR (HIR)"
@@ -113,10 +113,7 @@ def main() -> None:
             dump_lir=args.dump_lir,
         )
         if report is not None:
-            print(
-                f"Built {args.output} (triggers={report.trigger_count}, "
-                f"payload_bytes={report.payload_size}, entry={report.payload_entry_addr:#010X})"
-            )
+            print(report.summary(str(args.output)))
             if args.report:
                 _write_report(Path(args.report), report)
     except Exception as e:
@@ -125,18 +122,12 @@ def main() -> None:
 
 
 def _write_report(path: Path, report: Any) -> None:
-    """Writes the key=value report consumed by the Rust CLI."""
-    lines = [
-        f"trigger_count={report.trigger_count}",
-        f"byte_buf_count={report.byte_buf_count}",
-        f"vproc_count={report.vproc_count}",
-        f"payload_offset={report.payload_offset}",
-        f"payload_size={report.payload_size}",
-        f"payload_entry_addr={report.payload_entry_addr}",
-        f"prt_offsets={','.join(str(offset) for offset in report.prt_offsets)}",
-        f"ort_offsets={','.join(str(offset) for offset in report.ort_offsets)}",
-    ]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    """Writes the typed JSON report consumed by the Rust CLI.
+
+    The JSON schema is the core `CompilationReport` wire format; the Rust CLI
+    requires every field, so a partial report is an error rather than zeros.
+    """
+    path.write_text(report.to_json() + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

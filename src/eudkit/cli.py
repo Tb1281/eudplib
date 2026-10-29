@@ -72,10 +72,7 @@ def main(argv: list[str] | None = None) -> None:
                 preserve_classic_triggers=resolved["preserve_classic_triggers"],
             )
             if report is not None:
-                print(
-                    f"Built {output_map} (triggers={report.trigger_count}, "
-                    f"payload_bytes={report.payload_size}, entry={report.payload_entry_addr:#010X})"
-                )
+                print(report.summary(str(output_map)))
         except Exception as e:
             print(f"error: {e}", file=sys.stderr)
             sys.exit(1)

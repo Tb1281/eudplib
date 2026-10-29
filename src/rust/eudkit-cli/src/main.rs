@@ -299,7 +299,11 @@ fn execute_python_build(
     proj_cfg: &ProjectConfig,
     entry_path: &Path,
 ) -> Result<eudkit_core::CompilationReport, String> {
-    let report_path = env::temp_dir().join(format!("eudkit-python-report-{}.txt", process::id()));
+    // The Python runner writes one typed JSON `CompilationReport` here. This is
+    // an implementation detail of the Python Frontend handoff; the Rust CLI
+    // never interprets the file as ad-hoc text. A file is used instead of
+    // stdout because the entry script may print arbitrary user output there.
+    let report_path = env::temp_dir().join(format!("eudkit-python-report-{}.json", process::id()));
     let _ = fs::remove_file(&report_path);
 
     let py_bin = find_python_bin();
@@ -348,58 +352,15 @@ fn execute_python_build(
     })?;
     let _ = fs::remove_file(&report_path);
     parse_python_report(&report_text)
+        .map_err(|e| format!("invalid Python build report {}: {e}", report_path.display()))
 }
 
-/// Reads the `key=value` report written by `python -m eudkit.runner --report`.
+/// Parses the typed JSON report written by `python -m eudkit.runner --report`.
+///
+/// Every field is required; a missing key is an error rather than a zeroed
+/// value.
 fn parse_python_report(text: &str) -> Result<eudkit_core::CompilationReport, String> {
-    let mut report = eudkit_core::CompilationReport {
-        trigger_count: 0,
-        byte_buf_count: 0,
-        payload_offset: 0,
-        payload_size: 0,
-        payload_entry_addr: 0,
-        prt_offsets: Vec::new(),
-        ort_offsets: Vec::new(),
-    };
-
-    for line in text.lines() {
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let value = value.trim();
-        match key.trim() {
-            "trigger_count" => report.trigger_count = parse_report_value(key, value)?,
-            "byte_buf_count" => report.byte_buf_count = parse_report_value(key, value)?,
-            "payload_offset" => report.payload_offset = parse_report_value(key, value)?,
-            "payload_size" => report.payload_size = parse_report_value(key, value)?,
-            "payload_entry_addr" => report.payload_entry_addr = parse_report_value(key, value)?,
-            "prt_offsets" => report.prt_offsets = parse_report_offsets(value)?,
-            "ort_offsets" => report.ort_offsets = parse_report_offsets(value)?,
-            _ => {}
-        }
-    }
-
-    Ok(report)
-}
-
-fn parse_report_value<T: std::str::FromStr>(key: &str, value: &str) -> Result<T, String> {
-    value
-        .parse()
-        .map_err(|_| format!("invalid Python build report value for {key}: {value}"))
-}
-
-fn parse_report_offsets(value: &str) -> Result<Vec<usize>, String> {
-    if value.is_empty() {
-        return Ok(Vec::new());
-    }
-    value
-        .split(',')
-        .map(|item| {
-            item.trim()
-                .parse()
-                .map_err(|_| format!("invalid Python build report offset: {item}"))
-        })
-        .collect()
+    eudkit_core::CompilationReport::from_json(text).map_err(|e| e.to_string())
 }
 
 fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationReport, String> {
@@ -450,13 +411,7 @@ fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationRep
         .compile_map(&proj_cfg.output_map)
         .map_err(|e| e.to_string())?;
 
-    println!(
-        "Built {} (triggers={}, payload_bytes={}, entry={:#010X})",
-        proj_cfg.output_map.display(),
-        report.trigger_count,
-        report.payload_size,
-        report.payload_entry_addr
-    );
+    println!("{}", report.summary(proj_cfg.output_map.display()));
     Ok(report)
 }
 
@@ -806,35 +761,53 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_python_report, parse_report_offsets};
+    use super::parse_python_report;
+    use eudkit_core::CompilationReport;
 
-    #[test]
-    fn parses_the_python_build_report_including_patch_sites() {
-        let report = parse_python_report(
-            "trigger_count=12\n\
-             byte_buf_count=3\n\
-             vproc_count=1\n\
-             payload_offset=4096\n\
-             payload_size=512\n\
-             payload_entry_addr=285278210\n\
-             prt_offsets=16,32\n\
-             ort_offsets=48\n",
-        )
-        .expect("should parse report");
-
-        assert_eq!(report.trigger_count, 12);
-        assert_eq!(report.byte_buf_count, 3);
-        assert_eq!(report.payload_offset, 4096);
-        assert_eq!(report.payload_size, 512);
-        assert_eq!(report.payload_entry_addr, 285_278_210);
-        assert_eq!(report.prt_offsets, vec![16, 32]);
-        assert_eq!(report.ort_offsets, vec![48]);
+    fn sample_report() -> CompilationReport {
+        CompilationReport {
+            trigger_count: 12,
+            byte_buf_count: 3,
+            vproc_count: 1,
+            payload_offset: 4096,
+            payload_size: 512,
+            payload_entry_addr: 285_278_210,
+            prt_offsets: vec![16, 32],
+            ort_offsets: vec![48],
+        }
     }
 
     #[test]
-    fn rejects_malformed_python_build_reports() {
-        assert!(parse_python_report("trigger_count=many\n").is_err());
-        assert!(parse_report_offsets("16,fast").is_err());
-        assert_eq!(parse_report_offsets("").unwrap(), Vec::<usize>::new());
+    fn parses_the_typed_json_python_build_report_including_vproc_count() {
+        let text = sample_report().to_json().expect("report should serialize");
+        let report = parse_python_report(&text).expect("should parse report");
+        assert_eq!(report, sample_report());
+        assert_eq!(report.vproc_count, 1);
+    }
+
+    #[test]
+    fn rejects_reports_with_missing_required_fields() {
+        let text = sample_report().to_json().expect("report should serialize");
+
+        // `vproc_count` must not silently default to zero when absent.
+        let missing_vproc = text.replace("\"vproc_count\":1,", "");
+        assert_ne!(missing_vproc, text);
+        assert!(parse_python_report(&missing_vproc).is_err());
+
+        let missing_payload = text.replace("\"payload_size\":512,", "");
+        assert_ne!(missing_payload, text);
+        assert!(parse_python_report(&missing_payload).is_err());
+
+        // The old `key=value` format is no longer accepted.
+        assert!(parse_python_report("trigger_count=12\n").is_err());
+    }
+
+    #[test]
+    fn renders_the_shared_build_summary() {
+        let report = sample_report();
+        assert_eq!(
+            report.summary("out.scx"),
+            "Built out.scx (triggers=12, payload_bytes=512, entry=0x11010002)"
+        );
     }
 }

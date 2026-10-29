@@ -678,29 +678,79 @@ impl PyAction {
     }
 }
 
+/// The typed compilation result exposed to Python.
+///
+/// It wraps the core `CompilationReport` so the summary text and JSON wire
+/// format have exactly one implementation, shared with the Rust CLI.
 #[derive(Clone, Debug)]
 #[pyclass(from_py_object, name = "CompilationReport", module = "eudkit._rust")]
 pub struct PyCompilationReport {
-    #[pyo3(get)]
-    pub trigger_count: usize,
-    #[pyo3(get)]
-    pub byte_buf_count: usize,
-    #[pyo3(get)]
-    pub vproc_count: usize,
-    #[pyo3(get)]
-    pub payload_offset: usize,
-    #[pyo3(get)]
-    pub payload_size: usize,
-    #[pyo3(get)]
-    pub payload_entry_addr: u32,
-    #[pyo3(get)]
-    pub prt_count: usize,
-    #[pyo3(get)]
-    pub ort_count: usize,
-    #[pyo3(get)]
-    pub prt_offsets: Vec<usize>,
-    #[pyo3(get)]
-    pub ort_offsets: Vec<usize>,
+    report: eudkit_core::CompilationReport,
+}
+
+#[pymethods]
+impl PyCompilationReport {
+    #[getter]
+    fn trigger_count(&self) -> usize {
+        self.report.trigger_count
+    }
+
+    #[getter]
+    fn byte_buf_count(&self) -> usize {
+        self.report.byte_buf_count
+    }
+
+    #[getter]
+    fn vproc_count(&self) -> usize {
+        self.report.vproc_count
+    }
+
+    #[getter]
+    fn payload_offset(&self) -> usize {
+        self.report.payload_offset
+    }
+
+    #[getter]
+    fn payload_size(&self) -> usize {
+        self.report.payload_size
+    }
+
+    #[getter]
+    fn payload_entry_addr(&self) -> u32 {
+        self.report.payload_entry_addr
+    }
+
+    #[getter]
+    fn prt_count(&self) -> usize {
+        self.report.prt_offsets.len()
+    }
+
+    #[getter]
+    fn ort_count(&self) -> usize {
+        self.report.ort_offsets.len()
+    }
+
+    #[getter]
+    fn prt_offsets(&self) -> Vec<usize> {
+        self.report.prt_offsets.clone()
+    }
+
+    #[getter]
+    fn ort_offsets(&self) -> Vec<usize> {
+        self.report.ort_offsets.clone()
+    }
+
+    /// Renders the same one-line summary as the Rust CLI.
+    fn summary(&self, output_map: &str) -> String {
+        self.report.summary(output_map)
+    }
+
+    /// Serializes the typed report as JSON for the Rust CLI.
+    fn to_json(&self) -> PyResult<String> {
+        self.report
+            .to_json()
+            .map_err(|e| PyRuntimeError::new_err(format!("failed to serialize build report: {e}")))
+    }
 }
 
 #[pyclass(unsendable, name = "RawSession", module = "eudkit._rust")]
@@ -1083,23 +1133,7 @@ impl PyCompilationSession {
     fn compile(&mut self, output_path: &str) -> PyResult<PyCompilationReport> {
         self.sync_hir()?;
         let report = self.session.compile_map(output_path).map_err(to_py_err)?;
-        let vproc_count = self
-            .session
-            .lir_module()
-            .map(|l| l.vproc_count())
-            .unwrap_or(0);
-        Ok(PyCompilationReport {
-            trigger_count: report.trigger_count,
-            byte_buf_count: report.byte_buf_count,
-            vproc_count,
-            payload_offset: report.payload_offset,
-            payload_size: report.payload_size,
-            payload_entry_addr: report.payload_entry_addr,
-            prt_count: report.prt_offsets.len(),
-            ort_count: report.ort_offsets.len(),
-            prt_offsets: report.prt_offsets,
-            ort_offsets: report.ort_offsets,
-        })
+        Ok(PyCompilationReport { report })
     }
 }
 

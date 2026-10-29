@@ -251,6 +251,8 @@ name = "eudkit-core"
 version = "0.1.2"
 dependencies = [
  "eudplib-stormlib",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 1.0.69",
 ]

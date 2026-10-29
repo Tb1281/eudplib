@@ -5,15 +5,43 @@ use crate::hir::{epd, CURRENT_PLAYER_ADDR, PTS_BASE_ADDR, STRX_BASE_ADDR};
 use crate::lir::EUDX_SIGNATURE;
 use crate::map_context::{MapContext, MapTrigger};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The typed result of one compilation, shared by the Rust CLI, the Python
+/// runner, and the Python CLI.
+///
+/// `Serialize`/`Deserialize` are the wire format for the report that the
+/// Python runner hands back to the Rust CLI. Every field is required: a
+/// missing field is a malformed report, never an implicit zero.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CompilationReport {
     pub trigger_count: usize,
     pub byte_buf_count: usize,
+    /// Number of `VProc` slots in the allocated `LIR` module.
+    pub vproc_count: usize,
     pub payload_offset: usize,
     pub payload_size: usize,
     pub payload_entry_addr: u32,
     pub prt_offsets: Vec<usize>,
     pub ort_offsets: Vec<usize>,
+}
+
+impl CompilationReport {
+    /// Renders the one-line build summary printed by every CLI.
+    pub fn summary(&self, output_map: impl std::fmt::Display) -> String {
+        format!(
+            "Built {} (triggers={}, payload_bytes={}, entry={:#010X})",
+            output_map, self.trigger_count, self.payload_size, self.payload_entry_addr
+        )
+    }
+
+    /// Serializes this report to the JSON wire format shared with Python.
+    pub fn to_json(&self) -> std::result::Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// Parses the JSON wire format written by the Python runner.
+    pub fn from_json(text: &str) -> std::result::Result<Self, serde_json::Error> {
+        serde_json::from_str(text)
+    }
 }
 
 /// Statically relocates `payload` against `0x191943C8 + payload_offset`,
@@ -25,6 +53,7 @@ pub fn inject_payload_into_chk(
     allocated: &AllocatedPayload,
     trigger_count: usize,
     byte_buf_count: usize,
+    vproc_count: usize,
 ) -> Result<CompilationReport> {
     inject_payload_into_chk_with_restores(
         chk,
@@ -32,16 +61,19 @@ pub fn inject_payload_into_chk(
         allocated,
         trigger_count,
         byte_buf_count,
+        vproc_count,
         &[],
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn inject_payload_into_chk_with_restores(
     chk: &mut Chk,
     map_ctx: &MapContext,
     allocated: &AllocatedPayload,
     trigger_count: usize,
     byte_buf_count: usize,
+    vproc_count: usize,
     restore_triggers: &[[u8; 2400]],
 ) -> Result<CompilationReport> {
     let mut strx_bytes = map_ctx.string_table().serialize_strx();
@@ -82,6 +114,7 @@ pub fn inject_payload_into_chk_with_restores(
     Ok(CompilationReport {
         trigger_count,
         byte_buf_count,
+        vproc_count,
         payload_offset,
         payload_size: allocated.data.len(),
         payload_entry_addr,
