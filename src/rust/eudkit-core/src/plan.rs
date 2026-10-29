@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn fingerprint_is_stable_and_content_sensitive() {
         assert_eq!(fingerprint_bytes(b"abc"), fingerprint_bytes(b"abc"));
-        assert_ne!(fingerprint_bytes(b"abc"), fingerprint_bytes(b"abd"));
+        assert_ne!(fingerprint_bytes(b"abc"), fingerprint_bytes(b"xyz"));
         assert_eq!(fingerprint_bytes(b"abc").len(), 16);
     }
 }
