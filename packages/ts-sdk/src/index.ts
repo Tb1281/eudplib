@@ -978,11 +978,26 @@ export const session = {
 };
 
 /**
+ * Throws when a Reactive Rule marker is executed instead of compiled.
+ *
+ * The eudkit compiler recognizes the five Reactive Rule calls and emits
+ * `ReactiveRule` HIR before these function bodies are ever evaluated.
+ */
+function compileTimeOnlyReactive(name: string): never {
+  throw new Error(
+    `${name}() is a compile-time Reactive Rule marker and cannot run at build time.`
+  );
+}
+
+/**
  * Execute a block of logic exactly once during the game.
  *
  * If `condition` is provided, waits until the condition holds on a trigger loop pass,
  * executes once, and permanently deactivates its guard.
  * If `condition` is omitted or null, executes on the initial trigger loop pass.
+ *
+ * This is a compile-time marker: the eudkit compiler lowers the call directly to
+ * Reactive Rule HIR, and the function body never runs in a compiled map.
  *
  * @param conditionOrCallback - Condition guard or callback function.
  * @param maybeCallback - Callback function if condition was provided as first argument.
@@ -991,23 +1006,7 @@ export function once(
   conditionOrCallback: Condition | null | undefined | (() => void),
   maybeCallback?: () => void
 ): void {
-  const callback =
-    typeof conditionOrCallback === "function" ? conditionOrCallback : maybeCallback;
-  const condition =
-    typeof conditionOrCallback === "function" ? null : conditionOrCallback;
-
-  const flag = var_(1);
-  if (condition) {
-    if (flag.exactly(1) && condition) {
-      flag.setTo(0);
-      callback?.();
-    }
-  } else {
-    if (flag.exactly(1)) {
-      flag.setTo(0);
-      callback?.();
-    }
-  }
+  compileTimeOnlyReactive("once");
 }
 
 /**
@@ -1016,16 +1015,14 @@ export function once(
  * In StarCraft's polling-based trigger VM, `when(cond, cb)` checks conditions at the beginning
  * of each trigger loop pass. As long as the conditions remain satisfied, the enclosed actions execute.
  *
+ * This is a compile-time marker: the eudkit compiler lowers the call directly to
+ * Reactive Rule HIR, and the function body never runs in a compiled map.
+ *
  * @param condition - Single condition or array of conditions to evaluate every loop.
  * @param callback - Function body containing actions to execute while conditions hold.
  */
 export function when(condition: Condition | Condition[], callback: () => void): void {
-  const isSatisfied = Array.isArray(condition)
-    ? condition.length > 0 && condition.every((c) => Boolean(c))
-    : Boolean(condition);
-  if (isSatisfied) {
-    callback();
-  }
+  compileTimeOnlyReactive("when");
 }
 
 /**
@@ -1034,18 +1031,14 @@ export function when(condition: Condition | Condition[], callback: () => void): 
  * Evaluated on each trigger loop pass. As soon as `condition` becomes true, the guard flag is set
  * to 1 and the block will never execute again in subsequent trigger loops.
  *
+ * This is a compile-time marker: the eudkit compiler lowers the call directly to
+ * Reactive Rule HIR, and the function body never runs in a compiled map.
+ *
  * @param condition - Termination condition that permanently silences this rule.
  * @param callback - Function body executed each trigger loop prior to termination.
  */
 export function until(condition: Condition, callback: () => void): void {
-  const guard = var_(0);
-  if (guard.exactly(0)) {
-    if (condition) {
-      guard.setTo(1);
-    } else {
-      callback();
-    }
-  }
+  compileTimeOnlyReactive("until");
 }
 
 /**
@@ -1060,21 +1053,14 @@ export function until(condition: Condition, callback: () => void): void {
  * `after(loops, cb)` avoids `Wait` entirely by maintaining a deterministic 4-byte counter variable
  * decremented on each trigger loop pass without thread stalls.
  *
+ * This is a compile-time marker: the eudkit compiler lowers the call directly to
+ * Reactive Rule HIR, and the function body never runs in a compiled map.
+ *
  * @param loops - Number of trigger loop evaluation cycles to wait before firing (e.g. 24 loops = ~1 second under Turbo).
  * @param callback - Logic to execute once the loop delay has elapsed.
  */
 export function after(loops: number, callback: () => void): void {
-  const timer = var_(loops);
-  const done = var_(0);
-  if (done.exactly(0)) {
-    if (timer.atLeast(1)) {
-      timer.subtract(1);
-    }
-    if (timer.exactly(0)) {
-      done.setTo(1);
-      callback();
-    }
-  }
+  compileTimeOnlyReactive("after");
 }
 
 /**
@@ -1089,16 +1075,12 @@ export function after(loops: number, callback: () => void): void {
  * `every(loops, cb)` maintains a deterministic countdown variable that decrements on each trigger
  * loop cycle and resets to `loops` upon reaching 0, executing without relying on fragile engine `Wait()` calls.
  *
+ * This is a compile-time marker: the eudkit compiler lowers the call directly to
+ * Reactive Rule HIR, and the function body never runs in a compiled map.
+ *
  * @param loops - Interval in trigger loop cycles between successive firings (e.g. 24 loops = every 1s under Turbo).
  * @param callback - Logic to execute periodically every `loops` trigger cycles.
  */
 export function every(loops: number, callback: () => void): void {
-  const timer = var_(loops);
-  if (timer.atLeast(1)) {
-    timer.subtract(1);
-  }
-  if (timer.exactly(0)) {
-    timer.setTo(loops);
-    callback();
-  }
+  compileTimeOnlyReactive("every");
 }

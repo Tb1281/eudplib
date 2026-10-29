@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import contextvars
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from contextlib import AbstractContextManager
+from typing import TYPE_CHECKING, NamedTuple
 
 from eudkit import _rust as _rust_eudkit
 
@@ -2285,50 +2286,80 @@ class Player:
         dwwrite_epd(EPD(0x57F120) + self.id, val, session=self._session)
 
 
-class _OnceContextManager:
-    """Context manager and callback runner for `with once():` and `once(cb)` blocks.
-    
-    Guarantees the block executes at most once during the game. If conditions are provided,
-    waits until they are satisfied on a trigger loop pass before executing.
+class _ReactiveCall(NamedTuple):
+    """Canonical argument split for one Reactive Rule builder call."""
+
+    conditions: Any = None
+    loops: int | None = None
+    callback: Callable[[], Any] | None = None
+
+
+def _normalize_reactive_call(
+    kind: str,
+    first: Any = None,
+    second: Any = None,
+) -> _ReactiveCall:
+    """Normalize the overloaded arguments shared by the Reactive Rule builders.
+
+    `once` accepts an optional callback as its only argument; the other rules
+    accept either a condition/loop count or that value followed by a callback.
     """
+    if second is not None:
+        if kind in ("once", "when", "until"):
+            return _ReactiveCall(conditions=first, callback=second)
+        if kind in ("after", "every"):
+            if first is None:
+                raise TypeError(f"{kind}() requires a loop count")
+            return _ReactiveCall(loops=int(first), callback=second)
+    elif kind == "once":
+        if callable(first) and not isinstance(first, (Condition, ExprLike)):
+            return _ReactiveCall(callback=first)
+        return _ReactiveCall(conditions=first)
+    elif kind in ("when", "until"):
+        return _ReactiveCall(conditions=first)
+    elif kind in ("after", "every"):
+        if first is None:
+            raise TypeError(f"{kind}() requires a loop count")
+        return _ReactiveCall(loops=int(first))
+    raise TypeError(f"unknown Reactive Rule kind: {kind!r}")
 
-    def __init__(
-        self,
-        conditions: Condition | Sequence[Condition] | None = None,
-        callback: Callable[[], Any] | None = None,
-    ) -> None:
-        self.conditions = conditions
-        if callback is not None:
+
+class _ReactiveContextManager:
+    """Shared context-manager and callback runner for a Reactive Rule builder."""
+
+    kind: str
+    conditions: Any = None
+    loops: int | None = None
+    callback: Callable[[], Any] | None = None
+
+    def _init_reactive(self, call: _ReactiveCall) -> None:
+        self.conditions = call.conditions
+        self.loops = call.loops
+        self.callback = call.callback
+        self._callback_result: Any = None
+        if self.callback is not None:
             sess = _active_builder_session.get()
             if sess is None:
-                raise RuntimeError("once(...) callback must be executed inside an active eudkit block")
-            with sess.once(conditions):
-                callback()
+                raise RuntimeError(
+                    f"{self.kind}(...) callback must be executed inside an active eudkit block"
+                )
+            with self._session_scope(sess):
+                self._callback_result = self.callback()
 
-    def __call__(
-        self,
-        conditions: Any = None,
-        callback: Callable[[], Any] | None = None,
-    ) -> Any:
-        # Support once(callback) or @once
-        if callable(conditions) and callback is None and not isinstance(conditions, (Condition, ExprLike)):
-            callback = conditions
-            conditions = None
-        if callback is not None:
-            sess = _active_builder_session.get()
-            if sess is None:
-                raise RuntimeError("once(...) callback must be executed inside an active eudkit block")
-            with sess.once(conditions):
-                return callback()
-        return _OnceContextManager(conditions)
+    def _session_scope(self, sess: Session) -> AbstractContextManager[None]:
+        raise NotImplementedError
 
     def __enter__(self) -> None:
         sess = _active_builder_session.get()
         if sess is None:
+            if self.kind == "once":
+                raise RuntimeError(
+                    "with once: can only be used inside an active eudkit function or session block"
+                )
             raise RuntimeError(
-                "with once: can only be used inside an active eudkit function or session block"
+                f"with {self.kind}(...) can only be used inside an active eudkit block"
             )
-        self._cm = sess.once(self.conditions)
+        self._cm = self._session_scope(sess)
         self._cm.__enter__()
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -2336,27 +2367,53 @@ class _OnceContextManager:
             self._cm.__exit__(exc_type, exc_val, exc_tb)
 
 
+class _OnceContextManager(_ReactiveContextManager):
+    """Context manager and callback runner for `with once():` and `once(cb)` blocks.
+    
+    Guarantees the block executes at most once during the game. If conditions are provided,
+    waits until they are satisfied on a trigger loop pass before executing.
+    """
+
+    kind = "once"
+
+    def __init__(
+        self,
+        conditions: Condition | Sequence[Condition] | None = None,
+        callback: Callable[[], Any] | None = None,
+    ) -> None:
+        self._init_reactive(_normalize_reactive_call("once", conditions, callback))
+
+    def __call__(
+        self,
+        conditions: Any = None,
+        callback: Callable[[], Any] | None = None,
+    ) -> Any:
+        manager = _OnceContextManager(conditions, callback)
+        if manager.callback is not None:
+            return manager._callback_result
+        return manager
+
+    def _session_scope(self, sess: Session) -> AbstractContextManager[None]:
+        return sess.once(self.conditions)
+
+
 once = _OnceContextManager()
 
 
-class _WhenContextManager:
+class _WhenContextManager(_ReactiveContextManager):
     """Context manager and callback runner for `with when(conditions):` and `when(conditions, cb)` blocks.
     
     Standing reactive rule that executes every trigger loop while conditions evaluate to true.
     """
+
+    kind = "when"
 
     def __init__(
         self,
         conditions: Condition | Sequence[Condition],
         callback: Callable[[], Any] | None = None,
     ) -> None:
-        self.conditions = conditions
-        if callback is not None:
-            sess = _active_builder_session.get()
-            if sess is None:
-                raise RuntimeError("when(...) callback must be executed inside an active eudkit block")
-            with sess.when(conditions):
-                callback()
+        self._init_reactive(_normalize_reactive_call("when", conditions, callback))
 
     def __call__(
         self,
@@ -2365,40 +2422,28 @@ class _WhenContextManager:
     ) -> _WhenContextManager:
         return _WhenContextManager(conditions, callback)
 
-    def __enter__(self) -> None:
-        sess = _active_builder_session.get()
-        if sess is None:
-            raise RuntimeError("with when(...) can only be used inside an active eudkit block")
-        self._cm = sess.when(self.conditions)
-        self._cm.__enter__()
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if hasattr(self, "_cm"):
-            self._cm.__exit__(exc_type, exc_val, exc_tb)
+    def _session_scope(self, sess: Session) -> AbstractContextManager[None]:
+        return sess.when(self.conditions)
 
 
 when = _WhenContextManager
 
 
-class _UntilContextManager:
+class _UntilContextManager(_ReactiveContextManager):
     """Context manager and callback runner for `with until(condition):` and `until(condition, cb)` blocks.
     
     Executes every trigger loop until `condition` evaluates to true, at which point
     the block permanently deactivates and never executes again.
     """
 
+    kind = "until"
+
     def __init__(
         self,
         condition: Condition,
         callback: Callable[[], Any] | None = None,
     ) -> None:
-        self.condition = condition
-        if callback is not None:
-            sess = _active_builder_session.get()
-            if sess is None:
-                raise RuntimeError("until(...) callback must be executed inside an active eudkit block")
-            with sess.until(condition):
-                callback()
+        self._init_reactive(_normalize_reactive_call("until", condition, callback))
 
     def __call__(
         self,
@@ -2407,40 +2452,28 @@ class _UntilContextManager:
     ) -> _UntilContextManager:
         return _UntilContextManager(condition, callback)
 
-    def __enter__(self) -> None:
-        sess = _active_builder_session.get()
-        if sess is None:
-            raise RuntimeError("with until(...) can only be used inside an active eudkit block")
-        self._cm = sess.until(self.condition)
-        self._cm.__enter__()
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if hasattr(self, "_cm"):
-            self._cm.__exit__(exc_type, exc_val, exc_tb)
+    def _session_scope(self, sess: Session) -> AbstractContextManager[None]:
+        return sess.until(self.conditions)
 
 
 until = _UntilContextManager
 
 
-class _AfterContextManager:
+class _AfterContextManager(_ReactiveContextManager):
     """Context manager and callback runner for `with after(loops):` and `after(loops, cb)` blocks.
     
     Counts down the specified number of StarCraft trigger loops and executes once.
     Avoids native `Wait()` actions which freeze trigger threads and desync multiplayer.
     """
 
+    kind = "after"
+
     def __init__(
         self,
         loops: int,
         callback: Callable[[], Any] | None = None,
     ) -> None:
-        self.loops = loops
-        if callback is not None:
-            sess = _active_builder_session.get()
-            if sess is None:
-                raise RuntimeError("after(...) callback must be executed inside an active eudkit block")
-            with sess.after(loops):
-                callback()
+        self._init_reactive(_normalize_reactive_call("after", loops, callback))
 
     def __call__(
         self,
@@ -2449,40 +2482,28 @@ class _AfterContextManager:
     ) -> _AfterContextManager:
         return _AfterContextManager(loops, callback)
 
-    def __enter__(self) -> None:
-        sess = _active_builder_session.get()
-        if sess is None:
-            raise RuntimeError("with after(loops) can only be used inside an active eudkit block")
-        self._cm = sess.after(self.loops)
-        self._cm.__enter__()
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if hasattr(self, "_cm"):
-            self._cm.__exit__(exc_type, exc_val, exc_tb)
+    def _session_scope(self, sess: Session) -> AbstractContextManager[None]:
+        return sess.after(self.loops)
 
 
 after = _AfterContextManager
 
 
-class _EveryContextManager:
+class _EveryContextManager(_ReactiveContextManager):
     """Context manager and callback runner for `with every(loops):` and `every(loops, cb)` blocks.
     
     Periodic clock rule that fires repeatedly every `loops` trigger cycles.
     Deterministic, multiplayer-safe, and independent of fragile engine `Wait()` calls.
     """
 
+    kind = "every"
+
     def __init__(
         self,
         loops: int,
         callback: Callable[[], Any] | None = None,
     ) -> None:
-        self.loops = loops
-        if callback is not None:
-            sess = _active_builder_session.get()
-            if sess is None:
-                raise RuntimeError("every(...) callback must be executed inside an active eudkit block")
-            with sess.every(loops):
-                callback()
+        self._init_reactive(_normalize_reactive_call("every", loops, callback))
 
     def __call__(
         self,
@@ -2491,16 +2512,8 @@ class _EveryContextManager:
     ) -> _EveryContextManager:
         return _EveryContextManager(loops, callback)
 
-    def __enter__(self) -> None:
-        sess = _active_builder_session.get()
-        if sess is None:
-            raise RuntimeError("with every(loops) can only be used inside an active eudkit block")
-        self._cm = sess.every(self.loops)
-        self._cm.__enter__()
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if hasattr(self, "_cm"):
-            self._cm.__exit__(exc_type, exc_val, exc_tb)
+    def _session_scope(self, sess: Session) -> AbstractContextManager[None]:
+        return sess.every(self.loops)
 
 
 every = _EveryContextManager

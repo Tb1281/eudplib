@@ -214,6 +214,30 @@ class TestEudkitPythonFrontend(unittest.TestCase):
 
         self.assertIs(_active_builder_session.get(), previous)
 
+    def test_reactive_builders_accept_keyword_arguments_and_return_callback_result(self):
+        import eudkit
+
+        session = eudkit.Session(TESTMAP_PATH)
+        flag = session.var(0, name="reactive_kw_flag")
+
+        with session.main_loop():
+            with eudkit.when(conditions=flag == 0):
+                pass
+            with eudkit.until(condition=flag == 1):
+                pass
+            with eudkit.after(loops=2):
+                pass
+            with eudkit.every(loops=3):
+                pass
+
+            result = eudkit.once(conditions=flag == 0, callback=lambda: 42)
+            self.assertEqual(result, 42)
+            eudkit.once(flag == 0, lambda: 7)
+            eudkit.when(flag == 0, lambda: None)
+            eudkit.until(flag == 1, lambda: None)
+            eudkit.after(2, lambda: None)
+            eudkit.every(3, lambda: None)
+
     def test_v2_vs_v1_differential_budget_gate(self):
         import eudkit
         from eudkit import Add, Ore, Player1, SetDeaths, SetResources
