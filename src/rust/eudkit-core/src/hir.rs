@@ -28,6 +28,9 @@ pub struct BlockId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ByteBufId(pub u32);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StringBufferId(pub u32);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VarId(pub u32);
 
@@ -1247,6 +1250,18 @@ pub enum StockAction {
         line: u8,
         parts: Vec<FormatPart>,
     },
+    /// Displays the current contents of a mutable string buffer.
+    DisplayStringBuffer {
+        buffer: StringBufferId,
+        always_display: bool,
+    },
+    /// Formats into a mutable string buffer, optionally displaying it afterwards.
+    FormatStringBuffer {
+        buffer: StringBufferId,
+        parts: Vec<FormatPart>,
+        display: bool,
+        always_display: bool,
+    },
     CreateUnit {
         count: u8,
         unit: u16,
@@ -1451,6 +1466,20 @@ impl fmt::Display for StockAction {
                 write!(f, "FormatPrint({target:?}, {parts:?}, always={always_display})")
             }
             Self::PrintAt { line, parts } => write!(f, "PrintAt(line={line}, {parts:?})"),
+            Self::DisplayStringBuffer {
+                buffer,
+                always_display,
+            } => write!(f, "DisplayStringBuffer(@strbuf{}, always={always_display})", buffer.0),
+            Self::FormatStringBuffer {
+                buffer,
+                parts,
+                display,
+                always_display,
+            } => write!(
+                f,
+                "FormatStringBuffer(@strbuf{}, display={display}, always={always_display}, {parts:?})",
+                buffer.0
+            ),
             Self::CreateUnit {
                 count,
                 unit,
@@ -1705,12 +1734,43 @@ impl HirByteBuf {
     }
 }
 
+/// A mutable string stored in the map's `STRx` table.
+///
+/// `capacity` counts bytes available after `initial_text` and its terminating
+/// NUL.  The bytes are reserved at map-build time so runtime formatting can
+/// overwrite them without touching the following string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirStringBuffer {
+    pub id: StringBufferId,
+    pub name: String,
+    pub initial_text: String,
+    pub capacity: u32,
+    /// Resolved 1-based `STRx` string ID, filled in during lowering.
+    pub string_id: u32,
+    /// Resolved virtual address of the string bytes, filled in during lowering.
+    pub address: u32,
+}
+
+impl HirStringBuffer {
+    pub fn new(name: impl Into<String>, initial_text: impl Into<String>, capacity: u32) -> Self {
+        Self {
+            id: StringBufferId(0),
+            name: name.into(),
+            initial_text: initial_text.into(),
+            capacity,
+            string_id: 0,
+            address: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HirModule {
     pub name: String,
     pub functions: Vec<HirFunction>,
     pub main_loop: Option<FuncId>,
     pub byte_bufs: Vec<HirByteBuf>,
+    pub string_buffers: Vec<HirStringBuffer>,
     pub vars: Vec<HirVar>,
     pub func_ptrs: Vec<HirFuncPtr>,
 }
@@ -1722,6 +1782,7 @@ impl HirModule {
             functions: Vec::new(),
             main_loop: None,
             byte_bufs: Vec::new(),
+            string_buffers: Vec::new(),
             vars: Vec::new(),
             func_ptrs: Vec::new(),
         }
@@ -1744,6 +1805,21 @@ impl HirModule {
         buf.id = id;
         self.byte_bufs.push(buf);
         id
+    }
+
+    pub fn add_string_buffer(&mut self, mut buf: HirStringBuffer) -> StringBufferId {
+        let id = StringBufferId(self.string_buffers.len() as u32);
+        buf.id = id;
+        self.string_buffers.push(buf);
+        id
+    }
+
+    pub fn string_buffer(&self, id: StringBufferId) -> &HirStringBuffer {
+        &self.string_buffers[id.0 as usize]
+    }
+
+    pub fn string_buffer_mut(&mut self, id: StringBufferId) -> &mut HirStringBuffer {
+        &mut self.string_buffers[id.0 as usize]
     }
 
     pub fn add_function(&mut self, mut func: HirFunction) -> FuncId {

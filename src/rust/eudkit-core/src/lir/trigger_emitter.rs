@@ -775,8 +775,11 @@ pub fn emit_lir(
             | StockAction::SetFieldDynamic { .. } => {
                 unreachable!("lower_action_into_ops must lower all dynamic actions")
             }
-            StockAction::FormatPrint { .. } | StockAction::PrintAt { .. } => {
-                unreachable!("lower_act must handle FormatPrint and PrintAt")
+            StockAction::FormatPrint { .. }
+            | StockAction::PrintAt { .. }
+            | StockAction::DisplayStringBuffer { .. }
+            | StockAction::FormatStringBuffer { .. } => {
+                unreachable!("format expansion must lower formatted actions before emission")
             }
         }
     };

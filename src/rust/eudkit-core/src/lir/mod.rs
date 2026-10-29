@@ -24,6 +24,7 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
     let mut hir = hir_in.clone();
     hir.lower_reactive_rules()?;
     crate::inlining::inline_functions(&mut hir)?;
+    crate::format_expand::expand_format_actions(&mut hir, map_ctx)?;
     let main_fn_id = hir
         .main_loop
         .or_else(|| hir.functions.first().map(|f| f.id))

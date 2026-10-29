@@ -495,6 +495,8 @@ fn actions_cannot_mutate_condition(actions: &[StockAction], cond: &StockConditio
         | StockAction::DisplayTextId { .. }
         | StockAction::FormatPrint { .. }
         | StockAction::PrintAt { .. }
+        | StockAction::DisplayStringBuffer { .. }
+        | StockAction::FormatStringBuffer { .. }
         | StockAction::MinimapPing { .. }
         | StockAction::PlayWAV { .. }
         | StockAction::Comment { .. }

@@ -224,40 +224,57 @@ impl StringTable {
         Ok(tbl)
     }
 
+    /// Inserts `s` without deduplicating it against existing strings and
+    /// returns its zero-based string index.  The caller resolves offsets only
+    /// after every insertion, so the reused empty slot or shifted data index
+    /// is safe.
+    fn insert_string_data_zero_based(&mut self, s: &[u8]) -> usize {
+        if !self.emptystring.is_empty() && self.loaded && self.first_extended_string.is_some() {
+            let (empty_idx, next_opt) = self.emptystring.remove(0);
+            let target_next =
+                next_opt.unwrap_or_else(|| self.first_extended_string.clone().unwrap());
+            let data_index = self
+                .datatb
+                .iter()
+                .position(|x| *x == target_next)
+                .unwrap_or(self.datatb.len());
+            self.datatb.insert(data_index, s.to_vec());
+            for v in &mut self.dataindextb {
+                if *v >= data_index {
+                    *v += 1;
+                }
+            }
+            self.dataindextb[empty_idx] = data_index;
+            empty_idx
+        } else {
+            if self.first_extended_string.is_none() {
+                self.first_extended_string = Some(s.to_vec());
+            }
+            let data_index = self.datatb.len();
+            self.datatb.push(s.to_vec());
+            self.dataindextb.push(data_index);
+            self.dataindextb.len() - 1
+        }
+    }
+
     fn add_string_zero_based(&mut self, s: &[u8]) -> usize {
-        let mut string_index = self.dataindextb.len();
         if let Some(&repr_id) = self.stringmap.get(s) {
             let data_index = self.dataindextb[repr_id];
             self.dataindextb.push(data_index);
+            self.dataindextb.len() - 1
         } else {
-            if !self.emptystring.is_empty() && self.loaded && self.first_extended_string.is_some() {
-                let (empty_idx, next_opt) = self.emptystring.remove(0);
-                string_index = empty_idx;
-                let target_next =
-                    next_opt.unwrap_or_else(|| self.first_extended_string.clone().unwrap());
-                let data_index = self
-                    .datatb
-                    .iter()
-                    .position(|x| *x == target_next)
-                    .unwrap_or(self.datatb.len());
-                self.datatb.insert(data_index, s.to_vec());
-                for v in &mut self.dataindextb {
-                    if *v >= data_index {
-                        *v += 1;
-                    }
-                }
-                self.dataindextb[string_index] = data_index;
-            } else {
-                if self.first_extended_string.is_none() {
-                    self.first_extended_string = Some(s.to_vec());
-                }
-                let data_index = self.datatb.len();
-                self.datatb.push(s.to_vec());
-                self.dataindextb.push(data_index);
-            }
+            let string_index = self.insert_string_data_zero_based(s);
             self.stringmap.insert(s.to_vec(), string_index);
+            string_index
         }
-        string_index
+    }
+
+    /// Adds `s` as a dedicated string whose storage is never shared with any
+    /// other string ID.  This is required for mutable string buffers, because
+    /// writing through one buffer must not mutate another buffer or a static
+    /// message that happened to start with the same bytes.
+    pub fn add_unique(&mut self, s: &[u8]) -> usize {
+        self.insert_string_data_zero_based(s)
     }
 
     /// Returns the 1-based string ID (`1..=N`) for `s`, inserting it if not present.
@@ -825,6 +842,11 @@ impl MapData {
         self.string_table.get_or_insert(s.as_ref())
     }
 
+    /// Registers a string with storage dedicated to this call.
+    pub fn add_unique_string(&mut self, s: impl AsRef<[u8]>) -> u32 {
+        (self.string_table.add_unique(s.as_ref()) + 1) as u32
+    }
+
     /// Registers a string in the STRx string table, deduplicating with existing entries,
     /// and resolves its static offset, virtual address, and EPD without post-collection callbacks.
     pub fn register_map_string(&mut self, text: &str) -> Result<MapString> {
@@ -951,6 +973,14 @@ impl MapContext {
 
     pub fn get_or_insert_string(&mut self, s: impl AsRef<[u8]>) -> u32 {
         self.data.get_or_insert_string(s)
+    }
+
+    pub fn add_unique_string(&mut self, s: impl AsRef<[u8]>) -> u32 {
+        self.data.add_unique_string(s)
+    }
+
+    pub fn string_address(&self, id1: u32) -> Option<u32> {
+        self.data.string_table().string_address(id1)
     }
 
     pub fn register_map_string(&mut self, text: &str) -> Result<MapString> {

@@ -39,7 +39,7 @@ fn format_template_parser_parses_mixed_specifiers_and_text() {
 }
 
 #[test]
-fn format_print_lowers_to_cpstring_residue_stream_and_compiles_scx() {
+fn format_print_expands_to_runtime_writes_and_compiles_scx() {
     let map_path = repo_root()
         .join("tests")
         .join("outputmap")
@@ -73,6 +73,18 @@ fn format_print_lowers_to_cpstring_residue_stream_and_compiles_scx() {
         .push_stmt(HirStmt::Action(StockAction::FormatPrint {
             target: PrintTarget::MapString(str_buf.id),
             parts,
+            always_display: false,
+        }));
+
+    // Runtime formatting into a display string must keep the display action.
+    main_fn
+        .block_mut(bb0)
+        .push_stmt(HirStmt::Action(StockAction::FormatPrint {
+            target: PrintTarget::DisplayText,
+            parts: vec![
+                FormatPart::Text("Wave ".to_string()),
+                FormatPart::Decimal(HirExpr::Var(score_var)),
+            ],
             always_display: true,
         }));
 
@@ -90,10 +102,24 @@ fn format_print_lowers_to_cpstring_residue_stream_and_compiles_scx() {
     let lir = session.lower_to_lir().unwrap();
     let lir_dump = lir.dump_lir();
 
-    // Verify LIR contains CPString SetDeaths streaming actions (type=45, p1=13)
+    // Runtime digits are written by patching a trigger action through the
+    // variable processor, so their destinations appear as symbolic EPDs
+    // rather than one fully constant action per character.
     assert!(
-        lir_dump.contains("type=45 p1=13"),
-        "LIR must contain CP streaming SetDeaths (type=45 p1=13)"
+        lir_dump.contains("p1=epd(@"),
+        "runtime formatting must lower to dynamic EPD writes:\n{lir_dump}"
+    );
+
+    // The DisplayText target still becomes a show-text action after expansion.
+    assert!(
+        lir_dump.contains("type=9 "),
+        "formatted display text must survive expansion as DisplayText:\n{lir_dump}"
+    );
+
+    // The old CPString residue-stream path must no longer be reachable.
+    assert!(
+        !lir_dump.contains("FormatPrint") && !lir_dump.contains("PrintAt"),
+        "formatted actions must be fully expanded before LIR emission"
     );
 
     // Compile into CHK bytes and verify compilation report

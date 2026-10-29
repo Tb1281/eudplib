@@ -1,8 +1,8 @@
 use crate::error::{EudkitTsError, Result};
 use eudkit_core::hir::{
     epd, parse_format_template, CmpOp, Comparison, HirBinOp, HirBuilder, HirExpr, HirModule,
-    HirStmt, HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget, ReactiveRule, ResourceType,
-    StockAction, StockCondition, SwitchAction, VarId,
+    HirStmt, HirStringBuffer, HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget, ReactiveRule,
+    ResourceType, StockAction, StockCondition, StringBufferId, SwitchAction, VarId,
 };
 use eudkit_core::map_context::MapContext;
 use oxc_allocator::Allocator;
@@ -67,7 +67,8 @@ pub struct TsCompiler<'a> {
     current_fn_idx: Option<usize>,
     loop_vars: HashMap<String, i32>, // compile-time loop counters
     struct_vars: HashMap<String, HirExpr>, // e.g. u -> unit_epd
-    string_buffers: HashMap<String, String>, // var name -> template
+    string_buffers: HashMap<String, StringBufferId>, // var name -> mutable STRx buffer
+    map_strings: HashMap<String, String>, // var name -> immutable text
 }
 
 impl<'a> TsCompiler<'a> {
@@ -147,6 +148,7 @@ impl<'a> TsCompiler<'a> {
             loop_vars: HashMap::new(),
             struct_vars: HashMap::new(),
             string_buffers: HashMap::new(),
+            map_strings: HashMap::new(),
         }
     }
 
@@ -275,30 +277,68 @@ impl<'a> TsCompiler<'a> {
                         }
                     }
 
-                    let is_string_call = match &call.callee {
-                        Expression::Identifier(ident) => {
-                            ident.name.as_str() == "string" || ident.name.as_str() == "stringBuffer"
-                        }
-                        Expression::StaticMemberExpression(mem) => {
-                            mem.property.name.as_str() == "string"
-                                || mem.property.name.as_str() == "stringBuffer"
-                        }
-                        _ => false,
+                    let callee_name = match &call.callee {
+                        Expression::Identifier(ident) => Some(ident.name.as_str()),
+                        Expression::StaticMemberExpression(mem) => Some(mem.property.name.as_str()),
+                        _ => None,
                     };
+                    let is_map_string =
+                        matches!(callee_name, Some("map_string") | Some("mapString"));
+                    let is_string_call = matches!(
+                        callee_name,
+                        Some("string") | Some("stringBuffer") | Some("string_buffer")
+                    );
+
+                    if is_map_string {
+                        let text = call
+                            .arguments
+                            .first()
+                            .and_then(|a| a.as_expression())
+                            .and_then(|arg| match arg {
+                                Expression::StringLiteral(slit) => {
+                                    Some(slit.value.as_str().unwrap_or("").to_string())
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_default();
+                        self.map_strings.insert(var_name.to_string(), text);
+                        continue;
+                    }
 
                     if is_string_call {
-                        let template = if let Some(arg0) =
-                            call.arguments.first().and_then(|a| a.as_expression())
-                        {
-                            if let Expression::StringLiteral(slit) = arg0 {
-                                slit.value.as_str().unwrap_or("").to_string()
-                            } else {
-                                "".to_string()
+                        let arg0 = call.arguments.first().and_then(|a| a.as_expression());
+                        let (initial_text, capacity) = match arg0 {
+                            Some(Expression::StringLiteral(slit)) => {
+                                let text = slit.value.as_str().unwrap_or("").to_string();
+                                let capacity = (text.len() as u32 + 1).max(256);
+                                (text, capacity)
                             }
-                        } else {
-                            "".to_string()
+                            Some(Expression::NumericLiteral(num)) => {
+                                let capacity = num.value.max(1.0) as u32;
+                                (" ".repeat(capacity as usize), capacity)
+                            }
+                            _ => (String::new(), 256),
                         };
-                        self.string_buffers.insert(var_name.to_string(), template);
+                        let buffer_name = call
+                            .arguments
+                            .get(1)
+                            .and_then(|a| a.as_expression())
+                            .and_then(|arg| match arg {
+                                Expression::StringLiteral(slit) => {
+                                    Some(slit.value.as_str().unwrap_or("").to_string())
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| var_name.to_string());
+                        let id = self
+                            .builder
+                            .module_mut()
+                            .add_string_buffer(HirStringBuffer::new(
+                                buffer_name,
+                                initial_text,
+                                capacity,
+                            ));
+                        self.string_buffers.insert(var_name.to_string(), id);
                         continue;
                     }
                 }
@@ -1797,6 +1837,38 @@ impl<'a> TsCompiler<'a> {
         }
     }
 
+    /// Lowers the arguments of a string-buffer format call.
+    ///
+    /// The first argument may be an explicit template string; otherwise the
+    /// buffer's initial text is the template.  `start` skips positional
+    /// arguments such as the line number of `display_at`.
+    fn lower_buffer_format_args(
+        &mut self,
+        call: &CallExpression,
+        start: usize,
+        default_template: &str,
+    ) -> Result<(String, Vec<HirExpr>)> {
+        let explicit_template = match call.arguments.get(start).and_then(|a| a.as_expression()) {
+            Some(Expression::StringLiteral(lit)) => {
+                Some(lit.value.as_str().unwrap_or("").to_string())
+            }
+            _ => None,
+        };
+        let mut args = Vec::new();
+        for (idx, arg) in call.arguments.iter().enumerate().skip(start) {
+            if explicit_template.is_some() && idx == start {
+                continue;
+            }
+            if let Some(expr) = arg.as_expression() {
+                args.push(self.lower_expr(expr)?);
+            }
+        }
+        Ok((
+            explicit_template.unwrap_or_else(|| default_template.to_string()),
+            args,
+        ))
+    }
+
     fn try_lower_action(&mut self, call: &CallExpression) -> Result<Option<StockAction>> {
         let (obj_name, fn_name) = match &call.callee {
             Expression::Identifier(ident) => (None, ident.name.as_str()),
@@ -1811,29 +1883,57 @@ impl<'a> TsCompiler<'a> {
         };
 
         if let Some(obj) = obj_name {
-            if let Some(template) = self.string_buffers.get(obj).cloned() {
+            if let Some(&buffer) = self.string_buffers.get(obj) {
+                let template = self
+                    .builder
+                    .module()
+                    .string_buffer(buffer)
+                    .initial_text
+                    .clone();
                 match fn_name {
                     "display" | "displayText" | "display_text" => {
-                        let mut args = Vec::new();
-                        for arg in &call.arguments {
-                            if let Some(expr) = arg.as_expression() {
-                                args.push(self.lower_expr(expr)?);
-                            }
-                        }
-                        if args.is_empty() && !template.contains("%d") && !template.contains("%x") {
-                            return Ok(Some(StockAction::DisplayText {
-                                text: template,
-                                always_display: true,
-                            }));
-                        } else {
-                            let parts = parse_format_template(&template, &args)
-                                .map_err(|e| EudkitTsError::Compile(e))?;
-                            return Ok(Some(StockAction::FormatPrint {
-                                target: PrintTarget::DisplayText,
-                                parts,
-                                always_display: true,
+                        // `display(false)` only controls the AlwaysDisplay flag.
+                        let bool_arg = call
+                            .arguments
+                            .first()
+                            .and_then(|a| a.as_expression())
+                            .and_then(|arg| match arg {
+                                Expression::BooleanLiteral(b) => Some(b.value),
+                                _ => None,
+                            });
+                        if bool_arg.is_some() && call.arguments.len() == 1 {
+                            return Ok(Some(StockAction::DisplayStringBuffer {
+                                buffer,
+                                always_display: bool_arg.unwrap(),
                             }));
                         }
+
+                        if call.arguments.is_empty() {
+                            return Ok(Some(StockAction::DisplayStringBuffer {
+                                buffer,
+                                always_display: true,
+                            }));
+                        }
+                        let (format, args) = self.lower_buffer_format_args(call, 0, &template)?;
+                        let parts = parse_format_template(&format, &args)
+                            .map_err(|e| EudkitTsError::Compile(e))?;
+                        return Ok(Some(StockAction::FormatStringBuffer {
+                            buffer,
+                            parts,
+                            display: true,
+                            always_display: true,
+                        }));
+                    }
+                    "format" | "printf" | "appendf" => {
+                        let (format, args) = self.lower_buffer_format_args(call, 0, &template)?;
+                        let parts = parse_format_template(&format, &args)
+                            .map_err(|e| EudkitTsError::Compile(e))?;
+                        return Ok(Some(StockAction::FormatStringBuffer {
+                            buffer,
+                            parts,
+                            display: false,
+                            always_display: true,
+                        }));
                     }
                     "display_at" | "displayAt" | "print_at" | "PrintAt" | "DisplayTextAt" => {
                         let line = if let Some(arg0) =
@@ -1843,19 +1943,55 @@ impl<'a> TsCompiler<'a> {
                         } else {
                             0
                         };
-                        let mut args = Vec::new();
-                        for arg in call.arguments.iter().skip(1) {
-                            if let Some(expr) = arg.as_expression() {
-                                args.push(self.lower_expr(expr)?);
-                            }
-                        }
-                        let parts = parse_format_template(&template, &args)
+                        let (format, args) = self.lower_buffer_format_args(call, 1, &template)?;
+                        let parts = parse_format_template(&format, &args)
                             .map_err(|e| EudkitTsError::Compile(e))?;
                         return Ok(Some(StockAction::PrintAt { line, parts }));
                     }
                     _ => {}
                 }
             }
+
+            if let Some(text) = self.map_strings.get(obj).cloned() {
+                match fn_name {
+                    "display" | "displayText" | "display_text" => {
+                        let always_display = call
+                            .arguments
+                            .first()
+                            .and_then(|a| a.as_expression())
+                            .and_then(|arg| match arg {
+                                Expression::BooleanLiteral(b) => Some(b.value),
+                                _ => None,
+                            })
+                            .unwrap_or(true);
+                        return Ok(Some(StockAction::DisplayText {
+                            text,
+                            always_display,
+                        }));
+                    }
+                    "display_at" | "displayAt" | "print_at" | "PrintAt" | "DisplayTextAt" => {
+                        let line = call
+                            .arguments
+                            .first()
+                            .and_then(|a| a.as_expression())
+                            .map(|arg| self.eval_const_expr(arg))
+                            .transpose()?
+                            .unwrap_or(0) as u8;
+                        return Ok(Some(StockAction::PrintAt {
+                            line,
+                            parts: vec![eudkit_core::hir::FormatPart::Text(text)],
+                        }));
+                    }
+                    "format" | "printf" => {
+                        return Err(EudkitTsError::Compile(
+                            "MapString is static and cannot be formatted; use session.string()"
+                                .to_string(),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+
             if obj != "eud" && obj != "session" && obj != "eudkit" {
                 return Ok(None);
             }
@@ -2124,6 +2260,28 @@ impl<'a> TsCompiler<'a> {
                     modifier: mod_arg,
                     amount: amt_arg,
                     resource: res_arg,
+                }))
+            }
+            "DisplayTextId" => {
+                let string_id = call
+                    .arguments
+                    .first()
+                    .and_then(|a| a.as_expression())
+                    .map(|arg| self.eval_const_expr(arg))
+                    .transpose()?
+                    .unwrap_or(0) as u32;
+                let always_display = call
+                    .arguments
+                    .get(1)
+                    .and_then(|a| a.as_expression())
+                    .and_then(|arg| match arg {
+                        Expression::BooleanLiteral(b) => Some(b.value),
+                        _ => None,
+                    })
+                    .unwrap_or(true);
+                Ok(Some(StockAction::DisplayTextId {
+                    string_id,
+                    always_display,
                 }))
             }
             "DisplayText" => {

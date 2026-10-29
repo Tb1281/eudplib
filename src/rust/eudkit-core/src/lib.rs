@@ -5,6 +5,7 @@ pub mod config;
 pub mod cp_string;
 pub mod dts;
 pub mod error;
+pub mod format_expand;
 pub mod hir;
 pub mod injector;
 pub mod inlining;
