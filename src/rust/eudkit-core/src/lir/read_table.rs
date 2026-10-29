@@ -5,6 +5,7 @@ use crate::lir::types::{
 };
 use std::collections::HashMap;
 
+#[derive(Debug)]
 pub struct ReadTable {
     pub read_end_id: ObjectId,
     pub triggers: Vec<LirTrigger>,

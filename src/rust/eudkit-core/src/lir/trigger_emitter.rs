@@ -1,175 +1,14 @@
 use crate::cp_string::*;
 use crate::error::{EudkitError, Result};
 use crate::hir::{
-    epd, BlockId, ByteBufId, Comparison, HirExpr, HirModule, HirValue, Modifier, StockAction,
-    StockCondition, VarId, CURRENT_PLAYER_ADDR, END_OF_TRIGGERS_SENTINEL,
+    epd, Comparison, HirExpr, HirModule, HirValue, Modifier, StockAction, StockCondition, VarId,
+    CURRENT_PLAYER_ADDR, END_OF_TRIGGERS_SENTINEL,
 };
-use crate::lir::read_table::ReadTable;
-use crate::lir::storage_selection::{collect_vproc_vars, VarStorage};
+use crate::lir::emission_plan::EmissionPlan;
+use crate::lir::storage_selection::VarStorage;
 use crate::lir::types::*;
 use crate::map_context::MapContext;
-use std::collections::{HashMap, HashSet};
-
-fn count_leaf_action_actions(act: &StockAction) -> usize {
-    match act {
-        StockAction::PrintAt { parts, .. } => crate::cp_string::emit_format_parts_actions(
-            ValueExpr::Const(0),
-            parts,
-            None,
-            false,
-            &std::collections::HashMap::new(),
-        )
-        .len(),
-        StockAction::FormatPrint {
-            target,
-            parts,
-            always_display,
-        } => {
-            let has_disp = matches!(target, crate::hir::PrintTarget::DisplayText);
-            crate::cp_string::emit_format_parts_actions(
-                ValueExpr::Const(0),
-                parts,
-                if has_disp { Some(1) } else { None },
-                *always_display,
-                &std::collections::HashMap::new(),
-            )
-            .len()
-        }
-        _ => 1,
-    }
-}
-
-fn count_block_triggers(blk: &ExpandedBlock) -> u32 {
-    let mut count = 0u32;
-    let mut pending_actions = 0usize;
-
-    let add_pending = |n: usize, pending: &mut usize, trigs: &mut u32| {
-        if *pending + n > 64 {
-            *trigs += 1;
-            *pending = 0;
-        }
-        *pending += n;
-        if *pending == 64 {
-            *trigs += 1;
-            *pending = 0;
-        }
-    };
-    let flush_pending = |pending: &mut usize, trigs: &mut u32| {
-        if *pending > 0 {
-            *trigs += 1;
-            *pending = 0;
-        }
-    };
-
-    for op in &blk.ops {
-        match op {
-            ExpandedOp::LeafAction(act) => {
-                let n = count_leaf_action_actions(act);
-                for _ in 0..n {
-                    add_pending(1, &mut pending_actions, &mut count);
-                }
-            }
-            ExpandedOp::Trigger { .. } => {
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1;
-            }
-            ExpandedOp::VProcCopyVar { mask, .. } => {
-                let n = if mask.is_some() { 4 } else { 3 };
-                add_pending(n, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                if mask.is_some() {
-                    add_pending(1, &mut pending_actions, &mut count);
-                }
-            }
-            ExpandedOp::VProcBitAndVar { .. } => {
-                add_pending(4, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1; // target masked SetDeathsX trigger
-            }
-            ExpandedOp::VProcBitOrVar { .. } => {
-                add_pending(3, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1; // target masked SetDeathsX trigger
-            }
-            ExpandedOp::VProcBitXorVar { .. } => {
-                add_pending(4, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1; // second pass with mask 0xAAAAAAAA
-                add_pending(1, &mut pending_actions, &mut count);
-            }
-            ExpandedOp::DynamicShl { .. } => {
-                add_pending(3, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                count += 2; // loopstart + loopcnt
-                add_pending(1, &mut pending_actions, &mut count);
-            }
-            ExpandedOp::DynamicShr { .. } => {
-                flush_pending(&mut pending_actions, &mut count);
-                // 1 skip_check + 1 skip_to_here + 1 init pow2 + 32 exp2_vv + (1 init div + 32*5 + 32) = 229 triggers
-                count += 2 + 1 + 32 + (1 + 32 * 5 + 32);
-            }
-            ExpandedOp::DynamicMul { .. } => {
-                flush_pending(&mut pending_actions, &mut count);
-                // 1 init + 32 * 2 + 31 * 2 + 1 endmul = 128 triggers
-                count += 1 + 32 * 2 + 31 * 2 + 1;
-            }
-            ExpandedOp::DynamicDivRem { .. } => {
-                flush_pending(&mut pending_actions, &mut count);
-                // 1 init + 32 * 5 + 32 = 193 triggers
-                count += 1 + 32 * 5 + 32;
-            }
-            ExpandedOp::PatchNextTriggerCond { .. } | ExpandedOp::PatchNextTriggerAct { .. } => {
-                add_pending(3, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-            }
-            ExpandedOp::CallSetup { rets, .. } | ExpandedOp::CallIndirectSetup { rets, .. } => {
-                let act_count = if rets.is_empty() { 1 } else { rets.len() + 1 };
-                add_pending(act_count, &mut pending_actions, &mut count);
-            }
-            ExpandedOp::WriteFuncReturnSlot {
-                src_var, const_val, ..
-            } => {
-                if const_val.is_some() {
-                    add_pending(1, &mut pending_actions, &mut count);
-                } else if src_var.is_some() {
-                    add_pending(3, &mut pending_actions, &mut count);
-                    flush_pending(&mut pending_actions, &mut count);
-                }
-            }
-            ExpandedOp::FuncPtrAssignTarget { .. } => {
-                add_pending(1, &mut pending_actions, &mut count);
-            }
-            ExpandedOp::MemReadSetup {
-                epd, initial_val, ..
-            } => {
-                let acts = if *initial_val != 0 { 3 } else { 2 };
-                match epd {
-                    HirExpr::Const(_) => {
-                        add_pending(acts + 1, &mut pending_actions, &mut count);
-                    }
-                    HirExpr::Var(_) => {
-                        add_pending(acts + 3, &mut pending_actions, &mut count);
-                        flush_pending(&mut pending_actions, &mut count);
-                    }
-                    _ => unreachable!(),
-                }
-            }
-        }
-    }
-
-    if matches!(blk.terminator, ExpandedTerminator::Branch { .. }) {
-        add_pending(1, &mut pending_actions, &mut count);
-        flush_pending(&mut pending_actions, &mut count);
-        count += 1; // branch_cond trigger
-    } else {
-        flush_pending(&mut pending_actions, &mut count);
-        if count == 0 {
-            count += 1;
-        }
-    }
-
-    count
-}
+use std::collections::HashMap;
 
 fn make_set_deaths_action(
     dest_epd: ValueExpr,
@@ -260,175 +99,19 @@ pub fn emit_lir(
         .main_loop
         .or_else(|| hir.functions.first().map(|f| f.id))
         .ok_or_else(|| EudkitError::Ir("HIR module has no functions".to_string()))?;
-    let expanded_blocks = expanded_cfg.blocks;
-    let fn_entry_block = expanded_cfg.fn_entry_block;
-    let fp_trampoline_block = expanded_cfg.fp_trampoline_block;
-    let vproc_var_set = collect_vproc_vars(&expanded_blocks);
+    let plan = EmissionPlan::build(hir, &expanded_cfg, main_fn_id);
+    let ExpandedCfg {
+        blocks: expanded_blocks,
+        fn_entry_block,
+        fp_trampoline_block,
+    } = expanded_cfg;
 
-    let has_ret_slots = hir
-        .functions
-        .iter()
-        .any(|f| f.return_count > 0 && fn_entry_block.contains_key(&f.id))
-        || hir.func_ptrs.iter().any(|fp| fp.signature.1 > 0);
-    let mut func_ret_slots: HashMap<crate::hir::FuncId, Vec<u32>> = HashMap::new();
-    let mut ptr_ret_slots: HashMap<crate::hir::FuncPtrId, Vec<u32>> = HashMap::new();
-    let mut fn_void_ret_trig: HashMap<crate::hir::FuncId, ObjectId> = HashMap::new();
-
-    // Count exact triggers per block so Trigger 0 gets @obj0 and all ObjectIds are known up-front
-    let mut trigger_count = 0u32;
-    let mut block_first_trigger: HashMap<BlockId, ObjectId> = HashMap::new();
-    for blk in &expanded_blocks {
-        block_first_trigger.insert(blk.id, ObjectId(trigger_count));
-        trigger_count += count_block_triggers(blk);
-    }
-
-    for func in &hir.functions {
-        if func.id == main_fn_id || !fn_entry_block.contains_key(&func.id) {
-            continue;
-        }
-        if func.return_count == 0 {
-            let void_id = ObjectId(trigger_count);
-            trigger_count += 1;
-            fn_void_ret_trig.insert(func.id, void_id);
-        }
-    }
-
-    let has_mem_read = expanded_blocks.iter().any(|b| {
-        b.ops
-            .iter()
-            .any(|op| matches!(op, ExpandedOp::MemReadSetup { .. }))
-    });
-    let (read_table, read_table_count) = if has_mem_read {
-        let rt = ReadTable::build(trigger_count);
-        let count = rt.triggers.len() as u32;
-        (Some(rt), count)
-    } else {
-        (None, 0)
-    };
-    trigger_count += read_table_count;
-
-    let mut next_obj_idx = trigger_count;
-    let vbuf_obj_id = if !vproc_var_set.is_empty() || has_ret_slots {
-        let id = ObjectId(next_obj_idx);
-        next_obj_idx += 1;
-        Some(id)
-    } else {
-        None
-    };
-
-    let mut buf_id_to_obj: HashMap<ByteBufId, ObjectId> = HashMap::new();
-    for buf in &hir.byte_bufs {
-        buf_id_to_obj.insert(buf.id, ObjectId(next_obj_idx));
-        next_obj_idx += 1;
-    }
-
-    // Partition variables into unified VProcBuffer slots vs 4-byte ByteBuf cells
-    let mut var_storage: HashMap<VarId, VarStorage> = HashMap::new();
-    let mut vproc_slots: Vec<LirVProcSlot> = Vec::new();
-    let mut cell_vars: Vec<(ObjectId, &crate::hir::HirVar)> = Vec::new();
-
-    for var in &hir.vars {
-        if vproc_var_set.contains(&var.id) {
-            let vbuf_obj = vbuf_obj_id.unwrap();
-            let slot_idx = vproc_slots.len() as u32;
-            vproc_slots.push(LirVProcSlot {
-                label: Some(var.name.clone()),
-                mask: ValueExpr::Const(-1),
-                dest: ValueExpr::Const(0),
-                value: ValueExpr::Const(var.init_val),
-                modifier: Modifier::SetTo,
-                next_ptr: ValueExpr::Const(0),
-            });
-            var_storage.insert(var.id, VarStorage::VProcSlot { vbuf_obj, slot_idx });
-        } else {
-            let obj_id = ObjectId(next_obj_idx);
-            next_obj_idx += 1;
-            var_storage.insert(var.id, VarStorage::ByteBuf(obj_id));
-            cell_vars.push((obj_id, var));
-        }
-    }
-
-    if let Some(vbuf) = vbuf_obj_id {
-        // 1. Allocate shared return slots for each FuncPtr and map its targets to the same slots
-        for fp in &hir.func_ptrs {
-            let ret_count = fp.signature.1;
-            if ret_count > 0 {
-                let mut slots = Vec::new();
-                for i in 0..ret_count {
-                    let slot_idx = vproc_slots.len() as u32;
-                    slots.push(slot_idx);
-                    vproc_slots.push(LirVProcSlot {
-                        label: Some(format!("fp_{}_ret_{}", fp.name, i)),
-                        mask: ValueExpr::Const(-1),
-                        dest: ValueExpr::Const(0),
-                        value: ValueExpr::Const(0),
-                        modifier: Modifier::SetTo,
-                        next_ptr: ValueExpr::Const(0),
-                    });
-                }
-                for i in 0..slots.len().saturating_sub(1) {
-                    let next_slot = slots[i + 1];
-                    vproc_slots[slots[i] as usize].next_ptr = ValueExpr::FieldAddress(
-                        FieldRef::vproc_slot(vbuf.0, next_slot, VProcSlotField::TriggerBase),
-                    );
-                }
-                vproc_slots[*slots.last().unwrap() as usize].next_ptr =
-                    ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32);
-                ptr_ret_slots.insert(fp.id, slots.clone());
-
-                let mut fp_targets = HashSet::new();
-                if let Some(target) = fp.initial_target {
-                    fp_targets.insert(target);
-                }
-                for blk in &expanded_blocks {
-                    for op in &blk.ops {
-                        if let ExpandedOp::FuncPtrAssignTarget { ptr, target } = op {
-                            if *ptr == fp.id {
-                                fp_targets.insert(*target);
-                            }
-                        }
-                    }
-                }
-                for tgt in fp_targets {
-                    func_ret_slots.insert(tgt, slots.clone());
-                }
-            }
-        }
-
-        // 2. Allocate return slots for remaining non-FuncPtr functions
-        for func in &hir.functions {
-            if func.id == main_fn_id
-                || !fn_entry_block.contains_key(&func.id)
-                || func_ret_slots.contains_key(&func.id)
-            {
-                continue;
-            }
-            if func.return_count > 0 {
-                let mut slots = Vec::new();
-                for i in 0..func.return_count {
-                    let slot_idx = vproc_slots.len() as u32;
-                    slots.push(slot_idx);
-                    vproc_slots.push(LirVProcSlot {
-                        label: Some(format!("{}_ret_{}", func.name, i)),
-                        mask: ValueExpr::Const(-1),
-                        dest: ValueExpr::Const(0),
-                        value: ValueExpr::Const(0),
-                        modifier: Modifier::SetTo,
-                        next_ptr: ValueExpr::Const(0),
-                    });
-                }
-                for i in 0..slots.len().saturating_sub(1) {
-                    let next_slot = slots[i + 1];
-                    vproc_slots[slots[i] as usize].next_ptr = ValueExpr::FieldAddress(
-                        FieldRef::vproc_slot(vbuf.0, next_slot, VProcSlotField::TriggerBase),
-                    );
-                }
-                vproc_slots[*slots.last().unwrap() as usize].next_ptr =
-                    ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32);
-                func_ret_slots.insert(func.id, slots);
-            }
-        }
-    }
+    let var_storage = plan.var_storage();
+    let buf_id_to_obj = plan.byte_buf_ids();
+    let vbuf_obj_id = plan.vproc_buffer().map(|buffer| buffer.id);
+    let read_table = plan.read_table();
+    let trigger_count = plan.trigger_count();
+    let next_obj_idx = plan.next_object_id();
 
     let lower_val = |v: HirValue| -> ValueExpr {
         match v {
@@ -1155,9 +838,11 @@ pub fn emit_lir(
     let mut cur_obj_id = 0u32;
 
     for (blk_idx, block) in expanded_blocks.iter().enumerate() {
-        debug_assert_eq!(ObjectId(cur_obj_id), block_first_trigger[&block.id]);
+        let block_plan = plan.block(blk_idx);
+        debug_assert_eq!(ObjectId(cur_obj_id), block_plan.first_trigger);
         let mut block_triggers: Vec<LirTrigger> = Vec::new();
         let mut pending_actions: Vec<LirAction> = Vec::new();
+        let mut patch_sites = 0u32;
 
         // Helper: what is the address of the trigger that will run immediately after
         // a VProc jump if we flush `pending_actions` right now?
@@ -1222,12 +907,12 @@ pub fn emit_lir(
         // if it is a VProc caller at the very end of the block (with Jump/Return terminator).
         let block_end_fallthrough = match &block.terminator {
             ExpandedTerminator::Jump(target_block) => ValueExpr::ObjectAddress {
-                object: block_first_trigger[target_block],
+                object: plan.first_trigger(*target_block),
                 byte_offset: 0,
             },
             ExpandedTerminator::Return => ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32),
             ExpandedTerminator::FunctionReturn(fid) => {
-                if let Some(slots) = func_ret_slots.get(fid) {
+                if let Some(slots) = plan.func_return_slots(*fid) {
                     if !slots.is_empty() {
                         let vbuf = vbuf_obj_id.unwrap();
                         ValueExpr::FieldAddress(FieldRef::vproc_slot(
@@ -1235,7 +920,7 @@ pub fn emit_lir(
                             slots[0],
                             VProcSlotField::TriggerBase,
                         ))
-                    } else if let Some(&trig) = fn_void_ret_trig.get(fid) {
+                    } else if let Some(trig) = plan.void_return_trigger(*fid) {
                         ValueExpr::ObjectAddress {
                             object: trig,
                             byte_offset: 0,
@@ -1243,7 +928,7 @@ pub fn emit_lir(
                     } else {
                         ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32)
                     }
-                } else if let Some(&trig) = fn_void_ret_trig.get(fid) {
+                } else if let Some(trig) = plan.void_return_trigger(*fid) {
                     ValueExpr::ObjectAddress {
                         object: trig,
                         byte_offset: 0,
@@ -1258,7 +943,7 @@ pub fn emit_lir(
                 ValueExpr::Const(0)
             }
             ExpandedTerminator::ReadTableJump { mask, shift } => {
-                let rt = read_table.as_ref().expect("read_table must be present");
+                let rt = read_table.expect("read_table must be present");
                 ValueExpr::ObjectAddress {
                     object: rt.entry(*mask, *shift),
                     byte_offset: 0,
@@ -1266,7 +951,7 @@ pub fn emit_lir(
             }
         };
         let block_end_obj_id = if blk_idx + 1 < expanded_blocks.len() {
-            block_first_trigger[&expanded_blocks[blk_idx + 1].id].0
+            plan.block(blk_idx + 1).first_trigger.0
         } else {
             trigger_count
         };
@@ -2022,6 +1707,7 @@ pub fn emit_lir(
                     field,
                     is_epd,
                 } => {
+                    patch_sites += 1;
                     // Find the target trigger ID: after flushing all pending PatchNextTrigger* ops,
                     // what trigger ID will the patched trigger have?
                     //Wait: each PatchNextTrigger* op flushes into 1 trigger!
@@ -2070,6 +1756,7 @@ pub fn emit_lir(
                     field,
                     is_epd,
                 } => {
+                    patch_sites += 1;
                     let src_st = var_storage[src];
                     ensure_capacity(
                         3,
@@ -2107,12 +1794,12 @@ pub fn emit_lir(
                     rets,
                     return_block,
                 } => {
-                    let ret_site = block_first_trigger[return_block];
+                    let ret_site = plan.first_trigger(*return_block);
                     let ret_site_addr = ValueExpr::ObjectAddress {
                         object: ret_site,
                         byte_offset: 0,
                     };
-                    if let Some(slots) = func_ret_slots.get(callee) {
+                    if let Some(slots) = plan.func_return_slots(*callee) {
                         if !slots.is_empty() {
                             let vbuf = vbuf_obj_id.unwrap();
                             let need = rets.len() + 1;
@@ -2152,7 +1839,7 @@ pub fn emit_lir(
                                 ret_site_addr,
                                 None,
                             ));
-                        } else if let Some(&void_trig) = fn_void_ret_trig.get(callee) {
+                        } else if let Some(void_trig) = plan.void_return_trigger(*callee) {
                             ensure_capacity(
                                 1,
                                 &mut pending_actions,
@@ -2171,7 +1858,7 @@ pub fn emit_lir(
                                 None,
                             ));
                         }
-                    } else if let Some(&void_trig) = fn_void_ret_trig.get(callee) {
+                    } else if let Some(void_trig) = plan.void_return_trigger(*callee) {
                         ensure_capacity(
                             1,
                             &mut pending_actions,
@@ -2196,12 +1883,12 @@ pub fn emit_lir(
                     rets,
                     return_block,
                 } => {
-                    let ret_site = block_first_trigger[return_block];
+                    let ret_site = plan.first_trigger(*return_block);
                     let ret_site_addr = ValueExpr::ObjectAddress {
                         object: ret_site,
                         byte_offset: 0,
                     };
-                    if let Some(slots) = ptr_ret_slots.get(ptr) {
+                    if let Some(slots) = plan.func_ptr_return_slots(*ptr) {
                         if !slots.is_empty() {
                             let vbuf = vbuf_obj_id.unwrap();
                             let need = rets.len() + 1;
@@ -2250,7 +1937,9 @@ pub fn emit_lir(
                     src_var,
                     const_val,
                 } => {
-                    let slots = &func_ret_slots[func];
+                    let slots = plan
+                        .func_return_slots(*func)
+                        .expect("function return slots must be planned");
                     let actual_slot = slots[*slot_idx as usize];
                     let vbuf = vbuf_obj_id.unwrap();
                     let val_field_epd = ValueExpr::FieldEpd(FieldRef::vproc_slot(
@@ -2311,11 +2000,11 @@ pub fn emit_lir(
                         &block.label,
                     );
                     let tramp_block = fp_trampoline_block[ptr];
-                    let tramp_trig = block_first_trigger[&tramp_block];
+                    let tramp_trig = plan.first_trigger(tramp_block);
                     let next_field_epd =
                         ValueExpr::FieldEpd(FieldRef::new(tramp_trig, TriggerSlotField::NextPtr));
                     let target_entry_block = fn_entry_block[target];
-                    let target_trig = block_first_trigger[&target_entry_block];
+                    let target_trig = plan.first_trigger(target_entry_block);
                     let target_addr = ValueExpr::ObjectAddress {
                         object: target_trig,
                         byte_offset: 0,
@@ -2335,13 +2024,13 @@ pub fn emit_lir(
                     initial_val,
                     return_block,
                 } => {
-                    let ret_site = block_first_trigger[return_block];
+                    let ret_site = plan.first_trigger(*return_block);
                     let ret_site_addr = ValueExpr::ObjectAddress {
                         object: ret_site,
                         byte_offset: 0,
                     };
                     let dst_epd = var_storage[dst].value_epd();
-                    let rt = read_table.as_ref().expect("read_table must be present");
+                    let rt = read_table.expect("read_table must be present");
                     let read_end_id = rt.read_end_id;
 
                     let acts_needed = if *initial_val != 0 { 3 } else { 2 };
@@ -2473,7 +2162,7 @@ pub fn emit_lir(
                         flags: 4,
                     });
                 }
-                let target_obj = block_first_trigger[target_block];
+                let target_obj = plan.first_trigger(*target_block);
                 let last_trig = block_triggers.last_mut().unwrap();
                 if matches!(last_trig.next_ptr, ValueExpr::ObjectAddress { object, .. } if object.0 == cur_obj_id)
                     || last_trig.next_ptr == ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32)
@@ -2530,7 +2219,7 @@ pub fn emit_lir(
                         flags: 4,
                     });
                 }
-                let ret_target_addr = if let Some(slots) = func_ret_slots.get(fid) {
+                let ret_target_addr = if let Some(slots) = plan.func_return_slots(*fid) {
                     if !slots.is_empty() {
                         let vbuf = vbuf_obj_id.unwrap();
                         ValueExpr::FieldAddress(FieldRef::vproc_slot(
@@ -2538,7 +2227,7 @@ pub fn emit_lir(
                             slots[0],
                             VProcSlotField::TriggerBase,
                         ))
-                    } else if let Some(&trig) = fn_void_ret_trig.get(fid) {
+                    } else if let Some(trig) = plan.void_return_trigger(*fid) {
                         ValueExpr::ObjectAddress {
                             object: trig,
                             byte_offset: 0,
@@ -2546,7 +2235,7 @@ pub fn emit_lir(
                     } else {
                         ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32)
                     }
-                } else if let Some(&trig) = fn_void_ret_trig.get(fid) {
+                } else if let Some(trig) = plan.void_return_trigger(*fid) {
                     ValueExpr::ObjectAddress {
                         object: trig,
                         byte_offset: 0,
@@ -2574,8 +2263,8 @@ pub fn emit_lir(
                     &block.label,
                 );
                 let branch_id = ObjectId(cur_obj_id + 1);
-                let then_obj = block_first_trigger[then_block];
-                let else_obj = block_first_trigger[else_block];
+                let then_obj = plan.first_trigger(*then_block);
+                let else_obj = plan.first_trigger(*else_block);
                 let branch_next_field = FieldRef::new(branch_id, TriggerSlotField::NextPtr);
 
                 pending_actions.push(LirAction {
@@ -2641,7 +2330,7 @@ pub fn emit_lir(
                     &mut cur_obj_id,
                     &block.label,
                 );
-                let rt = read_table.as_ref().expect("read_table must be present");
+                let rt = read_table.expect("read_table must be present");
                 let entry_obj = rt.entry(*mask, *shift);
                 let entry_addr = ValueExpr::ObjectAddress {
                     object: entry_obj,
@@ -2668,6 +2357,9 @@ pub fn emit_lir(
                 }
             }
         }
+
+        debug_assert_eq!(cur_obj_id, block_plan.end_trigger().0);
+        debug_assert_eq!(patch_sites, block_plan.patch_sites);
 
         // Resolve any placeholder `ObjectId(u32::MAX)` in `PatchNextTriggerCond` / `PatchNextTriggerAct`:
         // For any trigger i with a placeholder FieldRef, scan forward to the first subsequent trigger j > i
@@ -2727,7 +2419,10 @@ pub fn emit_lir(
         }
     }
 
-    for (fid, void_id) in &fn_void_ret_trig {
+    debug_assert_eq!(cur_obj_id, plan.block_trigger_end());
+    let planned = plan.into_planned_objects();
+
+    for (fid, void_id) in &planned.void_return_triggers {
         objects.push(LirObject::Trigger(LirTrigger {
             id: *void_id,
             label: Some(format!("void_ret_{}", fid.0)),
@@ -2739,43 +2434,24 @@ pub fn emit_lir(
         }));
     }
 
-    if let Some(rt) = read_table {
-        for t in rt.triggers {
-            objects.push(LirObject::Trigger(t));
-        }
+    for t in planned.read_table_triggers {
+        objects.push(LirObject::Trigger(t));
     }
 
-    debug_assert_eq!(
-        cur_obj_id + fn_void_ret_trig.len() as u32 + read_table_count,
-        trigger_count
-    );
-
-    if let Some(vbuf_id) = vbuf_obj_id {
-        objects.push(LirObject::VProcBuffer(LirVProcBuffer {
-            id: vbuf_id,
-            slots: vproc_slots,
-        }));
+    if let Some(vbuf) = planned.vproc_buffer {
+        objects.push(LirObject::VProcBuffer(vbuf));
     }
 
-    for buf in &hir.byte_bufs {
-        let obj_id = buf_id_to_obj[&buf.id];
-        objects.push(LirObject::ByteBuf(LirByteBuf {
-            id: obj_id,
-            label: Some(buf.name.clone()),
-            data: buf.data.clone(),
-        }));
+    for buf in planned.byte_bufs {
+        objects.push(LirObject::ByteBuf(buf));
     }
 
-    for (obj_id, var) in cell_vars {
-        objects.push(LirObject::ByteBuf(LirByteBuf {
-            id: obj_id,
-            label: Some(format!("var_{}", var.name)),
-            data: var.init_val.to_le_bytes().to_vec(),
-        }));
+    for buf in planned.cell_bufs {
+        objects.push(LirObject::ByteBuf(buf));
     }
 
-    let entry_trigger = block_first_trigger[&expanded_blocks[0].id];
-    Ok(LirModule::new(&hir.name, objects, entry_trigger))
+    debug_assert_eq!(objects.len() as u32, next_obj_idx);
+    Ok(LirModule::new(&hir.name, objects, planned.entry_trigger))
 }
 
 #[allow(clippy::too_many_arguments)]
