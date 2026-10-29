@@ -1,6 +1,9 @@
 # Host-Executed Frontends with Frozen HIR Plans
 
 **Status:** Accepted for implementation; validation is tracked in #56.
+**Addendum (2026-10-29):** SDK distribution, plan compatibility, LSP scope, and
+the TypeScript runtime gap are recorded below for review. The original decision
+is unchanged.
 
 ## Context
 
@@ -37,6 +40,23 @@ The existing `HIR` seam already separates language-specific lowering from the Ru
 6. **Make drift visible.** `eudkit synth --check` regenerates the plan in memory or in a temporary file and compares it with the committed artifact. CI can run this separately from `eudkit compile --plan`.
 7. **Keep strict parse-only as an optional future mode.** If compiling Python source without a Python interpreter becomes a hard requirement, a parse-only Frontend can be added behind a flag. It is not the default and does not replace host execution.
 8. **Do not change reactive semantics.** Reactive rules are serialized before their existing `HIR` lowering. ADR-0005 remains the timing authority, and #55 remains the single-source reactive lowering work.
+9. **Distribute the SDKs independently.** The Python SDK is its own `eudkit`
+   distribution, built with `maturin`; the TypeScript SDK is an npm tarball
+   built with `npm pack`. The monolithic `eudplib` wheel stops shipping the
+   `eudkit` package and declares it as a runtime dependency, because the
+   deprecation shim re-exports `eudkit`. Both SDKs follow the `eudkit` release
+   tag, not the `eudplib` version line.
+10. **Make synthesis explicit in both languages.** `eudkit synth` and
+    `python -m eudkit.synth` write a plan; `eudkit compile --plan` consumes it.
+    `eudkit build` remains the one-command authoring path and may wrap both
+    internally.
+11. **Scope the language server to domain knowledge.** `eudkit-lsp` keeps
+    Map Context symbols, canonical IDs, EUD offsets, and pre-compile
+    diagnostics. It does not compete with Pyright, basedpyright, tsserver, or
+    vtsls on generic hover, signature help, or type information.
+12. **Do not claim host-executed TypeScript yet.** Static `oxc` remains the
+    TypeScript default. A `--runtime=node` mode is an explicit, gated
+    experiment; it must not silently change native control-flow semantics.
 
 ### Before
 
@@ -90,6 +110,135 @@ Rules:
 - Plans are data. The Backend validates IDs, block references, function references, byte buffers, function pointers, and expression references before indexing into the module. A malformed plan must produce a diagnostic, not a panic.
 - JSON is the canonical review format. A compact or binary encoding can be added later without changing the semantic schema; size and compile-time measurements belong to the validation spike in #56.
 
+### Compatibility policy
+
+- `schema_version` is an integer. The current version is `1`.
+- Unknown `format` values and unknown `schema_version` values are rejected with
+  a diagnostic. A newer compiler must not guess at an older or newer layout.
+- Within one schema version, only additive optional fields are allowed.
+  Unknown fields are ignored on read; the compiler does not rewrite plans, so
+  no data is silently lost in a build.
+- A breaking change bumps `schema_version`. The compiler supports the current
+  version for compilation and the previous version for one minor release with a
+  deprecation warning. After that window, the previous version requires
+  re-synthesis.
+- `eudkit synth --check` always emits the current version. A plan that is
+  accepted only for diagnostics is never silently upgraded in place.
+- `map.fingerprint` is mandatory for CLI-produced plans. A missing fingerprint
+  is accepted only for programmatic plans and produces a compile-time warning.
+- The fingerprint is an identity check, not a security primitive. It is an
+  FNV-1a hash of `scenario.chk`; a collision is not a trust boundary.
+
+### Optional source metadata
+
+Source metadata is not required to compile a plan, but it is needed to anchor
+diagnostics back to the author's file. It is an additive optional field:
+
+```json
+{
+  "source": {
+    "entry": "main.py",
+    "language": "python",
+    "files": ["main.py", "balance.json"]
+  }
+}
+```
+
+Per-statement source spans are a later additive extension. Until they exist,
+plan-based diagnostics are anchored at the plan file or a trigger label, not
+at a source line. This limitation is why the LSP plan-based diagnostics in the
+companion audit are phased behind source metadata.
+
+## SDK distribution and tooling
+
+The plan boundary is only useful if authors can produce plans without adopting
+the compiler repository as their build system.
+
+### Python
+
+- Distribution: `eudkit`, import package `eudkit`, native module `eudkit._rust`.
+- Artifacts: abi3 wheels for Linux x86_64/aarch64, macOS arm64/x86_64, and
+  Windows x64; a `cp314t` wheel for free-threaded CPython 3.14; and an sdist.
+- Build: `maturin`, with `eudkit-core` and `eudplib-stormlib` compiled in.
+  Prebuilt wheels are the supported install path because a source build needs
+  Rust, CMake, Ninja, zlib, bzip2, and StormLib.
+- Types: `py.typed` plus complete `.pyi` stubs for the DSL, session, runner,
+  synth entry point, and PyO3 surface. Stubs are checked with `stubtest`, mypy,
+  and pyright.
+- Synthesis: `python -m eudkit.synth --entry main.py --plan map.eudhir` runs
+  the entry module with `runpy`, builds HIR in-process, and writes the plan.
+  `open()`, `json.load()`, `csv`, comprehensions, and third-party libraries
+  remain available.
+- Ownership: `eudplib` stops including `eudkit` in its wheel, moves the
+  `eudkit._rust` PyO3 build into this distribution, and declares `eudkit` as a
+  runtime dependency because its shim re-exports it. The two distributions
+  must never own the same package directory.
+
+### TypeScript
+
+- Distribution: `@eudkit/sdk`, ESM, `dist/` with `.d.ts` declarations.
+- Artifact: `npm pack` tarball, installable from a local path or a GitHub
+  Release asset. `main` and `types` point at `dist/`, never at `src/`.
+- Synthesis: static `oxc` remains the default. `synth()` is a Node wrapper
+  around `eudkit synth`; it is not a second compiler.
+- Host operations: the static Frontend cannot execute `fs.readFileSync()`.
+  A Node data pre-pass is a possible interim; full host execution needs the
+  recording-transform spike described below.
+- Release: `npm pack`, clean-install smoke test, `tsc --noEmit`, then
+  `npm publish --provenance`.
+
+### Release contract
+
+- One `v<version>` tag drives the Rust workspace, both SDKs, and the editor
+  packages. The existing version job is extended to check every manifest and
+  lockfile.
+- The release workflow builds wheels, the Python sdist, and the npm tarball
+  alongside the binaries. Every asset gets a SHA-256 checksum.
+- A clean-room job compiles a committed plan with the `eudkit` binary in a
+  container that has no Python and no Node.js.
+- Publishing uses the tested release assets, not a rebuild. PyPI uses trusted
+  publishing; npm uses provenance and a scoped token.
+- The standalone `eudkit` wheel is published before the `eudplib` shim that
+  depends on it, so `pip install eudplib` never resolves a missing dependency.
+
+## TypeScript host execution is not yet solved
+
+The static Frontend parses TypeScript and lowers EUD constructs. Executing the
+same module under Node is not equivalent:
+
+- `if (deaths > 0)` would become a build-time branch instead of a trigger
+  condition.
+- `when(cond, cb)` would run `cb` once instead of recording a reactive rule.
+- `for` loops would run in JavaScript instead of lowering to trigger loops or
+  unrolled actions.
+
+A recording transform could rewrite EUD regions into builder calls before
+execution. That is a compiler frontend in JavaScript, not a small runtime
+shim. Until a time-boxed spike proves that plans match the static Frontend on
+representative fixtures, `--runtime=node` must remain an explicit experiment.
+The static mode is fully supported, and a data-only Node pre-pass is the
+preferred interim for file and JSON loading.
+
+## Language server boundary
+
+`eudkit-lsp` is a domain layer, not a general language server:
+
+| Concern | Owner |
+| --- | --- |
+| Types, signatures, imports, refactors | Pyright/basedpyright, tsserver/vtsls |
+| General diagnostics | Host language server |
+| Map Context completion and validation | `eudkit-lsp` |
+| Canonical unit/weapon IDs and constants | `eudkit-lsp` |
+| EUD memory offset annotations | `eudkit-lsp` |
+| Trigger-limit and VProc diagnostics | `eudkit-lsp`, backed by core diagnostics |
+| Authoritative compile diagnostics | `eudkit` CLI; LSP mirrors a subset |
+
+Symbol hover stays because it resolves map-defined names to IDs. Call hover
+and signature help are removed because the host language server will have the
+SDK stubs and declarations shipped by this plan. `signatureHelpProvider` is
+not advertised. Removing these features is a deliberate, documented LSP
+surface change, not an accident of the plan branch.
+
 ## Alternatives considered
 
 | Alternative | Why it was not chosen as the default |
@@ -110,6 +259,20 @@ Rules:
 - **Cross-language consistency:** both Frontends converge at `HirModule`. Conformance tests can compare canonical plans instead of debug text.
 - **Maintenance:** no static Python evaluator and no Rust Python parser. The new surface is a schema, serialization, validation, and two CLI commands.
 - **Migration:** existing `eudkit build` behavior remains valid. Plans are additive; projects can adopt them when they need deterministic CI or host-runtime-free distribution.
+- **Packaging:** `eudkit` becomes its own Python distribution and `@eudkit/sdk`
+  becomes a real npm package. `eudplib` stops shipping `eudkit` and declares it
+  as a runtime dependency, because its shim imports `eudkit` and
+  `eudkit._rust` at import time. This is a documented install-path change, not
+  a runtime API change.
+- **Tooling:** the LSP loses call hover and signature help. Symbol hover and
+  Map Context diagnostics remain, and trigger/VProc diagnostics move into a
+  shared core diagnostics path so the CLI and LSP agree.
+- **TypeScript gap:** host-executed TypeScript is explicitly unresolved. Static
+  `oxc` ships; `--runtime=node` is gated by the spike and must not become a
+  silent default.
+- **Release:** wheels, sdist, and the npm tarball are first-class release
+  assets with checksums and clean-install tests. A plan can be compiled by a
+  single binary with no host runtime.
 
 ## Validation
 
@@ -122,6 +285,10 @@ Issue #56 validates this decision with a representative fixture:
 5. `eudkit synth --check` detects drift.
 6. Plan size and compile time are measured.
 7. A parse-only prototype of the same fixture is compared on effort and compatibility.
+8. A wheel install and an sdist build both produce a working `eudkit` package.
+9. An `npm pack` tarball installs, type-checks, and runs `synth()`.
+10. The LSP protocol tests assert the domain-only surface: symbol hover and
+    diagnostics are present, signature help is absent.
 
 If validation fails, this ADR is amended or superseded before the plan format is declared stable.
 
@@ -130,5 +297,9 @@ If validation fails, this ADR is amended or superseded before the plan format is
 - ADR-0001: Two-tier IR in Rust.
 - ADR-0003: TypeScript Frontend and migration CLI.
 - ADR-0005: Trigger Loop timing model.
+- #54: Hover and signature help.
 - #55: Lower reactive rules once across Python and TypeScript Frontends.
 - #56: Frontend execution model decision and spike.
+- `docs/architecture/cdk-synthesis-tooling-plan.md`: SDK, CLI, and release plan.
+- `docs/architecture/lsp-audit.md` (on `feat/lsp-mvp`): LSP retain/prune audit
+  and domain roadmap.
