@@ -859,6 +859,7 @@ pub fn emit_lir(
                 out.push(LirTrigger {
                     id,
                     label: Some(format!("{blk_label}_coalesced_{}", id.0)),
+                    role: TriggerRole::Normal,
                     prev_ptr: ValueExpr::Const(0),
                     next_ptr: ValueExpr::ObjectAddress {
                         object: ObjectId(*cur_id),
@@ -894,6 +895,7 @@ pub fn emit_lir(
             out.push(LirTrigger {
                 id,
                 label: Some(label),
+                role: TriggerRole::Normal,
                 prev_ptr: ValueExpr::Const(0),
                 next_ptr,
                 conditions,
@@ -1749,6 +1751,10 @@ pub fn emit_lir(
                         &mut block_triggers,
                         &mut cur_obj_id,
                     );
+                    block_triggers
+                        .last_mut()
+                        .expect("patch trigger was just emitted")
+                        .role = TriggerRole::PatchCondition;
                 }
                 ExpandedOp::PatchNextTriggerAct {
                     src,
@@ -1788,6 +1794,10 @@ pub fn emit_lir(
                         &mut block_triggers,
                         &mut cur_obj_id,
                     );
+                    block_triggers
+                        .last_mut()
+                        .expect("patch trigger was just emitted")
+                        .role = TriggerRole::PatchAction;
                 }
                 ExpandedOp::CallSetup {
                     callee,
@@ -2155,6 +2165,7 @@ pub fn emit_lir(
                     block_triggers.push(LirTrigger {
                         id,
                         label: Some(format!("{}_jump", block.label)),
+                        role: TriggerRole::Normal,
                         prev_ptr: ValueExpr::Const(0),
                         next_ptr: ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32),
                         conditions: Vec::new(),
@@ -2186,6 +2197,7 @@ pub fn emit_lir(
                     block_triggers.push(LirTrigger {
                         id,
                         label: Some(format!("{}_ret", block.label)),
+                        role: TriggerRole::Normal,
                         prev_ptr: ValueExpr::Const(0),
                         next_ptr: ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32),
                         conditions: Vec::new(),
@@ -2212,6 +2224,7 @@ pub fn emit_lir(
                     block_triggers.push(LirTrigger {
                         id,
                         label: Some(format!("{}_fret", block.label)),
+                        role: TriggerRole::Normal,
                         prev_ptr: ValueExpr::Const(0),
                         next_ptr: ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32),
                         conditions: Vec::new(),
@@ -2296,6 +2309,7 @@ pub fn emit_lir(
                 let branch_trig = LirTrigger {
                     id: branch_id,
                     label: Some(format!("{}_branch_cond", block.label)),
+                    role: TriggerRole::Normal,
                     prev_ptr: ValueExpr::Const(0),
                     next_ptr: ValueExpr::ObjectAddress {
                         object: else_obj,
@@ -2342,6 +2356,7 @@ pub fn emit_lir(
                     block_triggers.push(LirTrigger {
                         id,
                         label: Some(format!("{}_readtable_jump", block.label)),
+                        role: TriggerRole::Normal,
                         prev_ptr: ValueExpr::Const(0),
                         next_ptr: entry_addr.clone(),
                         conditions: Vec::new(),
@@ -2361,58 +2376,7 @@ pub fn emit_lir(
         debug_assert_eq!(cur_obj_id, block_plan.end_trigger().0);
         debug_assert_eq!(patch_sites, block_plan.patch_sites);
 
-        // Resolve any placeholder `ObjectId(u32::MAX)` in `PatchNextTriggerCond` / `PatchNextTriggerAct`:
-        // For any trigger i with a placeholder FieldRef, scan forward to the first subsequent trigger j > i
-        // that is NOT a patch trigger (for Cond, a trigger with non-empty conditions; for Act, the next non-patch trigger).
-        for i in 0..block_triggers.len() {
-            let has_placeholder = block_triggers[i].actions.iter().any(|a| {
-                matches!(
-                    a.player2,
-                    ValueExpr::FieldEpd(FieldRef {
-                        object: ObjectId(u32::MAX),
-                        ..
-                    })
-                )
-            });
-            if !has_placeholder {
-                continue;
-            }
-            let is_cond_patch = block_triggers[i].actions.iter().any(|a| {
-                matches!(
-                    a.player2,
-                    ValueExpr::FieldEpd(FieldRef {
-                        object: ObjectId(u32::MAX),
-                        field: TriggerSlotField::Condition(_, _),
-                    })
-                )
-            });
-            let target_id = block_triggers[i + 1..]
-                .iter()
-                .find(|t| {
-                    let is_patch = t
-                        .label
-                        .as_deref()
-                        .is_some_and(|l| l.contains("_patch_cond_") || l.contains("_patch_act_"));
-                    if is_patch {
-                        return false;
-                    }
-                    if is_cond_patch {
-                        !t.conditions.is_empty()
-                    } else {
-                        true
-                    }
-                })
-                .map(|t| t.id)
-                .expect("patch trigger must be followed by target trigger");
-
-            for act in &mut block_triggers[i].actions {
-                if let ValueExpr::FieldEpd(fr) = &mut act.player2 {
-                    if fr.object == ObjectId(u32::MAX) {
-                        fr.object = target_id;
-                    }
-                }
-            }
-        }
+        resolve_patch_targets(&mut block_triggers);
 
         for t in block_triggers {
             objects.push(LirObject::Trigger(t));
@@ -2426,6 +2390,7 @@ pub fn emit_lir(
         objects.push(LirObject::Trigger(LirTrigger {
             id: *void_id,
             label: Some(format!("void_ret_{}", fid.0)),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: ValueExpr::Const(END_OF_TRIGGERS_SENTINEL as i32),
             conditions: Vec::new(),
@@ -2452,6 +2417,56 @@ pub fn emit_lir(
 
     debug_assert_eq!(objects.len() as u32, next_obj_idx);
     Ok(LirModule::new(&hir.name, objects, planned.entry_trigger))
+}
+
+/// Resolves placeholder `ObjectId(u32::MAX)` targets in patch triggers.
+///
+/// The target is the next trigger in the same block that is not itself a patch
+/// trigger. Condition patches require a trigger with at least one condition;
+/// action patches accept the next trigger of any shape. Patch detection uses
+/// the typed [`TriggerRole`], so `LirTrigger::label` stays debug-only text and
+/// may be absent.
+fn resolve_patch_targets(block_triggers: &mut [LirTrigger]) {
+    for i in 0..block_triggers.len() {
+        if !block_triggers[i].role.is_patch() {
+            continue;
+        }
+        let has_placeholder = block_triggers[i].actions.iter().any(|a| {
+            matches!(
+                a.player2,
+                ValueExpr::FieldEpd(FieldRef {
+                    object: ObjectId(u32::MAX),
+                    ..
+                })
+            )
+        });
+        if !has_placeholder {
+            continue;
+        }
+        let is_cond_patch = block_triggers[i].role == TriggerRole::PatchCondition;
+        let target_id = block_triggers[i + 1..]
+            .iter()
+            .find(|t| {
+                if t.role.is_patch() {
+                    return false;
+                }
+                if is_cond_patch {
+                    !t.conditions.is_empty()
+                } else {
+                    true
+                }
+            })
+            .map(|t| t.id)
+            .expect("patch trigger must be followed by target trigger");
+
+        for act in &mut block_triggers[i].actions {
+            if let ValueExpr::FieldEpd(fr) = &mut act.player2 {
+                if fr.object == ObjectId(u32::MAX) {
+                    fr.object = target_id;
+                }
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2483,6 +2498,7 @@ fn emit_dynamic_div_chain(
     block_triggers.push(LirTrigger {
         id: init_id,
         label: Some(format!("{blk_label}_div_init_{}", init_id.0)),
+        role: TriggerRole::Normal,
         prev_ptr: ValueExpr::Const(0),
         next_ptr: vproc_trigger_addr(divisor_st),
         conditions: Vec::new(),
@@ -2526,6 +2542,7 @@ fn emit_dynamic_div_chain(
         block_triggers.push(LirTrigger {
             id: t0_id,
             label: Some(format!("{blk_label}_div_fill0_{i}")),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: vproc_trigger_addr(x_st),
             conditions: Vec::new(),
@@ -2546,6 +2563,7 @@ fn emit_dynamic_div_chain(
         block_triggers.push(LirTrigger {
             id: t1_id,
             label: Some(format!("{blk_label}_div_fill1_{i}")),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: vproc_trigger_addr(x_st),
             conditions: Vec::new(),
@@ -2566,6 +2584,7 @@ fn emit_dynamic_div_chain(
         block_triggers.push(LirTrigger {
             id: p1_id,
             label: Some(format!("{blk_label}_div_p1_{i}")),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: ValueExpr::ObjectAddress {
                 object: p2_id,
@@ -2592,6 +2611,7 @@ fn emit_dynamic_div_chain(
         block_triggers.push(LirTrigger {
             id: p3_id,
             label: Some(format!("{blk_label}_div_p3_{i}")),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: ValueExpr::ObjectAddress {
                 object: chain_i_id,
@@ -2613,6 +2633,7 @@ fn emit_dynamic_div_chain(
         block_triggers.push(LirTrigger {
             id: p2_id,
             label: Some(format!("{blk_label}_div_p2_{i}")),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: vproc_trigger_addr(x_st),
             conditions: Vec::new(),
@@ -2660,6 +2681,7 @@ fn emit_dynamic_div_chain(
         block_triggers.push(LirTrigger {
             id: cid,
             label: Some(format!("{blk_label}_div_chain_{i}")),
+            role: TriggerRole::Normal,
             prev_ptr: ValueExpr::Const(0),
             next_ptr: next_addr,
             conditions: vec![lower_cond(&StockCondition::VarCmp {
@@ -2671,5 +2693,95 @@ fn emit_dynamic_div_chain(
             actions: acts,
             flags: 4,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn placeholder_patch(id: u32, role: TriggerRole, field: TriggerSlotField) -> LirTrigger {
+        LirTrigger {
+            id: ObjectId(id),
+            label: None,
+            role,
+            prev_ptr: ValueExpr::Const(0),
+            next_ptr: ValueExpr::Const(0),
+            conditions: Vec::new(),
+            actions: vec![LirAction {
+                locid1: ValueExpr::Const(0),
+                strid: ValueExpr::Const(0),
+                wavid: ValueExpr::Const(0),
+                time: ValueExpr::Const(0),
+                player1: ValueExpr::Const(0),
+                player2: ValueExpr::FieldEpd(FieldRef::new(ObjectId(u32::MAX), field)),
+                unitid: 0,
+                acttype: 45,
+                amount: Modifier::SetTo.encode(),
+                flags: 20,
+                eudx: 0,
+            }],
+            flags: 4,
+        }
+    }
+
+    fn trigger(id: u32, label: Option<&str>, conditions: Vec<LirCondition>) -> LirTrigger {
+        LirTrigger {
+            id: ObjectId(id),
+            label: label.map(str::to_string),
+            role: TriggerRole::Normal,
+            prev_ptr: ValueExpr::Const(0),
+            next_ptr: ValueExpr::Const(0),
+            conditions,
+            actions: Vec::new(),
+            flags: 4,
+        }
+    }
+
+    fn condition() -> LirCondition {
+        LirCondition {
+            locid: ValueExpr::Const(0),
+            player: ValueExpr::Const(0),
+            amount: ValueExpr::Const(1),
+            unitid: 0,
+            comparison: Comparison::AtLeast.encode(),
+            condtype: 15,
+            restype: 0,
+            flags: 0,
+            eudx: EUDX_SIGNATURE,
+        }
+    }
+
+    #[test]
+    fn patch_targets_resolve_from_roles_without_labels() {
+        let mut triggers = vec![
+            placeholder_patch(
+                0,
+                TriggerRole::PatchCondition,
+                TriggerSlotField::Condition(1, CondField::Amount),
+            ),
+            placeholder_patch(
+                1,
+                TriggerRole::PatchAction,
+                TriggerSlotField::Action(2, ActField::Player2),
+            ),
+            // A normal trigger whose debug label resembles a patch trigger must
+            // not be skipped; label text is not codegen input.
+            trigger(2, Some("user_patch_cond_not_a_patch_site"), Vec::new()),
+            trigger(3, None, vec![condition()]),
+        ];
+
+        resolve_patch_targets(&mut triggers);
+
+        let cond_target = match triggers[0].actions[0].player2 {
+            ValueExpr::FieldEpd(fr) => fr.object,
+            _ => panic!("condition patch target must stay a FieldEpd"),
+        };
+        let act_target = match triggers[1].actions[0].player2 {
+            ValueExpr::FieldEpd(fr) => fr.object,
+            _ => panic!("action patch target must stay a FieldEpd"),
+        };
+        assert_eq!(cond_target, ObjectId(3));
+        assert_eq!(act_target, ObjectId(2));
     }
 }

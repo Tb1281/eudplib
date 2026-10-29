@@ -258,10 +258,33 @@ pub struct LirAction {
     pub eudx: u16,
 }
 
+/// Typed codegen role of an LIR trigger.
+///
+/// `LirTrigger::label` is debug-only text for `dump_lir`; the Backend must
+/// resolve patch targets and read-table entries from this role (and typed
+/// `FieldRef`s), never from label text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TriggerRole {
+    #[default]
+    Normal,
+    PatchCondition,
+    PatchAction,
+    ReadTable,
+    ReadTableEnd,
+}
+
+impl TriggerRole {
+    pub const fn is_patch(self) -> bool {
+        matches!(self, Self::PatchCondition | Self::PatchAction)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LirTrigger {
     pub id: ObjectId,
     pub label: Option<String>,
+    /// Typed codegen role. Labels are diagnostic only.
+    pub role: TriggerRole,
     pub prev_ptr: ValueExpr,
     pub next_ptr: ValueExpr,
     pub conditions: Vec<LirCondition>,
