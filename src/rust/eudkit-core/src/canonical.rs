@@ -1,9 +1,10 @@
 //! Canonical Symbols: StarCraft-defined names available without a Map Context.
 //!
 //! This module owns the single table of stock unit names, their aliases, and
-//! their IDs, plus the canonical location and switch fallbacks. [`MapContext`]
-//! composes these symbols with [`MapData`](crate::map_context::MapData), so a
-//! caller that only needs canonical names depends on this module alone.
+//! their IDs, plus the canonical location and switch fallbacks. Map Symbol
+//! resolution composes these symbols with [`MapData`](crate::map_context::MapData)
+//! through [`crate::symbols`], so a caller that only needs canonical names
+//! depends on this module alone.
 
 use std::collections::HashMap;
 

@@ -1,7 +1,7 @@
 pub use crate::cp_string::*;
 use crate::error::{EudkitError, Result};
 use crate::hir::HirModule;
-use crate::map_context::MapContext;
+use crate::map_context::MapData;
 
 pub mod cfg_expansion;
 pub mod cp_scheduler;
@@ -20,7 +20,7 @@ pub use storage_selection::{collect_vproc_vars, VarStorage};
 pub use trigger_emitter::emit_lir;
 pub use types::*;
 
-pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<LirModule> {
+pub fn lower_hir_to_lir(hir_in: &HirModule, map_data: &mut MapData) -> Result<LirModule> {
     let mut hir = hir_in.clone();
     hir.lower_reactive_rules()?;
     crate::inlining::inline_functions(&mut hir)?;
@@ -37,5 +37,5 @@ pub fn lower_hir_to_lir(hir_in: &HirModule, map_ctx: &mut MapContext) -> Result<
 
     let mut scratch = types::ScratchAllocator::new();
     let expanded_cfg = cfg_expansion::lower_and_expand_cfg(&mut hir, main_fn_id, &mut scratch)?;
-    trigger_emitter::emit_lir(&hir, expanded_cfg, map_ctx)
+    trigger_emitter::emit_lir(&hir, expanded_cfg, map_data)
 }

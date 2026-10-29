@@ -7,7 +7,7 @@ use crate::hir::{
 use crate::lir::emission_plan::EmissionPlan;
 use crate::lir::storage_selection::VarStorage;
 use crate::lir::types::*;
-use crate::map_context::MapContext;
+use crate::map_context::MapData;
 use std::collections::HashMap;
 
 fn make_set_deaths_action(
@@ -93,7 +93,7 @@ fn vproc_trigger_addr(src_storage: VarStorage) -> ValueExpr {
 pub fn emit_lir(
     hir: &HirModule,
     expanded_cfg: ExpandedCfg,
-    map_ctx: &mut MapContext,
+    map_data: &mut MapData,
 ) -> Result<LirModule> {
     let main_fn_id = hir
         .main_loop
@@ -360,7 +360,7 @@ pub fn emit_lir(
         }
     };
 
-    let lower_single_act = |a: &StockAction, map_ctx: &mut MapContext| -> LirAction {
+    let lower_single_act = |a: &StockAction, map_data: &mut MapData| -> LirAction {
         match a {
             StockAction::SetDeaths {
                 player,
@@ -482,7 +482,7 @@ pub fn emit_lir(
                 text,
                 always_display,
             } => {
-                let str_id = map_ctx.get_or_insert_string(text.as_bytes());
+                let str_id = map_data.get_or_insert_string(text.as_bytes());
                 LirAction {
                     locid1: ValueExpr::Const(0),
                     strid: ValueExpr::Const(str_id as i32),
@@ -700,7 +700,7 @@ pub fn emit_lir(
                 eudx: 0,
             },
             StockAction::PlayWAV { path } => {
-                let wav_id = map_ctx.get_or_insert_string(path.as_bytes());
+                let wav_id = map_data.get_or_insert_string(path.as_bytes());
                 LirAction {
                     locid1: ValueExpr::Const(0),
                     strid: ValueExpr::Const(0),
@@ -716,7 +716,7 @@ pub fn emit_lir(
                 }
             }
             StockAction::Comment { text } => {
-                let str_id = map_ctx.get_or_insert_string(text.as_bytes());
+                let str_id = map_data.get_or_insert_string(text.as_bytes());
                 LirAction {
                     locid1: ValueExpr::Const(0),
                     strid: ValueExpr::Const(str_id as i32),
@@ -782,7 +782,7 @@ pub fn emit_lir(
     };
 
     let var_inits: HashMap<VarId, i32> = hir.vars.iter().map(|v| (v.id, v.init_val)).collect();
-    let lower_act = |a: &StockAction, map_ctx: &mut MapContext| -> Vec<LirAction> {
+    let lower_act = |a: &StockAction, map_data: &mut MapData| -> Vec<LirAction> {
         match a {
             StockAction::PrintAt { line, parts } => {
                 let dest_epd = ValueExpr::Const(epd(0x640B60 + 218 * (*line as u32)));
@@ -798,7 +798,7 @@ pub fn emit_lir(
                         (ValueExpr::Const(epd(0x640B60 + 218 * (*line as u32))), None)
                     }
                     crate::hir::PrintTarget::MapString(str_id) => {
-                        let off = map_ctx.string_table().string_offset(*str_id).unwrap_or(0);
+                        let off = map_data.string_table().string_offset(*str_id).unwrap_or(0);
                         (
                             ValueExpr::Const(epd(crate::hir::STRX_BASE_ADDR + off)),
                             None,
@@ -806,8 +806,8 @@ pub fn emit_lir(
                     }
                     crate::hir::PrintTarget::DisplayText => {
                         let buf_text = "\r\n                                                                                                                        \0";
-                        let str_id = map_ctx.get_or_insert_string(buf_text.as_bytes());
-                        let off = map_ctx.string_table().string_offset(str_id).unwrap_or(0);
+                        let str_id = map_data.get_or_insert_string(buf_text.as_bytes());
+                        let off = map_data.string_table().string_offset(str_id).unwrap_or(0);
                         (
                             ValueExpr::Const(epd(crate::hir::STRX_BASE_ADDR + off)),
                             Some(str_id),
@@ -830,7 +830,7 @@ pub fn emit_lir(
                     &var_inits,
                 )
             }
-            other => vec![lower_single_act(other, map_ctx)],
+            other => vec![lower_single_act(other, map_data)],
         }
     };
 
@@ -972,7 +972,7 @@ pub fn emit_lir(
         for op in &block.ops {
             match op {
                 ExpandedOp::LeafAction(act) => {
-                    let acts = lower_act(act, map_ctx);
+                    let acts = lower_act(act, map_data);
                     for la in acts {
                         ensure_capacity(
                             1,
@@ -1006,7 +1006,7 @@ pub fn emit_lir(
                     );
                     let mut lowered_actions = Vec::new();
                     for a in actions {
-                        lowered_actions.extend(lower_act(a, map_ctx));
+                        lowered_actions.extend(lower_act(a, map_data));
                     }
                     if conditions.len() > 16 {
                         return Err(EudkitError::Ir(
@@ -1312,7 +1312,7 @@ pub fn emit_lir(
                                     value: 1,
                                     mask: None,
                                 },
-                                map_ctx,
+                                map_data,
                             ),
                             make_set_deaths_action(
                                 loopstart_nptr_epd,

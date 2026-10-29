@@ -1,10 +1,12 @@
 use crate::error::{EudkitTsError, Result};
+use eudkit_core::canonical::CanonicalSymbols;
 use eudkit_core::hir::{
     epd, parse_format_template, CmpOp, Comparison, HirBinOp, HirBuilder, HirExpr, HirModule,
     HirStmt, HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget, ReactiveRule, ResourceType,
     StockAction, StockCondition, SwitchAction, VarId,
 };
-use eudkit_core::map_context::MapContext;
+use eudkit_core::map_context::MapData;
+use eudkit_core::symbols;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::*;
 use oxc_parser::Parser;
@@ -57,7 +59,8 @@ fn address_to_epd(ptr: HirExpr) -> HirExpr {
 
 pub struct TsCompiler<'a> {
     builder: HirBuilder,
-    map_ctx: &'a MapContext,
+    map_data: &'a MapData,
+    canonical_symbols: &'a CanonicalSymbols,
     constants: HashMap<String, i32>,
     array_constants: HashMap<String, Vec<i32>>,
     local_constants: HashMap<String, i32>,
@@ -71,7 +74,11 @@ pub struct TsCompiler<'a> {
 }
 
 impl<'a> TsCompiler<'a> {
-    pub fn new(module_name: &str, map_ctx: &'a MapContext) -> Self {
+    pub fn new(
+        module_name: &str,
+        map_data: &'a MapData,
+        canonical_symbols: &'a CanonicalSymbols,
+    ) -> Self {
         let mut constants = HashMap::new();
         // Register SDK standard constants
         constants.insert("Player1".to_string(), 0);
@@ -136,7 +143,8 @@ impl<'a> TsCompiler<'a> {
 
         Self {
             builder: HirBuilder::new(module_name),
-            map_ctx,
+            map_data,
+            canonical_symbols,
             constants,
             array_constants: HashMap::new(),
             local_constants: HashMap::new(),
@@ -2566,13 +2574,13 @@ impl<'a> TsCompiler<'a> {
             Expression::StringLiteral(slit) => {
                 let s = slit.value.as_str().unwrap_or("");
                 // If unit or location or switch name used in place of int
-                if let Some(uid) = self.map_ctx.unit_id(s) {
+                if let Some(uid) = symbols::unit_id(self.map_data, self.canonical_symbols, s) {
                     return Ok(uid as i32);
                 }
-                if let Some(lid) = self.map_ctx.location_id(s) {
+                if let Some(lid) = symbols::location_id(self.map_data, self.canonical_symbols, s) {
                     return Ok(lid as i32);
                 }
-                if let Some(sid) = self.map_ctx.switch_id(s) {
+                if let Some(sid) = symbols::switch_id(self.map_data, self.canonical_symbols, s) {
                     return Ok(sid as i32);
                 }
                 Err(EudkitTsError::Compile(format!(
@@ -2710,7 +2718,7 @@ impl<'a> TsCompiler<'a> {
     fn resolve_unit_id(&self, expr: &Expression) -> Result<u16> {
         if let Expression::StringLiteral(slit) = expr {
             let s = slit.value.as_str().unwrap_or("");
-            if let Some(id) = self.map_ctx.unit_id(s) {
+            if let Some(id) = symbols::unit_id(self.map_data, self.canonical_symbols, s) {
                 return Ok(id);
             }
             return Err(EudkitTsError::Compile(format!("unknown unit name {:?}", s)));
@@ -2722,7 +2730,7 @@ impl<'a> TsCompiler<'a> {
     fn resolve_location_id(&self, expr: &Expression) -> Result<u32> {
         if let Expression::StringLiteral(slit) = expr {
             let s = slit.value.as_str().unwrap_or("");
-            if let Some(id) = self.map_ctx.location_id(s) {
+            if let Some(id) = symbols::location_id(self.map_data, self.canonical_symbols, s) {
                 return Ok(id);
             }
             return Err(EudkitTsError::Compile(format!(
@@ -2738,7 +2746,8 @@ impl<'a> TsCompiler<'a> {
 pub fn compile_ts_to_hir(
     source: &str,
     module_name: &str,
-    map_context: &MapContext,
+    map_data: &MapData,
+    canonical_symbols: &CanonicalSymbols,
 ) -> Result<HirModule> {
     let allocator = Allocator::default();
     let source_type = SourceType::ts();
@@ -2751,6 +2760,6 @@ pub fn compile_ts_to_hir(
         )));
     }
 
-    let compiler = TsCompiler::new(module_name, map_context);
+    let compiler = TsCompiler::new(module_name, map_data, canonical_symbols);
     compiler.compile(&ret.program)
 }

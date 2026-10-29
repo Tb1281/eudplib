@@ -268,8 +268,13 @@ fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
         CompilationSession::from_map(&resolved_map, comp_cfg).map_err(|e| e.to_string())?;
 
     if let Some(entry) = resolved_entry {
-        let hir = eudkit_ts::compile_ts_file(&entry, &mod_name, session.map_context())
-            .map_err(|e| e.to_string())?;
+        let hir = eudkit_ts::compile_ts_file(
+            &entry,
+            &mod_name,
+            session.map_data(),
+            session.canonical_symbols(),
+        )
+        .map_err(|e| e.to_string())?;
         session.set_hir_module(hir);
     } else {
         session.set_hir_module(default_tracer_hir(&mod_name));
@@ -400,8 +405,13 @@ fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationRep
     }
 
     if let Some(entry_path) = &proj_cfg.entry {
-        let hir = eudkit_ts::compile_ts_file(entry_path, &proj_cfg.name, session.map_context())
-            .map_err(|e| e.to_string())?;
+        let hir = eudkit_ts::compile_ts_file(
+            entry_path,
+            &proj_cfg.name,
+            session.map_data(),
+            session.canonical_symbols(),
+        )
+        .map_err(|e| e.to_string())?;
         session.set_hir_module(hir);
     } else {
         session.set_hir_module(default_tracer_hir(&proj_cfg.name));

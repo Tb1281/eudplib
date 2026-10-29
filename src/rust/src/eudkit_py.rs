@@ -4,6 +4,7 @@ use eudkit_core::hir::{
     HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget, ResourceType, StockAction,
     StockCondition, SwitchAction, SwitchState, VarId,
 };
+use eudkit_core::symbols;
 use eudkit_core::{CompilationConfig, CompilationSession, EudkitError, HirBuilder};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -812,29 +813,35 @@ impl PyCompilationSession {
     }
 
     fn location_id(&self, name: &str) -> PyResult<u32> {
-        self.session
-            .map_context()
-            .location_id(name)
-            .ok_or_else(|| PyKeyError::new_err(format!("unknown location: {name:?}")))
+        symbols::location_id(
+            self.session.map_data(),
+            self.session.canonical_symbols(),
+            name,
+        )
+        .ok_or_else(|| PyKeyError::new_err(format!("unknown location: {name:?}")))
     }
 
     fn unit_id(&self, name: &str) -> PyResult<u16> {
-        self.session
-            .map_context()
-            .unit_id(name)
-            .ok_or_else(|| PyKeyError::new_err(format!("unknown unit: {name:?}")))
+        symbols::unit_id(
+            self.session.map_data(),
+            self.session.canonical_symbols(),
+            name,
+        )
+        .ok_or_else(|| PyKeyError::new_err(format!("unknown unit: {name:?}")))
     }
 
     fn switch_id(&self, name: &str) -> PyResult<u8> {
-        self.session
-            .map_context()
-            .switch_id(name)
-            .ok_or_else(|| PyKeyError::new_err(format!("unknown switch: {name:?}")))
+        symbols::switch_id(
+            self.session.map_data(),
+            self.session.canonical_symbols(),
+            name,
+        )
+        .ok_or_else(|| PyKeyError::new_err(format!("unknown switch: {name:?}")))
     }
 
     fn get_or_insert_string(&mut self, text: &str) -> u32 {
         self.session
-            .map_context_mut()
+            .map_data_mut()
             .get_or_insert_string(text.as_bytes())
     }
 
@@ -849,7 +856,7 @@ impl PyCompilationSession {
     }
 
     fn classic_trigger_count(&self) -> usize {
-        self.session.map_context().triggers().len()
+        self.session.map_data().triggers().len()
     }
 
     fn strx_byte_len(&self) -> usize {
@@ -861,11 +868,11 @@ impl PyCompilationSession {
     }
 
     fn locations_count(&self) -> usize {
-        self.session.map_context().locations().len()
+        self.session.map_data().locations().len()
     }
 
     fn placed_units_count(&self) -> usize {
-        self.session.map_context().placed_units().len()
+        self.session.map_data().placed_units().len()
     }
 
     fn add_var(&mut self, name: &str, init_val: i32) -> u32 {

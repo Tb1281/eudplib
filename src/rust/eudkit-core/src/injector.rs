@@ -4,7 +4,7 @@ use crate::chk_layout::classic;
 use crate::error::Result;
 use crate::hir::{epd, CURRENT_PLAYER_ADDR, PTS_BASE_ADDR, STRX_BASE_ADDR};
 use crate::lir::EUDX_SIGNATURE;
-use crate::map_context::{MapContext, MapTrigger};
+use crate::map_context::{MapData, MapTrigger};
 
 pub use crate::chk_layout::classic::{
     pack_action as pack_chk_action, pack_condition as pack_chk_condition,
@@ -58,7 +58,7 @@ impl CompilationReport {
 /// while preserving existing classic `TRIG` triggers.
 pub fn inject_payload_into_chk(
     chk: &mut Chk,
-    map_ctx: &MapContext,
+    map_data: &MapData,
     allocated: &AllocatedPayload,
     trigger_count: usize,
     byte_buf_count: usize,
@@ -66,7 +66,7 @@ pub fn inject_payload_into_chk(
 ) -> Result<CompilationReport> {
     inject_payload_into_chk_with_restores(
         chk,
-        map_ctx,
+        map_data,
         allocated,
         trigger_count,
         byte_buf_count,
@@ -78,14 +78,14 @@ pub fn inject_payload_into_chk(
 #[allow(clippy::too_many_arguments)]
 pub fn inject_payload_into_chk_with_restores(
     chk: &mut Chk,
-    map_ctx: &MapContext,
+    map_data: &MapData,
     allocated: &AllocatedPayload,
     trigger_count: usize,
     byte_buf_count: usize,
     vproc_count: usize,
     restore_triggers: &[[u8; classic::TRIGGER_SIZE]],
 ) -> Result<CompilationReport> {
-    let mut strx_bytes = map_ctx.string_table().serialize_strx();
+    let mut strx_bytes = map_data.string_table().serialize_strx();
     let str_padding = (4 - (strx_bytes.len() & 3)) & 3;
     strx_bytes.resize(strx_bytes.len() + str_padding, 0);
 
@@ -111,10 +111,10 @@ pub fn inject_payload_into_chk_with_restores(
     strx_bytes.extend_from_slice(&relocated);
     chk.set_section(b"STRx", strx_bytes)?;
 
-    let str_bytes = map_ctx.string_table().serialize_str();
+    let str_bytes = map_data.string_table().serialize_str();
     chk.set_section(b"STR ", str_bytes)?;
 
-    let trig_bytes = build_trig_section(payload_entry_addr, map_ctx.triggers(), restore_triggers);
+    let trig_bytes = build_trig_section(payload_entry_addr, map_data.triggers(), restore_triggers);
     chk.set_section(b"TRIG", trig_bytes)?;
 
     chk.fix_map_data();

@@ -8,7 +8,7 @@ use crate::chk_layout::{ACTION_COUNT, ACTION_SIZE};
 use crate::error::Result;
 use crate::hir::{epd, STRX_BASE_ADDR};
 use crate::lir::{LirModule, LirObject, ValueExpr};
-use crate::map_context::MapContext;
+use crate::map_context::MapData;
 
 pub const RUNTIME_MRGN_BASE_ADDR: u32 = 0x0058DC60;
 
@@ -123,15 +123,15 @@ pub struct StringRestoreItem {
     pub orig_dwords: Vec<u32>,
 }
 
-/// Scrambles static string literals in `MapContext`'s string table with seeded masking.
+/// Scrambles static string literals in Map Data's string table with seeded masking.
 /// Returns restore items needed to reconstruct the original plaintext strings in memory at startup
 /// via additive decryption triggers, avoiding plaintext string leakage in action fields.
 pub fn encrypt_static_strings(
-    map_ctx: &mut MapContext,
+    map_data: &mut MapData,
     rng: &mut ObscureRng,
 ) -> Vec<StringRestoreItem> {
     let mut restores = Vec::new();
-    let tbl = map_ctx.string_table_mut();
+    let tbl = map_data.string_table_mut();
     let datatb_len = tbl.datatb().len();
 
     for data_idx in 0..datatb_len {
