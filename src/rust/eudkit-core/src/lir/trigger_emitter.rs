@@ -6,6 +6,7 @@ use crate::hir::{
 };
 use crate::lir::emission_plan::EmissionPlan;
 use crate::lir::storage_selection::VarStorage;
+use crate::lir::trigger_shape::DYNAMIC_DIV_FILL_TRIGGERS;
 use crate::lir::types::*;
 use crate::map_context::MapData;
 use std::collections::HashMap;
@@ -969,7 +970,11 @@ pub fn emit_lir(
             }
         };
 
-        for op in &block.ops {
+        for (op_index, op) in block.ops.iter().enumerate() {
+            let op_span = block_plan.op_span(op_index);
+            let op_start = block_plan.first_trigger.0 + op_span.first_trigger;
+            let op_end = block_plan.first_trigger.0 + op_span.end_trigger();
+            debug_assert_eq!(cur_obj_id, op_start);
             match op {
                 ExpandedOp::LeafAction(act) => {
                     let acts = lower_act(act, map_data);
@@ -1048,7 +1053,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                         &block.label,
                     );
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     if let Some(m) = mask {
                         pending_actions.push(make_vproc_set_mask(src_st, *m));
                     }
@@ -1080,7 +1085,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                         &block.label,
                     );
-                    let mask_trig_id = ObjectId(cur_obj_id + 1);
+                    let mask_trig_id = ObjectId(op_end - 1);
                     let mask_field_epd =
                         ValueExpr::FieldEpd(FieldRef::action(mask_trig_id.0, 0, ActField::LocId1));
                     // mask_field = ~0; mask_field -= src
@@ -1114,7 +1119,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                     );
                     debug_assert_eq!(ObjectId(cur_obj_id), mask_trig_id);
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     emit_custom_trigger(
                         format!("{}_bitand_apply_{}", block.label, cur_obj_id),
                         ret_addr,
@@ -1140,7 +1145,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                         &block.label,
                     );
-                    let mask_trig_id = ObjectId(cur_obj_id + 1);
+                    let mask_trig_id = ObjectId(op_end - 1);
                     let mask_field_epd =
                         ValueExpr::FieldEpd(FieldRef::action(mask_trig_id.0, 0, ActField::LocId1));
                     pending_actions.push(make_vproc_set_dest(
@@ -1167,7 +1172,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                     );
                     debug_assert_eq!(ObjectId(cur_obj_id), mask_trig_id);
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     emit_custom_trigger(
                         format!("{}_bitor_apply_{}", block.label, cur_obj_id),
                         ret_addr,
@@ -1193,7 +1198,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                         &block.label,
                     );
-                    let pass2_trig_id = ObjectId(cur_obj_id + 1);
+                    let pass2_trig_id = ObjectId(op_end - 1);
                     pending_actions.push(make_vproc_set_mask(src_st, 0x5555_5555));
                     pending_actions.push(make_vproc_set_dest(src_st, dst_epd, Modifier::SetTo));
                     pending_actions.push(make_vproc_set_modifier(src_st, Modifier::Add));
@@ -1215,7 +1220,7 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                     );
                     debug_assert_eq!(ObjectId(cur_obj_id), pass2_trig_id);
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     emit_custom_trigger(
                         format!("{}_bitxor_p2_{}", block.label, cur_obj_id),
                         vproc_trigger_addr(src_st),
@@ -1242,7 +1247,7 @@ pub fn emit_lir(
                     );
                     let loopstart_id = ObjectId(cur_obj_id + 1);
                     let loopcnt_id = ObjectId(cur_obj_id + 2);
-                    let loopend_addr = next_return_addr(cur_obj_id + 3);
+                    let loopend_addr = next_return_addr(op_end);
 
                     pending_actions.push(make_vproc_set_nextptr(
                         dst_st,
@@ -1338,8 +1343,9 @@ pub fn emit_lir(
                     let rhs_epd = rhs_st.value_epd();
                     let dst_epd = var_storage[dst].value_epd();
 
-                    // Total triggers emitted by DynamicMul: 1 + 32*2 + 31*2 + 1 = 128
-                    let endmul_id = ObjectId(cur_obj_id + 127);
+                    // The trigger-shape policy reserves the last trigger of this
+                    // op for the end trigger.
+                    let endmul_id = ObjectId(op_end - 1);
                     let reset_p1_epd =
                         ValueExpr::FieldEpd(FieldRef::action(endmul_id.0, 0, ActField::Player1));
                     let reset_p2_epd =
@@ -1511,7 +1517,7 @@ pub fn emit_lir(
                     }
 
                     debug_assert_eq!(ObjectId(cur_obj_id), endmul_id);
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     let first_p1_nptr_epd =
                         ValueExpr::FieldEpd(FieldRef::new(first_p1, TriggerSlotField::NextPtr));
                     emit_custom_trigger(
@@ -1573,12 +1579,13 @@ pub fn emit_lir(
                         &mut cur_obj_id,
                         &block.label,
                     );
-                    // Total triggers: 2 + 1 + 32 + 193 = 228 triggers? Wait:
-                    // In count_block_triggers we counted 2 + 1 + 32 + (1 + 32*5 + 32) = 228 triggers!
+                    // The trigger-shape policy reserves the whole op span:
+                    // skip check + skip target + pow2 init + 32 pow2 triggers
+                    // + one dynamic division chain.
                     let skip_check_id = ObjectId(cur_obj_id);
                     let skip_to_here_id = ObjectId(cur_obj_id + 1);
                     let exponential_id = ObjectId(cur_obj_id + 2);
-                    let after_all_id = cur_obj_id + 2 + 1 + 32 + 193;
+                    let after_all_id = op_end;
                     let ret_addr = next_return_addr(after_all_id);
                     let skip_check_nptr_epd = ValueExpr::FieldEpd(FieldRef::new(
                         skip_check_id,
@@ -1729,7 +1736,7 @@ pub fn emit_lir(
                     // after the 1 branch_reset trigger, so at +1)!
                     // Even simpler: we can record a fixup `(trigger_vec_idx, act_idx_for_dest, cond_idx, field)`
                     // and resolve it as soon as the next real Trigger (or Branch cond trigger) is emitted!
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     pending_actions.push(make_vproc_set_dest(
                         src_st,
                         ValueExpr::FieldEpd(FieldRef::condition(
@@ -1772,7 +1779,7 @@ pub fn emit_lir(
                         &block.label,
                     );
                     let _ = is_epd;
-                    let ret_addr = next_return_addr(cur_obj_id + 1);
+                    let ret_addr = next_return_addr(op_end);
                     pending_actions.push(make_vproc_set_dest(
                         src_st,
                         ValueExpr::FieldEpd(FieldRef::action(
@@ -1980,8 +1987,7 @@ pub fn emit_lir(
                             &mut cur_obj_id,
                             &block.label,
                         );
-                        let next_id = cur_obj_id + 1;
-                        let ret_addr = next_return_addr(next_id);
+                        let ret_addr = next_return_addr(op_end);
                         pending_actions.push(make_vproc_set_dest(
                             src_st,
                             val_field_epd,
@@ -2149,7 +2155,17 @@ pub fn emit_lir(
                     }
                 }
             }
+            debug_assert_eq!(
+                cur_obj_id, op_end,
+                "op {op_index} of {} did not match its planned trigger span",
+                block.label
+            );
         }
+
+        let terminator_span = block_plan.terminator_span();
+        let terminator_start = block_plan.first_trigger.0 + terminator_span.first_trigger;
+        let terminator_end = block_plan.first_trigger.0 + terminator_span.end_trigger();
+        debug_assert_eq!(cur_obj_id, terminator_start);
 
         match &block.terminator {
             ExpandedTerminator::Jump(target_block) => {
@@ -2275,7 +2291,7 @@ pub fn emit_lir(
                     &mut cur_obj_id,
                     &block.label,
                 );
-                let branch_id = ObjectId(cur_obj_id + 1);
+                let branch_id = ObjectId(terminator_end - 1);
                 let then_obj = plan.first_trigger(*then_block);
                 let else_obj = plan.first_trigger(*else_block);
                 let branch_next_field = FieldRef::new(branch_id, TriggerSlotField::NextPtr);
@@ -2373,6 +2389,7 @@ pub fn emit_lir(
             }
         }
 
+        debug_assert_eq!(cur_obj_id, terminator_end);
         debug_assert_eq!(cur_obj_id, block_plan.end_trigger().0);
         debug_assert_eq!(patch_sites, block_plan.patch_sites);
 
@@ -2488,8 +2505,9 @@ fn emit_dynamic_div_chain(
     let quot_epd = var_storage[&quot_dst].value_epd();
     let dividend_epd = var_storage[&dividend].value_epd();
 
-    // Total triggers: 1 (init) + 32 * 5 (fill & double) + 32 (subtraction chain) = 193 triggers
-    let chain_base_id = *cur_obj_id + 1 + 32 * 5;
+    // The fill iterations own `DYNAMIC_DIV_FILL_TRIGGERS` slots; the policy in
+    // `trigger_shape` owns the total chain length.
+    let chain_base_id = *cur_obj_id + 1 + DYNAMIC_DIV_FILL_TRIGGERS;
 
     // 1. Init trigger: quot_dst = 0, and VProc(divisor -> div_x_scratch)
     let first_loop_id = ObjectId(*cur_obj_id + 1);

@@ -7,28 +7,47 @@
 //! table all get their `ObjectId` from one place before the first trigger is
 //! written.
 
-use crate::hir::{BlockId, ByteBufId, FuncId, FuncPtrId, HirModule, Modifier, StockAction, VarId};
+use crate::hir::{BlockId, ByteBufId, FuncId, FuncPtrId, HirModule, Modifier, VarId};
 use crate::lir::read_table::ReadTable;
 use crate::lir::storage_selection::{collect_vproc_vars, VarStorage};
+use crate::lir::trigger_shape::{block_trigger_shape, OpTriggerSpan, TerminatorTriggerSpan};
 use crate::lir::types::*;
 use std::collections::{HashMap, HashSet};
 
 /// The trigger address space reserved for one expanded block.
 ///
-/// `first_trigger` and `trigger_budget` come from the same simulation that
-/// `emit_lir` uses, so a block can verify it emitted exactly the planned span.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `first_trigger` and `trigger_budget` come from [`block_trigger_shape`], the
+/// same policy `emit_lir` consumes for its per-op spans, so a block can verify
+/// it emitted exactly the planned span.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockPlan {
     pub id: BlockId,
     pub first_trigger: ObjectId,
     pub trigger_budget: u32,
     /// Number of `PatchNextTrigger*` ops in the block, checked after emission.
     pub patch_sites: u32,
+    op_spans: Vec<OpTriggerSpan>,
+    terminator_span: TerminatorTriggerSpan,
 }
 
 impl BlockPlan {
     pub fn end_trigger(&self) -> ObjectId {
         ObjectId(self.first_trigger.0 + self.trigger_budget)
+    }
+
+    /// Per-[`ExpandedOp`] trigger spans, in block order.
+    pub fn op_spans(&self) -> &[OpTriggerSpan] {
+        &self.op_spans
+    }
+
+    /// Trigger span owned by the op at `index`.
+    pub fn op_span(&self, index: usize) -> &OpTriggerSpan {
+        &self.op_spans[index]
+    }
+
+    /// Trigger span owned by the block terminator.
+    pub fn terminator_span(&self) -> &TerminatorTriggerSpan {
+        &self.terminator_span
     }
 }
 
@@ -79,16 +98,18 @@ impl EmissionPlan {
         let mut first_trigger_by_block = HashMap::new();
         let mut block_trigger_end = 0u32;
         for block in &cfg.blocks {
-            let (trigger_budget, patch_sites) = block_trigger_budget(block);
+            let shape = block_trigger_shape(block);
             let first_trigger = ObjectId(block_trigger_end);
             first_trigger_by_block.insert(block.id, first_trigger);
             blocks.push(BlockPlan {
                 id: block.id,
                 first_trigger,
-                trigger_budget,
-                patch_sites,
+                trigger_budget: shape.trigger_count,
+                patch_sites: shape.patch_sites,
+                op_spans: shape.ops,
+                terminator_span: shape.terminator,
             });
-            block_trigger_end += trigger_budget;
+            block_trigger_end += shape.trigger_count;
         }
 
         let mut trigger_count = block_trigger_end;
@@ -356,305 +377,4 @@ fn link_return_slots(vproc_slots: &mut [LirVProcSlot], vbuf: ObjectId, slots: &[
     }
     vproc_slots[*slots.last().unwrap() as usize].next_ptr =
         ValueExpr::Const(crate::hir::END_OF_TRIGGERS_SENTINEL as i32);
-}
-
-fn count_leaf_action_actions(act: &StockAction) -> usize {
-    match act {
-        StockAction::PrintAt { parts, .. } => crate::cp_string::emit_format_parts_actions(
-            ValueExpr::Const(0),
-            parts,
-            None,
-            false,
-            &HashMap::new(),
-        )
-        .len(),
-        StockAction::FormatPrint {
-            target,
-            parts,
-            always_display,
-        } => {
-            let has_disp = matches!(target, crate::hir::PrintTarget::DisplayText);
-            crate::cp_string::emit_format_parts_actions(
-                ValueExpr::Const(0),
-                parts,
-                if has_disp { Some(1) } else { None },
-                *always_display,
-                &HashMap::new(),
-            )
-            .len()
-        }
-        _ => 1,
-    }
-}
-
-/// Production trigger budget for one block.
-///
-/// Returns `(trigger_budget, patch_sites)`. This mirrors the trigger shapes
-/// emitted by `trigger_emitter`; the emitter verifies each block against it.
-fn block_trigger_budget(blk: &ExpandedBlock) -> (u32, u32) {
-    let mut count = 0u32;
-    let mut patch_sites = 0u32;
-    let mut pending_actions = 0usize;
-
-    let add_pending = |n: usize, pending: &mut usize, trigs: &mut u32| {
-        if *pending + n > 64 {
-            *trigs += 1;
-            *pending = 0;
-        }
-        *pending += n;
-        if *pending == 64 {
-            *trigs += 1;
-            *pending = 0;
-        }
-    };
-    let flush_pending = |pending: &mut usize, trigs: &mut u32| {
-        if *pending > 0 {
-            *trigs += 1;
-            *pending = 0;
-        }
-    };
-
-    for op in &blk.ops {
-        match op {
-            ExpandedOp::LeafAction(act) => {
-                let n = count_leaf_action_actions(act);
-                for _ in 0..n {
-                    add_pending(1, &mut pending_actions, &mut count);
-                }
-            }
-            ExpandedOp::Trigger { .. } => {
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1;
-            }
-            ExpandedOp::VProcCopyVar { mask, .. } => {
-                let n = if mask.is_some() { 4 } else { 3 };
-                add_pending(n, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                if mask.is_some() {
-                    add_pending(1, &mut pending_actions, &mut count);
-                }
-            }
-            ExpandedOp::VProcBitAndVar { .. } => {
-                add_pending(4, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1;
-            }
-            ExpandedOp::VProcBitOrVar { .. } => {
-                add_pending(3, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1;
-            }
-            ExpandedOp::VProcBitXorVar { .. } => {
-                add_pending(4, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1;
-                add_pending(1, &mut pending_actions, &mut count);
-            }
-            ExpandedOp::DynamicShl { .. } => {
-                add_pending(3, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                count += 2;
-                add_pending(1, &mut pending_actions, &mut count);
-            }
-            ExpandedOp::DynamicShr { .. } => {
-                flush_pending(&mut pending_actions, &mut count);
-                // 2 + 1 + 32 + (1 + 32 * 5 + 32) = 228 triggers.
-                count += 2 + 1 + 32 + (1 + 32 * 5 + 32);
-            }
-            ExpandedOp::DynamicMul { .. } => {
-                flush_pending(&mut pending_actions, &mut count);
-                // 1 init + 32 * 2 + 31 * 2 + 1 endmul = 128 triggers.
-                count += 1 + 32 * 2 + 31 * 2 + 1;
-            }
-            ExpandedOp::DynamicDivRem { .. } => {
-                flush_pending(&mut pending_actions, &mut count);
-                // 1 init + 32 * 5 + 32 = 193 triggers.
-                count += 1 + 32 * 5 + 32;
-            }
-            ExpandedOp::PatchNextTriggerCond { .. } | ExpandedOp::PatchNextTriggerAct { .. } => {
-                patch_sites += 1;
-                add_pending(3, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-            }
-            ExpandedOp::CallSetup { rets, .. } | ExpandedOp::CallIndirectSetup { rets, .. } => {
-                let act_count = if rets.is_empty() { 1 } else { rets.len() + 1 };
-                add_pending(act_count, &mut pending_actions, &mut count);
-            }
-            ExpandedOp::WriteFuncReturnSlot {
-                src_var, const_val, ..
-            } => {
-                if const_val.is_some() {
-                    add_pending(1, &mut pending_actions, &mut count);
-                } else if src_var.is_some() {
-                    add_pending(3, &mut pending_actions, &mut count);
-                    flush_pending(&mut pending_actions, &mut count);
-                }
-            }
-            ExpandedOp::FuncPtrAssignTarget { .. } => {
-                add_pending(1, &mut pending_actions, &mut count);
-            }
-            ExpandedOp::MemReadSetup {
-                epd, initial_val, ..
-            } => {
-                let acts = if *initial_val != 0 { 3 } else { 2 };
-                match epd {
-                    crate::hir::HirExpr::Const(_) => {
-                        add_pending(acts + 1, &mut pending_actions, &mut count);
-                    }
-                    crate::hir::HirExpr::Var(_) => {
-                        add_pending(acts + 3, &mut pending_actions, &mut count);
-                        flush_pending(&mut pending_actions, &mut count);
-                    }
-                    _ => unreachable!(),
-                }
-            }
-        }
-    }
-
-    if matches!(blk.terminator, ExpandedTerminator::Branch { .. }) {
-        add_pending(1, &mut pending_actions, &mut count);
-        flush_pending(&mut pending_actions, &mut count);
-        count += 1;
-    } else {
-        flush_pending(&mut pending_actions, &mut count);
-        if count == 0 {
-            count += 1;
-        }
-    }
-
-    (count, patch_sites)
-}
-
-/// Independent trigger-count oracle retained for tests.
-///
-/// Production layout uses [`block_trigger_budget`]. This is the original
-/// pre-plan counter, kept so `emission_plan_test` can compare the two
-/// implementations instead of trusting one of them.
-pub fn count_block_triggers(blk: &ExpandedBlock) -> u32 {
-    let mut count = 0u32;
-    let mut pending_actions = 0usize;
-
-    let add_pending = |n: usize, pending: &mut usize, trigs: &mut u32| {
-        if *pending + n > 64 {
-            *trigs += 1;
-            *pending = 0;
-        }
-        *pending += n;
-        if *pending == 64 {
-            *trigs += 1;
-            *pending = 0;
-        }
-    };
-    let flush_pending = |pending: &mut usize, trigs: &mut u32| {
-        if *pending > 0 {
-            *trigs += 1;
-            *pending = 0;
-        }
-    };
-
-    for op in &blk.ops {
-        match op {
-            ExpandedOp::LeafAction(act) => {
-                let n = count_leaf_action_actions(act);
-                for _ in 0..n {
-                    add_pending(1, &mut pending_actions, &mut count);
-                }
-            }
-            ExpandedOp::Trigger { .. } => {
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1;
-            }
-            ExpandedOp::VProcCopyVar { mask, .. } => {
-                let n = if mask.is_some() { 4 } else { 3 };
-                add_pending(n, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                if mask.is_some() {
-                    add_pending(1, &mut pending_actions, &mut count);
-                }
-            }
-            ExpandedOp::VProcBitAndVar { .. } => {
-                add_pending(4, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1;
-            }
-            ExpandedOp::VProcBitOrVar { .. } => {
-                add_pending(3, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1;
-            }
-            ExpandedOp::VProcBitXorVar { .. } => {
-                add_pending(4, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1;
-                add_pending(1, &mut pending_actions, &mut count);
-            }
-            ExpandedOp::DynamicShl { .. } => {
-                add_pending(3, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-                count += 2;
-                add_pending(1, &mut pending_actions, &mut count);
-            }
-            ExpandedOp::DynamicShr { .. } => {
-                flush_pending(&mut pending_actions, &mut count);
-                count += 2 + 1 + 32 + (1 + 32 * 5 + 32);
-            }
-            ExpandedOp::DynamicMul { .. } => {
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1 + 32 * 2 + 31 * 2 + 1;
-            }
-            ExpandedOp::DynamicDivRem { .. } => {
-                flush_pending(&mut pending_actions, &mut count);
-                count += 1 + 32 * 5 + 32;
-            }
-            ExpandedOp::PatchNextTriggerCond { .. } | ExpandedOp::PatchNextTriggerAct { .. } => {
-                add_pending(3, &mut pending_actions, &mut count);
-                flush_pending(&mut pending_actions, &mut count);
-            }
-            ExpandedOp::CallSetup { rets, .. } | ExpandedOp::CallIndirectSetup { rets, .. } => {
-                let act_count = if rets.is_empty() { 1 } else { rets.len() + 1 };
-                add_pending(act_count, &mut pending_actions, &mut count);
-            }
-            ExpandedOp::WriteFuncReturnSlot {
-                src_var, const_val, ..
-            } => {
-                if const_val.is_some() {
-                    add_pending(1, &mut pending_actions, &mut count);
-                } else if src_var.is_some() {
-                    add_pending(3, &mut pending_actions, &mut count);
-                    flush_pending(&mut pending_actions, &mut count);
-                }
-            }
-            ExpandedOp::FuncPtrAssignTarget { .. } => {
-                add_pending(1, &mut pending_actions, &mut count);
-            }
-            ExpandedOp::MemReadSetup {
-                epd, initial_val, ..
-            } => {
-                let acts = if *initial_val != 0 { 3 } else { 2 };
-                match epd {
-                    crate::hir::HirExpr::Const(_) => {
-                        add_pending(acts + 1, &mut pending_actions, &mut count);
-                    }
-                    crate::hir::HirExpr::Var(_) => {
-                        add_pending(acts + 3, &mut pending_actions, &mut count);
-                        flush_pending(&mut pending_actions, &mut count);
-                    }
-                    _ => unreachable!(),
-                }
-            }
-        }
-    }
-
-    if matches!(blk.terminator, ExpandedTerminator::Branch { .. }) {
-        add_pending(1, &mut pending_actions, &mut count);
-        flush_pending(&mut pending_actions, &mut count);
-        count += 1;
-    } else {
-        flush_pending(&mut pending_actions, &mut count);
-        if count == 0 {
-            count += 1;
-        }
-    }
-
-    count
 }
