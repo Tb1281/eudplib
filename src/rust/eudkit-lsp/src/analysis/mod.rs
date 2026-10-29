@@ -1,5 +1,10 @@
 //! Reusable Python and TypeScript analysis for eudkit language-server features.
 
+use std::sync::LazyLock;
+
+use eudkit_core::canonical::CanonicalSymbols;
+use eudkit_core::map_context::MapData;
+
 pub mod call_site;
 pub mod document;
 pub mod eud_player;
@@ -9,6 +14,15 @@ pub mod signature;
 pub mod symbol_slot;
 pub mod ts;
 pub mod validation;
+
+/// Borrowed Map Data and Canonical Symbols for one analysis pass.
+pub type MapSymbolSources<'a> = (&'a MapData, &'a CanonicalSymbols);
+
+/// Canonical Symbols used when a document has no Map Context.
+pub(crate) fn canonical_symbols() -> &'static CanonicalSymbols {
+    static CANONICAL_SYMBOLS: LazyLock<CanonicalSymbols> = LazyLock::new(CanonicalSymbols::new);
+    &CANONICAL_SYMBOLS
+}
 
 pub use call_site::{enclosing_call, CallSite};
 pub use document::{ParsedDocument, StringLiteral};

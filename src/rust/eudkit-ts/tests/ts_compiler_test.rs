@@ -20,7 +20,8 @@ fn compiles_typescript_functions_control_flow_and_actions_to_hir() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let ts_source = r#"
 import { var_, Player1, Add, SetDeaths, SetResources, Ore, Gas } from "@eudkit/sdk";
@@ -70,8 +71,8 @@ export function main() {
 }
 "#;
 
-    let hir =
-        compile_ts_to_hir(ts_source, "ts_test_module", map_ctx).expect("should compile TS to HIR");
+    let hir = compile_ts_to_hir(ts_source, "ts_test_module", map_data, canonical_symbols)
+        .expect("should compile TS to HIR");
 
     assert_eq!(hir.name, "ts_test_module");
     assert_eq!(hir.variables().len(), 3);
@@ -127,7 +128,8 @@ fn compiles_typescript_structs_helper_functions_and_arithmetic_ops() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let ts_source = r#"
 import { var_, CUnit, EPD, SetDeaths, Player1, Add } from "@eudkit/sdk";
@@ -152,7 +154,7 @@ export function main() {
 }
 "#;
 
-    let hir = compile_ts_to_hir(ts_source, "struct_test", map_ctx)
+    let hir = compile_ts_to_hir(ts_source, "struct_test", map_data, canonical_symbols)
         .expect("should compile TS struct test");
 
     // 2 global vars (hp, unit_epd) + 2 params (clampHp_val, clampHp_max) + 1 local var (next_hp) = 5 vars
@@ -194,7 +196,8 @@ fn compiles_typescript_format_print_and_user_cp() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let ts_source = r#"
 import { var_, IsUserCP, f_eprintln, print_at, display_at, displayAt } from "@eudkit/sdk";
@@ -211,7 +214,7 @@ export function main() {
 }
 "#;
 
-    let hir = compile_ts_to_hir(ts_source, "ts_print_test", map_ctx)
+    let hir = compile_ts_to_hir(ts_source, "ts_print_test", map_data, canonical_symbols)
         .expect("should compile TS print test");
 
     assert_eq!(hir.variables().len(), 1);
@@ -249,7 +252,8 @@ fn compiles_typescript_reactive_primitives_once_when_until_after_every() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let ts_source = r#"
 import { var_, once, when, until, after, every, DisplayText, SetResources, Player1, Add, Ore } from "@eudkit/sdk";
@@ -286,7 +290,7 @@ export function main() {
 }
 "#;
 
-    let mut hir = compile_ts_to_hir(ts_source, "ts_reactive_test", map_ctx)
+    let mut hir = compile_ts_to_hir(ts_source, "ts_reactive_test", map_data, canonical_symbols)
         .expect("should compile TS reactive primitives to HIR");
 
     let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
@@ -336,7 +340,8 @@ fn compiles_typescript_with_ambient_session_and_string_buffer() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let ts_source = r#"
 import { session, DisplayText, display_at, IsUserCP } from "eudkit";
@@ -353,8 +358,13 @@ export function main() {
 }
 "#;
 
-    let hir = compile_ts_to_hir(ts_source, "ts_ambient_session_test", map_ctx)
-        .expect("should compile TS ambient session test");
+    let hir = compile_ts_to_hir(
+        ts_source,
+        "ts_ambient_session_test",
+        map_data,
+        canonical_symbols,
+    )
+    .expect("should compile TS ambient session test");
 
     assert_eq!(hir.variables().len(), 1);
     assert_eq!(hir.variables()[0].name, "kills");
@@ -438,8 +448,13 @@ fn reactive_conformance_fixture_matches_shared_golden_rules() {
     let source = fs::read_to_string(fixture_dir.join("main.ts"))
         .expect("should read the TypeScript conformance fixture");
 
-    let hir = compile_ts_to_hir(&source, "reactive_conformance", session.map_context())
-        .expect("should compile the TypeScript conformance fixture");
+    let hir = compile_ts_to_hir(
+        &source,
+        "reactive_conformance",
+        session.map_data(),
+        session.canonical_symbols(),
+    )
+    .expect("should compile the TypeScript conformance fixture");
     let actual = serde_json::to_value(reactive_rules(&hir)).expect("rules should serialize");
     let expected: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(fixture_dir.join("expected_rules.json"))
@@ -452,8 +467,13 @@ fn reactive_conformance_fixture_matches_shared_golden_rules() {
         "TypeScript reactive rules must match the shared Python/TypeScript fixture"
     );
 
-    let second = compile_ts_to_hir(&source, "reactive_conformance", session.map_context())
-        .expect("should compile the conformance fixture twice");
+    let second = compile_ts_to_hir(
+        &source,
+        "reactive_conformance",
+        session.map_data(),
+        session.canonical_symbols(),
+    )
+    .expect("should compile the conformance fixture twice");
     assert_eq!(
         serde_json::to_value(&hir).unwrap(),
         serde_json::to_value(&second).unwrap(),
@@ -467,7 +487,8 @@ fn reactive_primitives_support_namespaced_calls_and_reject_invalid_shapes() {
     let map_path = root.join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let namespaced = r#"
 import { var_, DisplayText } from "@eudkit/sdk";
@@ -479,8 +500,13 @@ export function main() {
     once(undefined, () => { DisplayText("undefined once"); });
 }
 "#;
-    let hir = compile_ts_to_hir(namespaced, "namespaced_reactive", map_ctx)
-        .expect("namespaced and nullish reactive forms should compile");
+    let hir = compile_ts_to_hir(
+        namespaced,
+        "namespaced_reactive",
+        map_data,
+        canonical_symbols,
+    )
+    .expect("namespaced and nullish reactive forms should compile");
     let rules = reactive_rules(&hir);
     assert_eq!(rules.len(), 4, "must emit one rule per reactive call");
     assert!(matches!(rules[0], ReactiveRule::Once { .. }));
@@ -514,7 +540,7 @@ export function main() {
         let source = format!(
             "import {{ var_, DisplayText }} from \"@eudkit/sdk\";\nlet flag = var_(0, \"flag\");\nexport function main() {{ {call}; }}"
         );
-        let error = compile_ts_to_hir(&source, "invalid_reactive", map_ctx)
+        let error = compile_ts_to_hir(&source, "invalid_reactive", map_data, canonical_symbols)
             .expect_err("an invalid reactive shape must fail instead of being ignored")
             .to_string();
         assert!(
@@ -522,4 +548,214 @@ export function main() {
             "expected {expected_message:?} in {error:?} for `{call}`"
         );
     }
+}
+#[test]
+fn compiles_typescript_memory_reads_consistently_for_declarations_and_assignments() {
+    let map_path = repo_root().join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
+
+    let ts_source = r#"
+import {
+    dwread_epd,
+    dwread,
+    epdread_epd,
+    bread_epd,
+    bread,
+    wread_epd,
+    wread,
+} from "@eudkit/sdk";
+
+export function main() {
+    let v0 = dwread_epd(100);
+    let v1 = dwread(100);
+    let v2 = epdread_epd(100);
+    let v3 = bread_epd(100);
+    let v4 = bread(100);
+    let v5 = wread_epd(100);
+    let v6 = wread(100);
+
+    v0 = eudkit.dwread_epd(100);
+    v1 = eudkit.dwread(100);
+    v2 = eudkit.epdread_epd(100);
+    v3 = eudkit.bread_epd(100);
+    v4 = eudkit.bread(100);
+    v5 = eudkit.wread_epd(100);
+    v6 = eudkit.wread(100);
+}
+"#;
+
+    let hir = compile_ts_to_hir(ts_source, "ts_mem_read_test", map_data, canonical_symbols)
+        .expect("should compile TS memory reads");
+    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
+    let reads: Vec<&HirStmt> = main_fn.blocks[0]
+        .stmts
+        .iter()
+        .filter(|stmt| matches!(stmt, HirStmt::MemRead { .. }))
+        .collect();
+
+    assert_eq!(
+        reads.len(),
+        14,
+        "seven declaration reads and seven assignment reads"
+    );
+
+    let expected = [
+        (0xFFFF_FFFFu32, 0i32),
+        (0xFFFF_FFFF, 0),
+        (0xFFFF_FFFF, -(0x0058_A364 / 4)),
+        (0xFF, 0),
+        (0xFF, 0),
+        (0xFFFF, 0),
+        (0xFFFF, 0),
+    ];
+
+    for (index, (mask, initial_val)) in expected.iter().enumerate() {
+        let (
+            HirStmt::MemRead {
+                epd: decl_epd,
+                mask: decl_mask,
+                shift: decl_shift,
+                initial_val: decl_init,
+                ..
+            },
+            HirStmt::MemRead {
+                epd: assign_epd,
+                mask: assign_mask,
+                shift: assign_shift,
+                initial_val: assign_init,
+                ..
+            },
+        ) = (reads[index], reads[index + 7])
+        else {
+            panic!("expected MemRead statements for memory-read rule {index}");
+        };
+
+        assert_eq!(
+            decl_epd, assign_epd,
+            "declaration and assignment must lower the same EPD expression for rule {index}"
+        );
+        assert_eq!(decl_mask, assign_mask);
+        assert_eq!(decl_shift, assign_shift);
+        assert_eq!(decl_init, assign_init);
+        assert_eq!(*decl_mask, *mask);
+        assert_eq!(*decl_init, *initial_val);
+    }
+}
+
+#[test]
+fn compiles_player_groups_without_lossy_epd_fallback() {
+    let map_path = repo_root().join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
+
+    let ts_source = r#"
+import {
+    Add,
+    Allies,
+    AllPlayers,
+    Foes,
+    Force1,
+    Force2,
+    Force3,
+    Force4,
+    NeutralPlayers,
+    NonAlliedVictoryPlayers,
+    SetDeaths,
+} from "@eudkit/sdk";
+
+export function main() {
+    SetDeaths(Foes, Add, 1, "Terran Marine");
+    SetDeaths(Allies, Add, 1, "Terran Marine");
+    SetDeaths(NeutralPlayers, Add, 1, "Terran Marine");
+    SetDeaths(AllPlayers, Add, 1, "Terran Marine");
+    SetDeaths(Force1, Add, 1, "Terran Marine");
+    SetDeaths(Force2, Add, 1, "Terran Marine");
+    SetDeaths(Force3, Add, 1, "Terran Marine");
+    SetDeaths(Force4, Add, 1, "Terran Marine");
+    SetDeaths(NonAlliedVictoryPlayers, Add, 1, "Terran Marine");
+}
+"#;
+
+    let hir = compile_ts_to_hir(ts_source, "player_group_test", map_data, canonical_symbols)
+        .expect("should compile player groups");
+
+    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
+    let players: Vec<PlayerId> = main_fn.blocks[0]
+        .stmts
+        .iter()
+        .filter_map(|stmt| match stmt {
+            HirStmt::Action(StockAction::SetDeaths { player, .. }) => Some(*player),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        players,
+        vec![
+            PlayerId::Foes,
+            PlayerId::Allies,
+            PlayerId::NeutralPlayers,
+            PlayerId::AllPlayers,
+            PlayerId::Force1,
+            PlayerId::Force2,
+            PlayerId::Force3,
+            PlayerId::Force4,
+            PlayerId::NonAlliedVictoryPlayers,
+        ]
+    );
+}
+
+#[test]
+fn rejects_invalid_switch_actions_and_keeps_valid_aliases() {
+    let map_path = repo_root().join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
+
+    let error = compile_ts_to_hir(
+        r#"
+import { SetSwitch } from "@eudkit/sdk";
+
+export function main() {
+    SetSwitch(0, 8);
+}
+"#,
+        "invalid_switch_action",
+        map_data,
+        canonical_symbols,
+    )
+    .expect_err("invalid switch action must be a compile error");
+    assert!(
+        error.to_string().contains("invalid switch action 8"),
+        "unexpected error: {error}"
+    );
+
+    let hir = compile_ts_to_hir(
+        r#"
+import { Random, SetSwitch } from "@eudkit/sdk";
+
+export function main() {
+    SetSwitch(0, Random);
+}
+"#,
+        "valid_switch_action",
+        map_data,
+        canonical_symbols,
+    )
+    .expect("valid switch action alias should compile");
+
+    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
+    assert!(main_fn.blocks[0].stmts.iter().any(|stmt| matches!(
+        stmt,
+        HirStmt::Action(StockAction::SetSwitch {
+            action: eudkit_core::hir::SwitchAction::Random,
+            ..
+        })
+    )));
 }

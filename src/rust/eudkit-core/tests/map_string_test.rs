@@ -47,11 +47,11 @@ fn map_string_registers_deduplicates_and_resolves_addresses_in_session() {
 
     // Verify StringTable can read bytes back
     assert_eq!(
-        session.map_context().string_table().get_by_id(s1.id),
+        session.map_data().string_table().get_by_id(s1.id),
         Some(b"Hello World".as_slice())
     );
     assert_eq!(
-        session.map_context().string_table().get_by_id(s3.id),
+        session.map_data().string_table().get_by_id(s3.id),
         Some(b"Different String".as_slice())
     );
 }

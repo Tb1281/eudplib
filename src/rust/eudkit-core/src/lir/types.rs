@@ -1,3 +1,4 @@
+use crate::chk_layout::payload;
 use crate::hir::{BlockId, HirExpr, HirModule, Modifier, StockAction, StockCondition, VarId};
 use std::collections::HashMap;
 use std::fmt::{self, Write};
@@ -95,11 +96,15 @@ pub enum TriggerSlotField {
 impl TriggerSlotField {
     pub const fn signed_byte_offset(self) -> i32 {
         match self {
-            Self::PrevPtr => 0,
-            Self::NextPtr => 4,
-            Self::Condition(idx, field) => (8 + (idx as u32) * 20 + field.byte_offset()) as i32,
-            Self::Action(idx, field) => (8 + 320 + (idx as u32) * 32 + field.byte_offset()) as i32,
-            Self::Flags => (8 + 320 + 2048) as i32,
+            Self::PrevPtr => payload::PREV_PTR_OFFSET as i32,
+            Self::NextPtr => payload::NEXT_PTR_OFFSET as i32,
+            Self::Condition(idx, field) => {
+                (payload::condition_offset(idx as usize) + field.byte_offset() as usize) as i32
+            }
+            Self::Action(idx, field) => {
+                (payload::action_offset(idx as usize) + field.byte_offset() as usize) as i32
+            }
+            Self::Flags => payload::FLAGS_OFFSET as i32,
             Self::VProcSlot(slot, fld) => fld.signed_byte_offset(slot),
             Self::ByteOffset(off) => off as i32,
         }
@@ -260,10 +265,33 @@ pub struct LirAction {
     pub eudx: u16,
 }
 
+/// Typed codegen role of an LIR trigger.
+///
+/// `LirTrigger::label` is debug-only text for `dump_lir`; the Backend must
+/// resolve patch targets and read-table entries from this role (and typed
+/// `FieldRef`s), never from label text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TriggerRole {
+    #[default]
+    Normal,
+    PatchCondition,
+    PatchAction,
+    ReadTable,
+    ReadTableEnd,
+}
+
+impl TriggerRole {
+    pub const fn is_patch(self) -> bool {
+        matches!(self, Self::PatchCondition | Self::PatchAction)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LirTrigger {
     pub id: ObjectId,
     pub label: Option<String>,
+    /// Typed codegen role. Labels are diagnostic only.
+    pub role: TriggerRole,
     pub prev_ptr: ValueExpr,
     pub next_ptr: ValueExpr,
     pub conditions: Vec<LirCondition>,

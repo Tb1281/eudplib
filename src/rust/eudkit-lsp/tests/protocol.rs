@@ -1,4 +1,4 @@
-use eudkit_core::map_context::CANONICAL_UNIT_NAMES;
+use eudkit_core::canonical::CANONICAL_UNIT_NAMES;
 use eudkit_core::{Chk, CompilationConfig, CompilationSession};
 use eudplib_stormlib::{Archive, OpenArchiveFlags};
 use serde_json::{json, Value};
@@ -405,9 +405,9 @@ fn write_project(directory: &Path, input_map: &str) -> PathBuf {
 fn reusable_switch_name(map_path: &Path) -> (String, u32) {
     let session = CompilationSession::from_map(map_path, CompilationConfig::default())
         .expect("fixture map should load");
-    let context = session.map_context();
+    let data = session.map_data();
 
-    for bytes in context.strings() {
+    for bytes in data.strings() {
         if bytes.is_empty()
             || !bytes
                 .iter()
@@ -415,10 +415,10 @@ fn reusable_switch_name(map_path: &Path) -> (String, u32) {
         {
             continue;
         }
-        let Some(string_id) = context.string_table().find_id(bytes) else {
+        let Some(string_id) = data.string_table().find_id(bytes) else {
             continue;
         };
-        let Some(name) = context.strings().get(string_id as usize - 1) else {
+        let Some(name) = data.strings().get(string_id as usize - 1) else {
             continue;
         };
         let name = String::from_utf8(name.clone()).expect("filtered string should be ASCII");
@@ -517,7 +517,7 @@ fn custom_unit_name(map_path: &Path) -> String {
         .expect("fixture map should load");
 
     session
-        .map_context()
+        .map_data()
         .unit_settings()
         .iter()
         .filter_map(|unit| unit.custom_name.as_deref())

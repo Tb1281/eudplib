@@ -16,6 +16,7 @@ def run_build(
     *,
     obscurate: bool = False,
     obscurate_seed: int | None = None,
+    preserve_classic_triggers: bool = True,
     dump_hir: bool = False,
     dump_lir: bool = False,
     plan: str | Path | None = None,
@@ -28,6 +29,7 @@ def run_build(
         str(input_path),
         obscurate=obscurate,
         obscurate_seed=obscurate_seed,
+        preserve_classic_triggers=preserve_classic_triggers,
     )
 
     with sess:
@@ -87,6 +89,17 @@ def main() -> None:
         "--seed", type=int, help="Deterministic seed for obscuration"
     )
     parser.add_argument(
+        "--preserve-classic-triggers",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Preserve classic map triggers (default: true)",
+    )
+    parser.add_argument(
+        "--report",
+        metavar="PATH",
+        help="Write the typed JSON compilation report to this path for the Rust CLI",
+    )
+    parser.add_argument(
         "--dump-hir", action="store_true", help="Dump High-Level IR (HIR)"
     )
     parser.add_argument(
@@ -105,18 +118,27 @@ def main() -> None:
             entry=args.entry,
             obscurate=args.obscurate,
             obscurate_seed=args.seed,
+            preserve_classic_triggers=args.preserve_classic_triggers,
             dump_hir=args.dump_hir,
             dump_lir=args.dump_lir,
             plan=args.plan,
         )
         if report is not None:
-            print(
-                f"Built {args.output} (triggers={report.trigger_count}, "
-                f"payload_bytes={report.payload_size}, entry={report.payload_entry_addr:#010X})"
-            )
+            print(report.summary(str(args.output)))
+            if args.report:
+                _write_report(Path(args.report), report)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def _write_report(path: Path, report: Any) -> None:
+    """Writes the typed JSON report consumed by the Rust CLI.
+
+    The JSON schema is the core `CompilationReport` wire format; the Rust CLI
+    requires every field, so a partial report is an error rather than zeros.
+    """
+    path.write_text(report.to_json() + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

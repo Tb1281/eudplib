@@ -1,0 +1,22 @@
+once {
+  act: DisplayText("init")
+}
+once {
+  cond: VarCmp(@var, AtLeast, 5)
+  act: DisplayText("milestone")
+}
+when {
+  cond: VarCmp(@var, AtLeast, 10)
+  cond: VarCmp(@var, Exactly, 0)
+  act: DisplayText("standing")
+}
+until {
+  cond: VarCmp(@var, Exactly, 0)
+  act: DisplayText("countdown")
+}
+after (24 loops) {
+  act: DisplayText("delayed")
+}
+every (12 loops) {
+  act: DisplayText("periodic")
+}

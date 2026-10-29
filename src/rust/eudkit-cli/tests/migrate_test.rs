@@ -197,8 +197,9 @@ function main() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
-    let hir = eudkit_ts::compile_ts_to_hir(&ts, "test_migrated", map_ctx)
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
+    let hir = eudkit_ts::compile_ts_to_hir(&ts, "test_migrated", map_data, canonical_symbols)
         .expect("migrated TypeScript should compile to HIR cleanly");
 
     assert_eq!(hir.name, "test_migrated");

@@ -7,11 +7,10 @@ use std::ops::Range;
 use crate::analysis::{
     function_doc, function_hover, identifier_at, python_call_context, python_diagnostics,
     python_eud_player_diagnostics, symbol_hover, symbol_slot_at, ts_call_context, ts_diagnostics,
-    ts_eud_player_diagnostics, ts_symbol_slot_at, ParsedDocument, TsLanguage,
+    ts_eud_player_diagnostics, ts_symbol_slot_at, MapSymbolSources, ParsedDocument, TsLanguage,
 };
 use crate::completion::{completions_at_with_context, offset_to_position, ts_completions_at};
-use crate::project::ProjectCache;
-use eudkit_core::map_context::MapContext;
+use crate::project::{MapContextSnapshot, ProjectCache};
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response};
 use lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, Diagnostic, DiagnosticSeverity,
@@ -151,14 +150,17 @@ fn completion_response(
         .ok()
         .and_then(|url| url.to_file_path().ok())
         .and_then(|path| state.projects.map_context_for_document(&path));
+    let map_data = map_context
+        .as_ref()
+        .map(|context| context.map_data.as_ref());
     let items = match document.language_id.as_str() {
         "python" => {
             let parsed = ParsedDocument::parse(&document.text);
-            completions_at_with_context(&parsed, offset, map_context.as_deref())
+            completions_at_with_context(&parsed, offset, map_data)
         }
         language_id => {
             let language = TsLanguage::from_language_id(language_id)?;
-            ts_completions_at(&document.text, language, offset, map_context.as_deref())
+            ts_completions_at(&document.text, language, offset, map_data)
         }
     }?;
     Some(CompletionResponse::Array(items))
@@ -172,13 +174,14 @@ fn hover_response(state: &mut ServerState, params: &HoverParams) -> Option<Hover
         .uri
         .as_str();
     let map_context = map_context_for_document(state, uri);
+    let sources = map_sources(map_context.as_ref());
     let document = state.documents.get(uri)?;
     let offset = position_to_offset(&document.text, position)?;
     let (markdown, range) = match document.language_id.as_str() {
-        "python" => python_hover(&document.text, offset, map_context.as_deref())?,
+        "python" => python_hover(&document.text, offset, sources)?,
         language_id => {
             let language = TsLanguage::from_language_id(language_id)?;
-            ts_hover(&document.text, language, offset, map_context.as_deref())?
+            ts_hover(&document.text, language, offset, sources)?
         }
     };
     let range = LspRange::new(
@@ -198,12 +201,12 @@ fn hover_response(state: &mut ServerState, params: &HoverParams) -> Option<Hover
 fn python_hover(
     source: &str,
     offset: usize,
-    map_context: Option<&MapContext>,
+    sources: Option<MapSymbolSources<'_>>,
 ) -> Option<(String, std::ops::Range<usize>)> {
     let document = ParsedDocument::parse(source);
     if let Some(slot) = symbol_slot_at(&document, offset) {
         let value = &source[slot.content_range()];
-        let markdown = symbol_hover(slot.kind, value, map_context)?;
+        let markdown = symbol_hover(slot.kind, value, sources)?;
         return Some((
             markdown,
             slot.literal.literal_start..slot.literal.literal_end,
@@ -217,11 +220,11 @@ fn ts_hover(
     source: &str,
     language: TsLanguage,
     offset: usize,
-    map_context: Option<&MapContext>,
+    sources: Option<MapSymbolSources<'_>>,
 ) -> Option<(String, std::ops::Range<usize>)> {
     if let Some(slot) = ts_symbol_slot_at(source, language, offset) {
         let value = &source[slot.content_range()];
-        let markdown = symbol_hover(slot.kind(), value, map_context)?;
+        let markdown = symbol_hover(slot.kind(), value, sources)?;
         return Some((markdown, slot.literal_range()));
     }
 
@@ -298,14 +301,21 @@ fn signature_help_response(
     })
 }
 
-fn map_context_for_document(
-    state: &mut ServerState,
-    uri: &str,
-) -> Option<std::sync::Arc<MapContext>> {
+fn map_context_for_document(state: &mut ServerState, uri: &str) -> Option<MapContextSnapshot> {
     Url::parse(uri)
         .ok()
         .and_then(|url| url.to_file_path().ok())
         .and_then(|path| state.projects.map_context_for_document(&path))
+}
+
+/// Borrows the two Map Context halves for one analysis pass.
+fn map_sources(context: Option<&MapContextSnapshot>) -> Option<MapSymbolSources<'_>> {
+    context.map(|context| {
+        (
+            context.map_data.as_ref(),
+            context.canonical_symbols.as_ref(),
+        )
+    })
 }
 
 fn handle_notification(
@@ -363,17 +373,20 @@ fn publish_diagnostics(connection: &Connection, state: &mut ServerState, uri: &s
         .ok()
         .and_then(|url| url.to_file_path().ok())
         .and_then(|path| projects.map_context_for_document(&path));
-    let diagnostics = document_diagnostics(document, map_context.as_deref());
+    let diagnostics = document_diagnostics(document, map_sources(map_context.as_ref()));
     send_diagnostics(connection, uri, diagnostics);
 }
 
-fn document_diagnostics(document: &Document, map_context: Option<&MapContext>) -> Vec<Diagnostic> {
+fn document_diagnostics(
+    document: &Document,
+    sources: Option<MapSymbolSources<'_>>,
+) -> Vec<Diagnostic> {
     let mut findings: Vec<(Range<usize>, String)> = Vec::new();
 
     match document.language_id.as_str() {
         "python" => {
             findings.extend(
-                python_diagnostics(&document.text, map_context)
+                python_diagnostics(&document.text, sources)
                     .into_iter()
                     .map(|diagnostic| (diagnostic.range, diagnostic.message)),
             );
@@ -386,7 +399,7 @@ fn document_diagnostics(document: &Document, map_context: Option<&MapContext>) -
         language_id => match TsLanguage::from_language_id(language_id) {
             Some(language) => {
                 findings.extend(
-                    ts_diagnostics(&document.text, language, map_context)
+                    ts_diagnostics(&document.text, language, sources)
                         .into_iter()
                         .map(|diagnostic| (diagnostic.range, diagnostic.message)),
                 );
