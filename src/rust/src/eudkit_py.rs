@@ -1,3 +1,4 @@
+use eudkit_core::config::BuildRequest;
 use eudkit_core::hir::{
     parse_format_template, Comparison, FuncId, FuncPtrId, HirBinOp, HirByteBuf, HirExpr,
     HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget, ResourceType, StockAction,
@@ -6,6 +7,8 @@ use eudkit_core::hir::{
 use eudkit_core::{CompilationConfig, CompilationSession, EudkitError, HirBuilder};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use std::path::{Path, PathBuf};
 
 fn to_py_err(err: EudkitError) -> PyErr {
     match err {
@@ -694,6 +697,10 @@ pub struct PyCompilationReport {
     pub prt_count: usize,
     #[pyo3(get)]
     pub ort_count: usize,
+    #[pyo3(get)]
+    pub prt_offsets: Vec<usize>,
+    #[pyo3(get)]
+    pub ort_offsets: Vec<usize>,
 }
 
 #[pyclass(unsendable, name = "RawSession", module = "eudkit._rust")]
@@ -1090,7 +1097,66 @@ impl PyCompilationSession {
             payload_entry_addr: report.payload_entry_addr,
             prt_count: report.prt_offsets.len(),
             ort_count: report.ort_offsets.len(),
+            prt_offsets: report.prt_offsets,
+            ort_offsets: report.ort_offsets,
         })
+    }
+}
+
+/// Resolves `eudkit.toml` and flag overrides into one build configuration.
+///
+/// Python Frontends call this instead of parsing `eudkit.toml` themselves, so
+/// both CLIs share one alias and precedence rule.
+#[pyfunction]
+#[pyo3(signature = (config=None, input_map=None, output_map=None, entry=None, dts=None, obscurate=None, obscurate_seed=None, preserve_classic_triggers=None))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_build_request(
+    py: Python<'_>,
+    config: Option<PathBuf>,
+    input_map: Option<PathBuf>,
+    output_map: Option<PathBuf>,
+    entry: Option<PathBuf>,
+    dts: Option<PathBuf>,
+    obscurate: Option<bool>,
+    obscurate_seed: Option<u64>,
+    preserve_classic_triggers: Option<bool>,
+) -> PyResult<Bound<'_, PyDict>> {
+    let request = BuildRequest {
+        config,
+        input_map,
+        output_map,
+        entry,
+        dts,
+        obscurate,
+        obscurate_seed,
+        preserve_classic_triggers,
+        ..BuildRequest::default()
+    };
+    let resolved = request.resolve().map_err(to_py_err)?;
+    let config = resolved.config;
+
+    let result = PyDict::new(py);
+    result.set_item("name", config.name)?;
+    result.set_item("entry", path_string(config.entry.as_deref()))?;
+    result.set_item("input_map", path_string(Some(config.input_map.as_path())))?;
+    result.set_item("output_map", path_string(Some(config.output_map.as_path())))?;
+    result.set_item("dts", path_string(config.dts.as_deref()))?;
+    result.set_item("obscurate", config.obscurate)?;
+    result.set_item("obscurate_seed", config.obscurate_seed)?;
+    result.set_item(
+        "preserve_classic_triggers",
+        config.preserve_classic_triggers,
+    )?;
+    result.set_item("config_path", path_string(resolved.config_path.as_deref()))?;
+    Ok(result)
+}
+
+fn path_string(path: Option<&Path>) -> Option<String> {
+    let path = path?;
+    if path.as_os_str().is_empty() {
+        None
+    } else {
+        Some(path.to_string_lossy().into_owned())
     }
 }
 

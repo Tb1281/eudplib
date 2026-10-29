@@ -8,6 +8,7 @@ mod _rust {
     use crate::eudkit_py::eudkit_mod;
     #[pymodule_export]
     use crate::eudkit_py::{
-        PyAction, PyCompilationReport, PyCompilationSession, PyCondition, PyExpr, PyMapString,
+        resolve_build_request, PyAction, PyCompilationReport, PyCompilationSession, PyCondition,
+        PyExpr, PyMapString,
     };
 }

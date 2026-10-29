@@ -16,6 +16,7 @@ def run_build(
     *,
     obscurate: bool = False,
     obscurate_seed: int | None = None,
+    preserve_classic_triggers: bool = True,
     dump_hir: bool = False,
     dump_lir: bool = False,
 ) -> Any:
@@ -27,6 +28,7 @@ def run_build(
         str(input_path),
         obscurate=obscurate,
         obscurate_seed=obscurate_seed,
+        preserve_classic_triggers=preserve_classic_triggers,
     )
 
     with sess:
@@ -80,6 +82,17 @@ def main() -> None:
         "--seed", type=int, help="Deterministic seed for obscuration"
     )
     parser.add_argument(
+        "--preserve-classic-triggers",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Preserve classic map triggers (default: true)",
+    )
+    parser.add_argument(
+        "--report",
+        metavar="PATH",
+        help="Write the compilation report to this path for the Rust CLI",
+    )
+    parser.add_argument(
         "--dump-hir", action="store_true", help="Dump High-Level IR (HIR)"
     )
     parser.add_argument(
@@ -95,6 +108,7 @@ def main() -> None:
             entry=args.entry,
             obscurate=args.obscurate,
             obscurate_seed=args.seed,
+            preserve_classic_triggers=args.preserve_classic_triggers,
             dump_hir=args.dump_hir,
             dump_lir=args.dump_lir,
         )
@@ -103,9 +117,26 @@ def main() -> None:
                 f"Built {args.output} (triggers={report.trigger_count}, "
                 f"payload_bytes={report.payload_size}, entry={report.payload_entry_addr:#010X})"
             )
+            if args.report:
+                _write_report(Path(args.report), report)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def _write_report(path: Path, report: Any) -> None:
+    """Writes the key=value report consumed by the Rust CLI."""
+    lines = [
+        f"trigger_count={report.trigger_count}",
+        f"byte_buf_count={report.byte_buf_count}",
+        f"vproc_count={report.vproc_count}",
+        f"payload_offset={report.payload_offset}",
+        f"payload_size={report.payload_size}",
+        f"payload_entry_addr={report.payload_entry_addr}",
+        f"prt_offsets={','.join(str(offset) for offset in report.prt_offsets)}",
+        f"ort_offsets={','.join(str(offset) for offset in report.ort_offsets)}",
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

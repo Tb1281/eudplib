@@ -1,4 +1,4 @@
-use eudkit_core::config::ProjectConfig;
+use eudkit_core::config::{BuildRequest, ProjectConfig};
 use eudkit_core::hir::{
     Comparison, HirBasicBlock, HirByteBuf, HirFunction, HirModule, HirStmt, HirTerminator,
     HirValue, Modifier, PlayerId, StockAction, StockCondition,
@@ -202,73 +202,30 @@ fn configure_python_cmd(cmd: &mut std::process::Command) {
 }
 
 fn cmd_dump_ir(args: &[String]) -> Result<(), String> {
-    let mut map_path: Option<PathBuf> = None;
-    let mut config_path: Option<PathBuf> = None;
-    let mut entry_path: Option<PathBuf> = None;
-    let mut out_path: Option<PathBuf> = None;
-    let mut hir_only = false;
-    let mut lir_only = false;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--map" | "-m" | "--input" | "-i" => {
-                i += 1;
-                map_path = Some(PathBuf::from(args.get(i).ok_or("missing value for --map")?));
-            }
-            "--config" | "-c" => {
-                i += 1;
-                config_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --config")?,
-                ));
-            }
-            "--entry" | "-e" => {
-                i += 1;
-                entry_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --entry")?,
-                ));
-            }
-            "--output" | "-o" => {
-                i += 1;
-                out_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --output")?,
-                ));
-            }
-            "--hir-only" => hir_only = true,
-            "--lir-only" => lir_only = true,
-            other if !other.starts_with('-') && map_path.is_none() => {
-                map_path = Some(PathBuf::from(other));
-            }
-            other => return Err(format!("unknown argument for dump-ir: {other}")),
-        }
-        i += 1;
+    let request = BuildRequest::from_args(args).map_err(|e| e.to_string())?;
+    if request.help {
+        println!(
+            "usage: eudkit dump-ir [--config <eudkit.toml>] [--map <map.scx>] [--entry <script>] [--hir-only|--lir-only]"
+        );
+        return Ok(());
     }
 
-    let (resolved_map, comp_cfg, mod_name, resolved_entry) = if let Some(cfg_file) = config_path {
-        let pcfg = ProjectConfig::from_file(&cfg_file).map_err(|e| e.to_string())?;
-        (
-            map_path.unwrap_or(pcfg.input_map.clone()),
-            pcfg.to_compilation_config(),
-            pcfg.name,
-            entry_path.or(pcfg.entry),
-        )
-    } else if Path::new("eudkit.toml").exists() && map_path.is_none() {
-        let pcfg = ProjectConfig::from_file("eudkit.toml").map_err(|e| e.to_string())?;
-        (
-            pcfg.input_map.clone(),
-            pcfg.to_compilation_config(),
-            pcfg.name,
-            entry_path.or(pcfg.entry),
-        )
+    let resolved = request.resolve().map_err(|e| e.to_string())?;
+    if resolved.config.input_map.as_os_str().is_empty() {
+        return Err("usage: eudkit dump-ir --map <map.scx>".to_string());
+    }
+
+    let resolved_map = resolved.config.input_map.clone();
+    let resolved_entry = resolved.config.entry.clone();
+    let comp_cfg = resolved.config.to_compilation_config();
+    let mod_name = if resolved.config_path.is_some() {
+        resolved.config.name.clone()
     } else {
-        let mp = map_path.ok_or("usage: eudkit dump-ir --map <map.scx>")?;
-        (
-            mp,
-            CompilationConfig::default(),
-            "tracer_module".to_string(),
-            entry_path,
-        )
+        "tracer_module".to_string()
     };
+    let hir_only = request.hir_only;
+    let lir_only = request.lir_only;
+    let out_path = request.output_map.clone();
 
     if let Some(entry) = &resolved_entry {
         let ext = entry.extension().and_then(|s| s.to_str()).unwrap_or("");
@@ -342,6 +299,9 @@ fn execute_python_build(
     proj_cfg: &ProjectConfig,
     entry_path: &Path,
 ) -> Result<eudkit_core::CompilationReport, String> {
+    let report_path = env::temp_dir().join(format!("eudkit-python-report-{}.txt", process::id()));
+    let _ = fs::remove_file(&report_path);
+
     let py_bin = find_python_bin();
     let mut cmd = std::process::Command::new(&py_bin);
     configure_python_cmd(&mut cmd);
@@ -352,7 +312,9 @@ fn execute_python_build(
         .arg("--output")
         .arg(&proj_cfg.output_map)
         .arg("--entry")
-        .arg(entry_path);
+        .arg(entry_path)
+        .arg("--report")
+        .arg(&report_path);
 
     if proj_cfg.obscurate {
         cmd.arg("--obscurate");
@@ -360,12 +322,16 @@ fn execute_python_build(
     if let Some(seed) = proj_cfg.obscurate_seed {
         cmd.arg("--seed").arg(seed.to_string());
     }
+    if !proj_cfg.preserve_classic_triggers {
+        cmd.arg("--no-preserve-classic-triggers");
+    }
 
     let output = cmd
         .output()
         .map_err(|e| format!("failed to execute python runner ({py_bin}): {e}"))?;
 
     if !output.status.success() {
+        let _ = fs::remove_file(&report_path);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
         return Err(format!("Python build failed:\n{stderr}\n{stdout}"));
@@ -374,24 +340,66 @@ fn execute_python_build(
     let stdout = String::from_utf8_lossy(&output.stdout);
     print!("{stdout}");
 
-    let session =
-        CompilationSession::from_map(&proj_cfg.output_map, proj_cfg.to_compilation_config())
-            .map_err(|e| {
-                format!(
-                    "failed to read generated map {}: {e}",
-                    proj_cfg.output_map.display()
-                )
-            })?;
+    let report_text = fs::read_to_string(&report_path).map_err(|e| {
+        format!(
+            "Python build did not report its result ({e}): {}",
+            report_path.display()
+        )
+    })?;
+    let _ = fs::remove_file(&report_path);
+    parse_python_report(&report_text)
+}
 
-    Ok(eudkit_core::CompilationReport {
-        trigger_count: session.map_data().triggers().len(),
+/// Reads the `key=value` report written by `python -m eudkit.runner --report`.
+fn parse_python_report(text: &str) -> Result<eudkit_core::CompilationReport, String> {
+    let mut report = eudkit_core::CompilationReport {
+        trigger_count: 0,
         byte_buf_count: 0,
         payload_offset: 0,
         payload_size: 0,
         payload_entry_addr: 0,
         prt_offsets: Vec::new(),
         ort_offsets: Vec::new(),
-    })
+    };
+
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+        match key.trim() {
+            "trigger_count" => report.trigger_count = parse_report_value(key, value)?,
+            "byte_buf_count" => report.byte_buf_count = parse_report_value(key, value)?,
+            "payload_offset" => report.payload_offset = parse_report_value(key, value)?,
+            "payload_size" => report.payload_size = parse_report_value(key, value)?,
+            "payload_entry_addr" => report.payload_entry_addr = parse_report_value(key, value)?,
+            "prt_offsets" => report.prt_offsets = parse_report_offsets(value)?,
+            "ort_offsets" => report.ort_offsets = parse_report_offsets(value)?,
+            _ => {}
+        }
+    }
+
+    Ok(report)
+}
+
+fn parse_report_value<T: std::str::FromStr>(key: &str, value: &str) -> Result<T, String> {
+    value
+        .parse()
+        .map_err(|_| format!("invalid Python build report value for {key}: {value}"))
+}
+
+fn parse_report_offsets(value: &str) -> Result<Vec<usize>, String> {
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    value
+        .split(',')
+        .map(|item| {
+            item.trim()
+                .parse()
+                .map_err(|_| format!("invalid Python build report offset: {item}"))
+        })
+        .collect()
 }
 
 fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationReport, String> {
@@ -453,85 +461,21 @@ fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationRep
 }
 
 fn cmd_watch(args: &[String]) -> Result<(), String> {
-    let mut config_path: Option<PathBuf> = None;
-    let mut input_map: Option<PathBuf> = None;
-    let mut output_map: Option<PathBuf> = None;
-    let mut entry_path: Option<PathBuf> = None;
-    let mut dts_out: Option<PathBuf> = None;
-    let mut obscurate: Option<bool> = None;
-    let mut seed: Option<u64> = None;
-    let mut once = false;
+    let request = BuildRequest::from_args(args).map_err(|e| e.to_string())?;
+    if request.help {
+        println!(
+            "usage: eudkit watch [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <main.ts>] [--once]"
+        );
+        return Ok(());
+    }
+    run_watch(&request)
+}
 
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--config" | "-c" => {
-                i += 1;
-                config_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --config")?,
-                ));
-            }
-            "--input" | "-i" => {
-                i += 1;
-                input_map = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --input")?,
-                ));
-            }
-            "--output" | "-o" => {
-                i += 1;
-                output_map = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --output")?,
-                ));
-            }
-            "--entry" | "-e" => {
-                i += 1;
-                entry_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --entry")?,
-                ));
-            }
-            "--dts" => {
-                i += 1;
-                dts_out = Some(PathBuf::from(args.get(i).ok_or("missing value for --dts")?));
-            }
-            "--obscurate" => obscurate = Some(true),
-            "--seed" => {
-                i += 1;
-                let s = args.get(i).ok_or("missing value for --seed")?;
-                seed = Some(s.parse::<u64>().map_err(|e| e.to_string())?);
-            }
-            "--once" => once = true,
-            "--watch" | "-w" => {}
-            other => return Err(format!("unknown argument for watch: {other}")),
-        }
-        i += 1;
-    }
-
-    let mut proj_cfg = if let Some(cfg_file) = config_path.as_ref() {
-        ProjectConfig::from_file(cfg_file).map_err(|e| e.to_string())?
-    } else if Path::new("eudkit.toml").exists() && (input_map.is_none() || output_map.is_none()) {
-        ProjectConfig::from_file("eudkit.toml").map_err(|e| e.to_string())?
-    } else {
-        ProjectConfig::default()
-    };
-
-    if let Some(inp) = input_map {
-        proj_cfg.input_map = inp;
-    }
-    if let Some(out) = output_map {
-        proj_cfg.output_map = out;
-    }
-    if let Some(ent) = entry_path {
-        proj_cfg.entry = Some(ent);
-    }
-    if let Some(dts) = dts_out {
-        proj_cfg.dts = Some(dts);
-    }
-    if let Some(obs) = obscurate {
-        proj_cfg.obscurate = obs;
-    }
-    if let Some(sd) = seed {
-        proj_cfg.obscurate_seed = Some(sd);
-    }
+fn run_watch(request: &BuildRequest) -> Result<(), String> {
+    let resolved = request.resolve().map_err(|e| e.to_string())?;
+    let proj_cfg = resolved.config;
+    let config_path = resolved.config_path;
+    let once = request.once;
 
     if proj_cfg.input_map.as_os_str().is_empty() || proj_cfg.output_map.as_os_str().is_empty() {
         return Err(
@@ -648,93 +592,19 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
 }
 
 fn cmd_build(args: &[String]) -> Result<(), String> {
-    if args.iter().any(|a| a == "--watch" || a == "-w") {
-        return cmd_watch(args);
+    let request = BuildRequest::from_args(args).map_err(|e| e.to_string())?;
+    if request.help {
+        println!(
+            "usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <script.(ts|py)>]"
+        );
+        return Ok(());
+    }
+    if request.watch {
+        return run_watch(&request);
     }
 
-    let mut config_path: Option<PathBuf> = None;
-    let mut input_map: Option<PathBuf> = None;
-    let mut output_map: Option<PathBuf> = None;
-    let mut entry_path: Option<PathBuf> = None;
-    let mut dts_out: Option<PathBuf> = None;
-    let mut obscurate: Option<bool> = None;
-    let mut seed: Option<u64> = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--config" | "-c" => {
-                i += 1;
-                config_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --config")?,
-                ));
-            }
-            "--input" | "-i" => {
-                i += 1;
-                input_map = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --input")?,
-                ));
-            }
-            "--output" | "-o" => {
-                i += 1;
-                output_map = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --output")?,
-                ));
-            }
-            "--entry" | "-e" => {
-                i += 1;
-                entry_path = Some(PathBuf::from(
-                    args.get(i).ok_or("missing value for --entry")?,
-                ));
-            }
-            "--dts" => {
-                i += 1;
-                dts_out = Some(PathBuf::from(args.get(i).ok_or("missing value for --dts")?));
-            }
-            "--obscurate" => obscurate = Some(true),
-            "--seed" => {
-                i += 1;
-                let s = args.get(i).ok_or("missing value for --seed")?;
-                seed = Some(s.parse::<u64>().map_err(|e| e.to_string())?);
-            }
-            "--watch" | "-w" => {}
-            "--help" | "-h" => {
-                println!("usage: eudkit build [--config <eudkit.toml>] [--input <in.scx> --output <out.scx>] [--entry <script.(ts|py)>]");
-                return Ok(());
-            }
-            other => return Err(format!("unknown argument for build: {other}")),
-        }
-        i += 1;
-    }
-
-    let mut proj_cfg = if let Some(cfg_file) = config_path {
-        ProjectConfig::from_file(cfg_file).map_err(|e| e.to_string())?
-    } else if Path::new("eudkit.toml").exists() && (input_map.is_none() || output_map.is_none()) {
-        ProjectConfig::from_file("eudkit.toml").map_err(|e| e.to_string())?
-    } else {
-        ProjectConfig::default()
-    };
-
-    if let Some(inp) = input_map {
-        proj_cfg.input_map = inp;
-    }
-    if let Some(out) = output_map {
-        proj_cfg.output_map = out;
-    }
-    if let Some(ent) = entry_path {
-        proj_cfg.entry = Some(ent);
-    }
-    if let Some(dts) = dts_out {
-        proj_cfg.dts = Some(dts);
-    }
-    if let Some(obs) = obscurate {
-        proj_cfg.obscurate = obs;
-    }
-    if let Some(sd) = seed {
-        proj_cfg.obscurate_seed = Some(sd);
-    }
-
-    execute_build(&proj_cfg).map(|_| ())
+    let resolved = request.resolve().map_err(|e| e.to_string())?;
+    execute_build(&resolved.config).map(|_| ())
 }
 
 fn cmd_migrate(args: &[String]) -> Result<(), String> {
@@ -931,5 +801,40 @@ fn main() {
     if let Err(err) = res {
         eprintln!("error: {err}");
         process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_python_report, parse_report_offsets};
+
+    #[test]
+    fn parses_the_python_build_report_including_patch_sites() {
+        let report = parse_python_report(
+            "trigger_count=12\n\
+             byte_buf_count=3\n\
+             vproc_count=1\n\
+             payload_offset=4096\n\
+             payload_size=512\n\
+             payload_entry_addr=285278210\n\
+             prt_offsets=16,32\n\
+             ort_offsets=48\n",
+        )
+        .expect("should parse report");
+
+        assert_eq!(report.trigger_count, 12);
+        assert_eq!(report.byte_buf_count, 3);
+        assert_eq!(report.payload_offset, 4096);
+        assert_eq!(report.payload_size, 512);
+        assert_eq!(report.payload_entry_addr, 285_278_210);
+        assert_eq!(report.prt_offsets, vec![16, 32]);
+        assert_eq!(report.ort_offsets, vec![48]);
+    }
+
+    #[test]
+    fn rejects_malformed_python_build_reports() {
+        assert!(parse_python_report("trigger_count=many\n").is_err());
+        assert!(parse_report_offsets("16,fast").is_err());
+        assert_eq!(parse_report_offsets("").unwrap(), Vec::<usize>::new());
     }
 }

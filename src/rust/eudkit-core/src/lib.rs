@@ -18,7 +18,7 @@ pub use allocator::{
 };
 pub use canonical::{CanonicalSymbols, CanonicalUnit};
 pub use chk::Chk;
-pub use config::ProjectConfig;
+pub use config::{BuildRequest, ProjectConfig, ResolvedBuild};
 pub use cp_string::{
     bytes_to_dwords, emit_cpstring_residue_stream, emit_cpstring_residue_stream_exprs,
     emit_cpstring_write_block, emit_format_parts_actions,
