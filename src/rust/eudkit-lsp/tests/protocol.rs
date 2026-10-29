@@ -193,6 +193,54 @@ impl LspClient {
         completion_labels(&response)
     }
 
+    fn hover(&mut self, text: &str, byte_offset: usize) -> Option<Value> {
+        let uri = self.uri.clone();
+        self.hover_for(&uri, text, byte_offset)
+    }
+
+    fn hover_for(&mut self, uri: &str, text: &str, byte_offset: usize) -> Option<Value> {
+        let (line, character) = position_at(text, byte_offset);
+        let response = self.request(
+            "textDocument/hover",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+            }),
+        );
+        assert!(
+            response.get("error").is_none(),
+            "hover returned an error: {response}"
+        );
+        response
+            .get("result")
+            .filter(|result| !result.is_null())
+            .cloned()
+    }
+
+    fn signature_help(&mut self, text: &str, byte_offset: usize) -> Option<Value> {
+        let uri = self.uri.clone();
+        self.signature_help_for(&uri, text, byte_offset)
+    }
+
+    fn signature_help_for(&mut self, uri: &str, text: &str, byte_offset: usize) -> Option<Value> {
+        let (line, character) = position_at(text, byte_offset);
+        let response = self.request(
+            "textDocument/signatureHelp",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+            }),
+        );
+        assert!(
+            response.get("error").is_none(),
+            "signature help returned an error: {response}"
+        );
+        response
+            .get("result")
+            .filter(|result| !result.is_null())
+            .cloned()
+    }
+
     fn diagnostics(&mut self) -> Vec<Value> {
         let uri = self.uri.clone();
         self.diagnostics_for(&uri)
@@ -278,6 +326,12 @@ fn completion_labels(response: &Value) -> Vec<String> {
                 .to_string()
         })
         .collect()
+}
+
+fn hover_markdown(hover: &Value) -> &str {
+    hover["contents"]["value"]
+        .as_str()
+        .expect("hover should contain markdown contents")
 }
 
 fn assert_canonical_units(labels: &[String]) {
@@ -1049,7 +1103,8 @@ fn does_not_complete_outside_the_unit_slot_in_typescript_and_javascript() {
                 "const message = \"KillUnit(\"".len(),
             ),
             ("const unit = \"Mar", "const unit = \"Mar".len()),
-            ("eud.KillUnit(\"Mar\", 1)", "eud.KillUnit(\"Mar".len()),
+            ("eudkit.DisplayText(\"Mar", "eudkit.DisplayText(\"Mar".len()),
+            ("console.log(\"Mar", "console.log(\"Mar".len()),
         ];
 
         for (version, (text, offset)) in cases.into_iter().enumerate() {
@@ -1057,6 +1112,412 @@ fn does_not_complete_outside_the_unit_slot_in_typescript_and_javascript() {
             assert!(
                 client.completion_for(uri, text, offset).is_empty(),
                 "must not complete in {text:?} for {language_id}"
+            );
+        }
+    }
+
+    client.shutdown();
+}
+
+#[test]
+fn completes_qualified_supported_calls_in_typescript_and_javascript() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    for (uri, language_id) in [
+        (TYPESCRIPT_URI, "typescript"),
+        (JAVASCRIPT_URI, "javascript"),
+    ] {
+        let source = "eudkit.KillUnit(\"";
+        client.open_document(uri, language_id, source);
+        assert_canonical_units(&client.completion_for(uri, source, source.len()));
+
+        let partial = "eudkit.KillUnit(\"Mar";
+        client.change_document(uri, partial, 2);
+        assert_canonical_units(&client.completion_for(uri, partial, partial.len()));
+    }
+
+    client.shutdown();
+}
+
+#[test]
+fn initializes_with_hover_and_signature_help_capabilities() {
+    let mut client = LspClient::spawn();
+    let initialize = client.initialize();
+
+    let capabilities = &initialize["result"]["capabilities"];
+    assert_eq!(capabilities["hoverProvider"], json!(true));
+    assert_eq!(
+        capabilities["signatureHelpProvider"]["triggerCharacters"],
+        json!(["(", ","])
+    );
+    assert_eq!(
+        capabilities["signatureHelpProvider"]["retriggerCharacters"],
+        json!([","])
+    );
+
+    client.shutdown();
+}
+
+#[test]
+fn hovers_over_python_symbols_and_supported_calls() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    let unit = "KillUnit(\"Terran Marine\", 1)";
+    client.open(unit);
+    let hover = client
+        .hover(unit, unit.find("Terran Marine").unwrap() + 2)
+        .expect("a canonical unit should have hover");
+    let text = hover_markdown(&hover);
+    assert!(text.contains("**Terran Marine**"), "{text}");
+    assert!(text.contains("Canonical unit · ID 0"), "{text}");
+
+    let filter = "KillUnit(\"Any unit\", 1)";
+    client.change(filter, 2);
+    let hover = client
+        .hover(filter, filter.find("Any unit").unwrap() + 2)
+        .expect("a Stock Unit Filter should have hover");
+    let text = hover_markdown(&hover);
+    assert!(text.contains("Stock Unit Filter · ID 229"), "{text}");
+
+    let location = "Bring(AllPlayers, AtLeast, 1, \"Terran Marine\", \"Anywhere\")";
+    client.change(location, 3);
+    let hover = client
+        .hover(location, location.find("Anywhere").unwrap() + 2)
+        .expect("a canonical location should have hover");
+    let text = hover_markdown(&hover);
+    assert!(text.contains("Canonical location · ID 64"), "{text}");
+
+    let switch = "SetSwitch(\"Switch 1\")";
+    client.change(switch, 4);
+    let hover = client
+        .hover(switch, switch.find("Switch 1").unwrap() + 2)
+        .expect("a canonical switch should have hover");
+    let text = hover_markdown(&hover);
+    assert!(text.contains("Canonical switch · ID 0"), "{text}");
+
+    let call = "KillUnit(\"Terran Marine\", 1)";
+    client.change(call, 5);
+    let hover = client
+        .hover(call, call.find("KillUnit").unwrap() + 2)
+        .expect("a supported call should have hover");
+    let text = hover_markdown(&hover);
+    assert!(text.contains("**KillUnit(unit, player)**"), "{text}");
+    assert!(text.contains("Returns `ActionSpec`."), "{text}");
+    assert!(
+        text.contains("`unit` accepts a canonical unit name"),
+        "{text}"
+    );
+
+    client.shutdown();
+}
+
+#[test]
+fn hovers_over_map_context_symbols_when_a_project_is_present() {
+    let temp = tempfile::tempdir().unwrap();
+    let map_path = temp.path().join("map.scx");
+    copy_fixture_to("tests/outputmap/basemap/사이비2.scx", &map_path);
+    let custom_unit = custom_unit_name(&map_path);
+    write_project(temp.path(), "map.scx");
+    let document = temp.path().join("main.py");
+
+    let mut client = LspClient::spawn_for(&document);
+    client.initialize();
+
+    let source = format!("KillUnit(\"{custom_unit}\")\nMinimapPing(\"dvs1\")");
+    client.open(&source);
+
+    let hover = client
+        .hover(&source, source.find(&custom_unit).unwrap() + 1)
+        .expect("a map-context unit should have hover");
+    let text = hover_markdown(&hover);
+    assert!(text.contains("Map Context unit"), "{text}");
+
+    let hover = client
+        .hover(&source, source.find("dvs1").unwrap() + 1)
+        .expect("a map-context location should have hover");
+    let text = hover_markdown(&hover);
+    assert!(text.contains("Map Context location"), "{text}");
+    assert!(text.contains("Bounds:"), "{text}");
+
+    client.shutdown();
+}
+
+#[test]
+fn hovers_over_typescript_and_javascript_units_and_qualified_calls() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    for (uri, language_id) in [
+        (TYPESCRIPT_URI, "typescript"),
+        (JAVASCRIPT_URI, "javascript"),
+    ] {
+        let source = "eudkit.KillUnit(\"Terran Marine\", 1);";
+        client.open_document(uri, language_id, source);
+
+        let hover = client
+            .hover_for(uri, source, source.find("Terran Marine").unwrap() + 2)
+            .unwrap_or_else(|| panic!("{language_id} unit should have hover"));
+        let text = hover_markdown(&hover);
+        assert!(
+            text.contains("Canonical unit · ID 0"),
+            "{language_id}: {text}"
+        );
+
+        let hover = client
+            .hover_for(uri, source, source.find("KillUnit").unwrap() + 2)
+            .unwrap_or_else(|| panic!("{language_id} call should have hover"));
+        let text = hover_markdown(&hover);
+        assert!(
+            text.contains("**KillUnit(unit, player)**"),
+            "{language_id}: {text}"
+        );
+        assert!(text.contains("Returns `Action`."), "{language_id}: {text}");
+    }
+
+    client.shutdown();
+}
+
+#[test]
+fn completes_and_hovers_legacy_qualified_calls_in_typescript_and_javascript() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    for (uri, language_id) in [
+        (TYPESCRIPT_URI, "typescript"),
+        (JAVASCRIPT_URI, "javascript"),
+    ] {
+        let source = "eud.KillUnit(\"Mar";
+        client.open_document(uri, language_id, source);
+        assert_canonical_units(&client.completion_for(uri, source, source.len()));
+
+        let closed = "eud.KillUnit(\"Terran Marine\", 1);";
+        client.change_document(uri, closed, 2);
+        let hover = client
+            .hover_for(uri, closed, closed.find("KillUnit").unwrap() + 2)
+            .unwrap_or_else(|| panic!("{language_id} legacy qualified call should have hover"));
+        let text = hover_markdown(&hover);
+        assert!(
+            text.contains("**KillUnit(unit, player)**"),
+            "{language_id}: {text}"
+        );
+        assert!(text.contains("Returns `Action`."), "{language_id}: {text}");
+    }
+
+    client.shutdown();
+}
+
+#[test]
+fn provides_python_signature_help_at_calls_and_keyword_arguments() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    let open_call = "KillUnit(";
+    client.open(open_call);
+    let signature = client
+        .signature_help(open_call, open_call.len())
+        .expect("KillUnit( should have signature help");
+    assert_eq!(
+        signature["signatures"][0]["label"],
+        "KillUnit(unit, player)"
+    );
+    assert_eq!(signature["activeParameter"], 0);
+
+    let after_comma = "KillUnit(\"Terran Marine\", ";
+    client.change(after_comma, 2);
+    let signature = client
+        .signature_help(after_comma, after_comma.len())
+        .expect("a call after a comma should have signature help");
+    assert_eq!(
+        signature["signatures"][0]["label"],
+        "KillUnit(unit, player)"
+    );
+    assert_eq!(signature["activeParameter"], 1);
+
+    let keyword = "KillUnit(unit=\"";
+    client.change(keyword, 3);
+    let signature = client
+        .signature_help(keyword, keyword.len())
+        .expect("a keyword argument should have signature help");
+    assert_eq!(
+        signature["signatures"][0]["label"],
+        "KillUnit(unit, player)"
+    );
+    assert_eq!(signature["activeParameter"], 0);
+
+    let keyword_after_positional = "KillUnit(player=1, unit=\"";
+    client.change(keyword_after_positional, 4);
+    let signature = client
+        .signature_help(keyword_after_positional, keyword_after_positional.len())
+        .expect("a keyword argument should override its positional index");
+    assert_eq!(
+        signature["signatures"][0]["label"],
+        "KillUnit(unit, player)"
+    );
+    assert_eq!(signature["activeParameter"], 0);
+    assert!(
+        signature["signatures"][0]["documentation"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Returns `ActionSpec`."),
+        "{signature}"
+    );
+
+    let switch = "SetSwitch(";
+    client.change(switch, 5);
+    let signature = client
+        .signature_help(switch, switch.len())
+        .expect("SetSwitch( should have signature help");
+    assert_eq!(
+        signature["signatures"][0]["label"],
+        "SetSwitch(switch, state)"
+    );
+    assert_eq!(signature["activeParameter"], 0);
+
+    let keyword = "MoveLocation(dest_location=\"";
+    client.change(keyword, 6);
+    let signature = client
+        .signature_help(keyword, keyword.len())
+        .expect("a Python keyword argument should select its parameter");
+    assert_eq!(
+        signature["signatures"][0]["label"],
+        "MoveLocation(location, unit, player, dest_location)"
+    );
+    assert_eq!(signature["activeParameter"], 3);
+
+    client.shutdown();
+}
+
+#[test]
+fn provides_signature_help_for_qualified_typescript_and_javascript_calls() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    for (uri, language_id) in [
+        (TYPESCRIPT_URI, "typescript"),
+        (JAVASCRIPT_URI, "javascript"),
+    ] {
+        let open_call = "eudkit.KillUnit(";
+        client.open_document(uri, language_id, open_call);
+        let signature = client
+            .signature_help_for(uri, open_call, open_call.len())
+            .unwrap_or_else(|| panic!("{language_id} qualified call should have signature help"));
+        assert_eq!(
+            signature["signatures"][0]["label"],
+            "KillUnit(unit, player)"
+        );
+        assert_eq!(signature["activeParameter"], 0);
+
+        let after_comma = "eudkit.KillUnit(\"Terran Marine\", ";
+        client.change_document(uri, after_comma, 2);
+        let signature = client
+            .signature_help_for(uri, after_comma, after_comma.len())
+            .unwrap_or_else(|| panic!("{language_id} comma should advance the parameter"));
+        assert_eq!(
+            signature["signatures"][0]["label"],
+            "KillUnit(unit, player)"
+        );
+        assert_eq!(signature["activeParameter"], 1);
+        assert!(
+            signature["signatures"][0]["documentation"]["value"]
+                .as_str()
+                .unwrap()
+                .contains("Returns `Action`."),
+            "{language_id}: {signature}"
+        );
+
+        let switch = "eudkit.SetSwitch(";
+        client.change_document(uri, switch, 3);
+        let signature = client
+            .signature_help_for(uri, switch, switch.len())
+            .unwrap_or_else(|| {
+                panic!("{language_id} qualified SetSwitch should have signature help")
+            });
+        assert_eq!(
+            signature["signatures"][0]["label"], "SetSwitch(switchId, action)",
+            "{language_id}: {signature}"
+        );
+        assert_eq!(
+            signature["activeParameter"], 0,
+            "{language_id}: {signature}"
+        );
+
+        let keyword = "eudkit.MoveLocation(destLocation=\"";
+        client.change_document(uri, keyword, 4);
+        let signature = client
+            .signature_help_for(uri, keyword, keyword.len())
+            .unwrap_or_else(|| {
+                panic!("{language_id} qualified MoveLocation should have signature help")
+            });
+        assert_eq!(
+            signature["signatures"][0]["label"],
+            "MoveLocation(location, onUnit, owner, destLocation)",
+            "{language_id}: {signature}"
+        );
+        assert_eq!(
+            signature["activeParameter"], 3,
+            "{language_id}: {signature}"
+        );
+    }
+
+    client.shutdown();
+}
+
+#[test]
+fn returns_no_hover_or_signature_help_outside_supported_contexts() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    let unknown = "KillUnit(\"Not A Unit\", 1)";
+    client.open(unknown);
+    assert!(
+        client
+            .hover(unknown, unknown.find("Not A Unit").unwrap() + 2)
+            .is_none(),
+        "an unknown symbol should not have hover"
+    );
+
+    let non_call = "value = 1";
+    client.change(non_call, 2);
+    assert!(
+        client.hover(non_call, 2).is_none(),
+        "a non-call identifier should not have hover"
+    );
+
+    let unsupported_call = "DisplayText(";
+    client.change(unsupported_call, 3);
+    assert!(
+        client
+            .signature_help(unsupported_call, unsupported_call.len())
+            .is_none(),
+        "an unsupported call should not have signature help"
+    );
+
+    for (uri, language_id) in [
+        (TYPESCRIPT_URI, "typescript"),
+        (JAVASCRIPT_URI, "javascript"),
+    ] {
+        for unsupported in [
+            "console.log(\"Not A Unit\")",
+            "eudkit.DisplayText(\"Not A Unit\")",
+        ] {
+            client.open_document(uri, language_id, unsupported);
+            assert!(
+                client
+                    .hover_for(
+                        uri,
+                        unsupported,
+                        unsupported.find("Not A Unit").unwrap() + 2
+                    )
+                    .is_none(),
+                "{language_id} unsupported member call should not have hover: {unsupported}"
+            );
+            assert!(
+                client
+                    .signature_help_for(uri, unsupported, unsupported.find('(').unwrap() + 1)
+                    .is_none(),
+                "{language_id} unsupported member call should not have signature help: {unsupported}"
             );
         }
     }
@@ -1285,4 +1746,125 @@ fn accepts_known_custom_units_in_typescript_with_a_map_context() {
 
         client.shutdown();
     }
+}
+
+#[test]
+fn warns_when_group_players_use_eud_offsets_in_python() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    let source = concat!(
+        "Deaths(Foes, Exactly, 15, 300)\n",
+        "DeathsX(AllPlayers, Exactly, 15, 300)\n",
+        "SetDeaths(c.Foes, Exactly, 15, 0x12C)\n",
+        "SetDeathsX(eud.AllPlayers, Exactly, 15, +300)\n",
+    );
+    client.open(source);
+    let diagnostics = client.diagnostics();
+    assert_eq!(diagnostics.len(), 4);
+
+    for (diagnostic, player) in
+        diagnostics
+            .iter()
+            .zip(["Foes", "AllPlayers", "c.Foes", "eud.AllPlayers"])
+    {
+        assert_warning(diagnostic, "ambiguous");
+        assert_warning(diagnostic, player.rsplit('.').next().unwrap());
+        assert_warning(diagnostic, "Player1");
+
+        let start = source.find(player).unwrap();
+        assert_range(diagnostic, source, start, start + player.len());
+    }
+
+    let valid = concat!(
+        "Deaths(Foes, Exactly, 15, \"Any unit\")\n",
+        "Deaths(Foes, Exactly, 15, 229)\n",
+        "Deaths(Foes, Exactly, 15, 0)\n",
+        "Deaths(Foes, Exactly, 15, 232)\n",
+        "Deaths(Player1, Exactly, 15, 300)\n",
+        "Deaths(CurrentPlayer, Exactly, 15, 300)\n",
+        "Deaths(player, Exactly, 15, 300)\n",
+        "Deaths(Foe, Exactly, 15, 300)\n",
+        "Deaths(Foes + 1, Exactly, 15, 300)\n",
+        "Deaths(Foes, Exactly, 15, 232 + 1)\n",
+        "Bring(AllPlayers, AtLeast, 1, \"Terran Marine\", \"Anywhere\")\n",
+    );
+    client.change(valid, 2);
+    assert!(
+        client.diagnostics().is_empty(),
+        "stock players, filters, variables, and arithmetic must not warn"
+    );
+
+    client.change("Deaths(Foes, Exactly, 15, 300)", 3);
+    assert_eq!(
+        client.diagnostics().len(),
+        1,
+        "the warning should return after the ambiguity is reintroduced"
+    );
+
+    client.shutdown();
+}
+
+#[test]
+fn warns_when_group_players_use_eud_offsets_in_typescript_and_javascript() {
+    let mut client = LspClient::spawn();
+    client.initialize();
+
+    let source = concat!(
+        "Deaths(Foes, Exactly, 15, 300);\n",
+        "DeathsX(AllPlayers, Exactly, 15, 300);\n",
+        "SetDeaths(c.Foes, Exactly, 15, 0x12C);\n",
+        "SetDeathsX(eud.AllPlayers, Exactly, 15, +300);\n",
+    );
+    let valid = concat!(
+        "Deaths(Foes, Exactly, 15, \"Any unit\");\n",
+        "Deaths(Foes, Exactly, 15, 229);\n",
+        "Deaths(Foes, Exactly, 15, 0);\n",
+        "Deaths(Foes, Exactly, 15, 232);\n",
+        "Deaths(Player1, Exactly, 15, 300);\n",
+        "Deaths(CurrentPlayer, Exactly, 15, 300);\n",
+        "Deaths(player, Exactly, 15, 300);\n",
+        "Deaths(Foe, Exactly, 15, 300);\n",
+        "Deaths(Foes + 1, Exactly, 15, 300);\n",
+        "Deaths(Foes, Exactly, 15, 232 + 1);\n",
+        "Bring(AllPlayers, AtLeast, 1, \"Terran Marine\", \"Anywhere\");\n",
+    );
+
+    for (uri, language_id) in [
+        (TYPESCRIPT_URI, "typescript"),
+        (TSX_URI, "typescriptreact"),
+        (JAVASCRIPT_URI, "javascript"),
+        (JSX_URI, "javascriptreact"),
+    ] {
+        client.open_document(uri, language_id, source);
+        let diagnostics = client.diagnostics_for(uri);
+        assert_eq!(diagnostics.len(), 4, "{language_id}");
+
+        for (diagnostic, player) in
+            diagnostics
+                .iter()
+                .zip(["Foes", "AllPlayers", "c.Foes", "eud.AllPlayers"])
+        {
+            assert_warning(diagnostic, "ambiguous");
+            assert_warning(diagnostic, player.rsplit('.').next().unwrap());
+            assert_warning(diagnostic, "Player1");
+
+            let start = source.find(player).unwrap();
+            assert_range(diagnostic, source, start, start + player.len());
+        }
+
+        client.change_document(uri, valid, 2);
+        assert!(
+            client.diagnostics_for(uri).is_empty(),
+            "{language_id} must not warn about stock or ambiguous arguments"
+        );
+
+        client.close_document(uri);
+        assert!(
+            client.diagnostics_for(uri).is_empty(),
+            "{language_id} should clear warnings on close"
+        );
+    }
+
+    client.shutdown();
 }

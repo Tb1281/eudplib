@@ -36,7 +36,7 @@ impl TsLanguage {
         }
     }
 
-    fn source_type(self) -> SourceType {
+    pub(crate) fn source_type(self) -> SourceType {
         match self {
             Self::TypeScript => SourceType::ts(),
             Self::Tsx => SourceType::tsx(),
@@ -207,7 +207,11 @@ fn argument_index(tokens: &[Token], open_index: usize, string_index: usize) -> O
 }
 
 /// Function name immediately before an open parenthesis.
-fn call_name<'a>(source: &'a str, tokens: &[Token], open_index: usize) -> Option<&'a str> {
+pub(crate) fn call_name<'a>(
+    source: &'a str,
+    tokens: &[Token],
+    open_index: usize,
+) -> Option<&'a str> {
     let name_token = tokens.get(open_index.checked_sub(1)?)?;
     if name_token.kind() != Kind::Ident {
         return None;
@@ -216,14 +220,26 @@ fn call_name<'a>(source: &'a str, tokens: &[Token], open_index: usize) -> Option
     if open_index >= 2
         && matches!(
             tokens[open_index - 2].kind(),
-            Kind::Dot | Kind::QuestionDot | Kind::Function | Kind::New | Kind::Class
+            Kind::Function | Kind::New | Kind::Class
         )
     {
         return None;
     }
 
     let span = name_token.span();
-    source.get(span.start as usize..span.end as usize)
+    let name = source.get(span.start as usize..span.end as usize)?;
+
+    // Qualified calls such as `eudkit.KillUnit(...)` are supported only when
+    // the member name is an eudkit API. This keeps ordinary member calls such
+    // as `console.log(...)` out of the symbol and signature analysis, while
+    // still allowing the TypeScript/JavaScript API's namespace form.
+    let qualified =
+        open_index >= 2 && matches!(tokens[open_index - 2].kind(), Kind::Dot | Kind::QuestionDot);
+    if qualified && function_symbols(name).is_none() {
+        return None;
+    }
+
+    Some(name)
 }
 
 fn pop_if_matches(openers: &mut Vec<(Kind, usize)>, expected: Kind) -> bool {
@@ -394,32 +410,39 @@ fn call_name_at(source: &str, open_index: usize) -> Option<&str> {
         return None;
     }
 
-    if is_member_or_declaration(source, name_start) {
+    let name = source.get(name_start..name_end)?;
+    if is_declaration(source, name_start)
+        || (is_member_access(source, name_start) && function_symbols(name).is_none())
+    {
         return None;
     }
 
-    source.get(name_start..name_end)
+    Some(name)
 }
 
-fn is_member_or_declaration(source: &str, name_start: usize) -> bool {
+/// Whether the identifier at `name_start` names a function or class declaration.
+fn is_declaration(source: &str, name_start: usize) -> bool {
     let Some(before_end) = trim_trivia_end(source, name_start) else {
         return false;
     };
-
-    if before_end > 0
-        && source[..before_end]
-            .chars()
-            .next_back()
-            .is_some_and(|character| character == '.')
-    {
-        return true;
-    }
 
     let previous_start = identifier_start(source, before_end);
     matches!(
         &source[previous_start..before_end],
         "function" | "new" | "class"
     )
+}
+
+/// Whether the identifier at `name_start` follows a member-access dot.
+fn is_member_access(source: &str, name_start: usize) -> bool {
+    let Some(before_end) = trim_trivia_end(source, name_start) else {
+        return false;
+    };
+
+    source[..before_end]
+        .chars()
+        .next_back()
+        .is_some_and(|character| character == '.')
 }
 
 /// End offset after trimming trailing whitespace and comments.
@@ -694,13 +717,52 @@ mod tests {
                 "const message = \"KillUnit(\"".len(),
             ),
             ("const unit = \"Mar", "const unit = \"Mar".len()),
-            ("eud.KillUnit(\"Mar\", 1)", "eud.KillUnit(\"Mar".len()),
             ("function KillUnit(\"Mar", "function KillUnit(\"Mar".len()),
+            ("foo.DisplayText(\"Mar", "foo.DisplayText(\"Mar".len()),
+            ("console.log(\"Mar", "console.log(\"Mar".len()),
         ];
 
         for (source, offset) in cases {
             assert_eq!(
                 slot(source, TsLanguage::TypeScript, offset),
+                None,
+                "must not complete in {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn completes_qualified_supported_calls() {
+        for (language, source) in [
+            (TsLanguage::TypeScript, "eudkit.KillUnit(\"Mar\", 1)"),
+            (TsLanguage::Tsx, "eudkit.KillUnit(\"Mar\", 1)"),
+            (TsLanguage::JavaScript, "eudkit.KillUnit(\"Mar\", 1)"),
+        ] {
+            assert_eq!(
+                slot(source, language, "eudkit.KillUnit(\"Mar".len()),
+                Some(17..20),
+                "{language:?} should complete a qualified supported call"
+            );
+        }
+
+        let source = "eudkit.KillUnit(\"Mar";
+        assert_eq!(
+            slot(source, TsLanguage::TypeScript, source.len()),
+            Some(17..20)
+        );
+
+        let source = "eudkit?.KillUnit(\"Mar";
+        assert_eq!(
+            slot(source, TsLanguage::TypeScript, source.len()),
+            Some(18..21)
+        );
+    }
+
+    #[test]
+    fn does_not_complete_qualified_unsupported_calls() {
+        for source in ["eudkit.DisplayText(\"Mar", "console.log(\"Mar"] {
+            assert_eq!(
+                slot(source, TsLanguage::TypeScript, source.len()),
                 None,
                 "must not complete in {source:?}"
             );

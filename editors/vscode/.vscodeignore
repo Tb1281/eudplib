@@ -3,6 +3,7 @@
 .gitignore
 src/**
 test/**
+scripts/**
 dist-test/**
 node_modules/**
 dist/*.vsix

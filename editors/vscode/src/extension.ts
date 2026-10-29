@@ -16,6 +16,7 @@ import {
   type SearchAttempt,
   type ServerSource,
 } from "./serverPath";
+import { checkServerVersion, downloadServerBinary } from "./serverDownload";
 
 const CLIENT_ID = "eudkit-lsp-client";
 const CLIENT_NAME = "eudkit LSP";
@@ -32,7 +33,11 @@ class EudkitLanguageServer implements vscode.Disposable {
   private disposed = false;
   private queue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly extensionRoot: string) {
+  constructor(
+    private readonly extensionRoot: string,
+    private readonly storagePath: string,
+    private readonly extensionVersion: string,
+  ) {
     this.output = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
   }
 
@@ -100,17 +105,60 @@ class EudkitLanguageServer implements vscode.Disposable {
       pathExtensions: process.env.PATHEXT,
     });
 
-    if (!resolution.found) {
-      this.reportNotFound(resolution.searched);
-      return;
+    let serverPath: string;
+    let serverSource: ServerSource;
+
+    if (resolution.found) {
+      const version = await checkServerVersion(
+        resolution.path,
+        this.extensionVersion,
+      );
+      if (this.disposed || this.client) {
+        return;
+      }
+      if (!version.ok) {
+        this.reportVersionFailure(resolution.path, version.error);
+        return;
+      }
+      this.log(
+        `Found eudkit-lsp ${version.version} from ${describeSource(resolution.source)}: ${resolution.path}`,
+      );
+      serverPath = resolution.path;
+      serverSource = resolution.source;
+    } else {
+      this.logSearched(resolution.searched);
+      this.log(
+        `Downloading the eudkit-lsp ${this.extensionVersion} release asset for ${process.platform}/${process.arch}.`,
+      );
+      const download = await downloadServerBinary({
+        extensionVersion: this.extensionVersion,
+        storagePath: this.storagePath,
+        platform: process.platform,
+        arch: process.arch,
+        log: (line) => this.log(line),
+      });
+      if (this.disposed || this.client) {
+        return;
+      }
+      if (!download.ok) {
+        this.reportNotFound(download.error);
+        return;
+      }
+      this.log(
+        `Using eudkit-lsp ${download.version} from ${
+          download.source === "cache" ? "the verified download cache" : "GitHub Releases"
+        }: ${download.path}`,
+      );
+      serverPath = download.path;
+      serverSource = "download";
     }
 
     this.log(
-      `Starting eudkit-lsp from ${describeSource(resolution.source)}: ${resolution.path}`,
+      `Starting eudkit-lsp from ${describeSource(serverSource)}: ${serverPath}`,
     );
 
     const serverOptions: ServerOptions = {
-      command: resolution.path,
+      command: serverPath,
       args: [],
       transport: TransportKind.stdio,
       options: {
@@ -128,18 +176,10 @@ class EudkitLanguageServer implements vscode.Disposable {
       ],
       outputChannel: this.output,
       errorHandler: this.createErrorHandler(),
-      middleware: {
-        // Pylance and tsserver own API and type diagnostics. The eudkit
-        // server only contributes canonical unit completion, so never publish
-        // its diagnostics even if a future server version starts sending them.
-        handleDiagnostics: (uri, diagnostics) => {
-          if (diagnostics.length > 0) {
-            this.log(
-              `Ignoring ${diagnostics.length} diagnostic(s) from eudkit LSP for ${uri.toString()}; Pylance/tsserver own type checking.`,
-            );
-          }
-        },
-      },
+      // Intentionally no handleDiagnostics middleware: eudkit's Map Symbol/EUD
+      // warnings must reach the Problems panel. This client only wires the
+      // shared server and never publishes or synthesizes type diagnostics;
+      // Pylance and tsserver remain separate clients.
     };
 
     const client = new LanguageClient(
@@ -172,9 +212,9 @@ class EudkitLanguageServer implements vscode.Disposable {
         this.intentionalStop = false;
       }
       this.log(
-        `Failed to start eudkit-lsp at ${resolution.path}: ${formatError(error)}`,
+        `Failed to start eudkit-lsp at ${serverPath}: ${formatError(error)}`,
       );
-      void this.promptStartFailure(resolution.path, error);
+      void this.promptStartFailure(serverPath, error);
     }
   }
 
@@ -245,13 +285,7 @@ class EudkitLanguageServer implements vscode.Disposable {
     );
   }
 
-  private reportNotFound(searched: readonly SearchAttempt[]): void {
-    const bundled = bundledServerPath(
-      this.extensionRoot,
-      process.platform,
-      process.arch,
-    );
-
+  private logSearched(searched: readonly SearchAttempt[]): void {
     this.log("Could not find eudkit-lsp. Searched:");
     for (const attempt of searched) {
       this.log(
@@ -260,15 +294,39 @@ class EudkitLanguageServer implements vscode.Disposable {
         }`,
       );
     }
+  }
+
+  private reportNotFound(downloadError: string): void {
+    const bundled = bundledServerPath(
+      this.extensionRoot,
+      process.platform,
+      process.arch,
+    );
+
+    this.log(`Release download failed: ${downloadError}`);
 
     const message =
-      `Could not find eudkit-lsp. Set "eudkit.lsp.path" (absolute or workspace-relative), ` +
-      `set EUDKIT_LSP_PATH, add eudkit-lsp to PATH, or bundle it at ${bundled}. ` +
-      `See the '${OUTPUT_CHANNEL_NAME}' output channel for every path that was tried.`;
+      `Could not find or download eudkit-lsp for ${process.platform}/${process.arch}. ` +
+      `${downloadError} ` +
+      `Set "eudkit.lsp.path" (absolute or workspace-relative), set EUDKIT_LSP_PATH, ` +
+      `add eudkit-lsp to PATH, or bundle it at ${bundled}. ` +
+      `See the '${OUTPUT_CHANNEL_NAME}' output channel for every source, URL, and error that was tried.`;
 
     void vscode.window
       .showErrorMessage(message, "Open Settings", "Show Output", "Restart")
       .then((selection) => this.handlePrompt(selection, "retry after resolution failure"));
+  }
+
+  private reportVersionFailure(serverPath: string, error: string): void {
+    this.log(`Rejected eudkit-lsp at ${serverPath}: ${error}`);
+    const message =
+      `${error} The installed eudkit-vscode extension is ${this.extensionVersion}. ` +
+      `Set "eudkit.lsp.path" to a compatible eudkit-lsp or reinstall the matching release assets. ` +
+      `See the '${OUTPUT_CHANNEL_NAME}' output channel for details.`;
+
+    void vscode.window
+      .showErrorMessage(message, "Open Settings", "Show Output", "Restart")
+      .then((selection) => this.handlePrompt(selection, "retry after version mismatch"));
   }
 
   private async promptStartFailure(
@@ -328,6 +386,8 @@ function describeSource(source: ServerSource): string {
       return "PATH";
     case "bundled":
       return "bundled binary";
+    case "download":
+      return "GitHub release download";
   }
 }
 
@@ -350,7 +410,11 @@ function formatError(error: unknown): string {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  const server = new EudkitLanguageServer(context.extensionUri.fsPath);
+  const server = new EudkitLanguageServer(
+    context.extensionUri.fsPath,
+    context.globalStorageUri.fsPath,
+    String(context.extension.packageJSON.version),
+  );
 
   context.subscriptions.push(
     server,

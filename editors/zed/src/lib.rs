@@ -1,4 +1,5 @@
-//! Zed extension that runs the shared `eudkit-lsp` language server for Python.
+//! Zed extension that runs the shared `eudkit-lsp` language server for Python,
+//! TypeScript, TSX, and JavaScript.
 //!
 //! The extension deliberately contains no completion logic. It only resolves a
 //! binary and lets Zed speak LSP to it, so Zed and VS Code see the same
@@ -17,6 +18,9 @@ const LANGUAGE_SERVER_ID: &str = "eudkit-lsp";
 const BINARY_NAME: &str = "eudkit-lsp";
 const ENV_OVERRIDE: &str = "EUDKIT_LSP_PATH";
 const RELEASE_REPOSITORY: &str = "Tb1281/eudplib";
+/// Pinned at compile time from the extension package version. Downloads come
+/// from this exact release tag and the cache is version-scoped, so a cached
+/// binary cannot be reused by a different extension version.
 const RELEASE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Release assets published for `eudkit-lsp`.
@@ -113,7 +117,7 @@ impl EudkitExtension {
         let asset_url = release_asset_url(RELEASE_VERSION, asset_name);
 
         let version_dir = format!("eudkit-lsp-{RELEASE_VERSION}");
-        let binary_relative = format!("{version_dir}/{asset_name}");
+        let binary_relative = versioned_binary_relative_path(RELEASE_VERSION, asset_name);
         let work_dir = extension_work_dir()?;
         let binary_path = work_dir.join(&binary_relative);
 
@@ -152,27 +156,28 @@ impl EudkitExtension {
         let checksum_url = format!("{asset_url}.sha256");
         let checksum_relative = format!("{binary_relative}.sha256");
         let checksum_path = work_dir.join(&checksum_relative);
-        match download_published_checksum(&checksum_url, &checksum_relative, &checksum_path)? {
-            Some(published_checksum) => {
-                let contents = fs::read(&temp_path).map_err(|error| {
-                    format!(
-                        "failed to read downloaded '{}': {error}",
-                        temp_path.display()
-                    )
-                })?;
-                verify_sha256(&contents, &published_checksum).map_err(|error| {
-                    remove_file_if_exists(&temp_path);
-                    format!(
-                        "refusing to install {asset_name}: {error} (published at {checksum_url})"
-                    )
-                })?;
-                println!("eudkit-lsp: verified SHA-256 checksum for {asset_name}");
-            }
-            None => println!(
-                "eudkit-lsp: warning: no published checksum at {checksum_url}; \
-                 continuing without checksum verification"
-            ),
-        }
+        let published_checksum = download_published_checksum(
+            asset_name,
+            &checksum_url,
+            &checksum_relative,
+            &checksum_path,
+        )
+        .map_err(|error| {
+            remove_file_if_exists(&temp_path);
+            error
+        })?;
+        let contents = fs::read(&temp_path).map_err(|error| {
+            remove_file_if_exists(&temp_path);
+            format!(
+                "failed to read downloaded '{}': {error}",
+                temp_path.display()
+            )
+        })?;
+        verify_sha256(&contents, &published_checksum).map_err(|error| {
+            remove_file_if_exists(&temp_path);
+            format!("refusing to install {asset_name}: {error} (published at {checksum_url})")
+        })?;
+        println!("eudkit-lsp: verified SHA-256 checksum for {asset_name}");
 
         remove_file_if_exists(&binary_path);
         fs::rename(&temp_path, &binary_path).map_err(|error| {
@@ -267,28 +272,45 @@ fn make_executable(os: Os, relative_path: &str) -> Result<()> {
 }
 
 fn download_published_checksum(
+    asset_name: &str,
     checksum_url: &str,
     checksum_relative: &str,
     checksum_path: &Path,
-) -> Result<Option<String>> {
+) -> Result<String> {
     match zed::download_file(
         checksum_url,
         checksum_relative,
         DownloadedFileType::Uncompressed,
     ) {
-        Ok(()) => fs::read_to_string(checksum_path)
-            .map(Some)
-            .map_err(|error| {
-                format!(
-                    "downloaded checksum '{}' but could not read it: {error}",
-                    checksum_path.display()
-                )
-            }),
-        Err(error) => {
-            println!("eudkit-lsp: could not download checksum from {checksum_url}: {error}");
-            Ok(None)
-        }
+        Ok(()) => fs::read_to_string(checksum_path).map_err(|error| {
+            format!(
+                "downloaded checksum '{}' but could not read it: {error}",
+                checksum_path.display()
+            )
+        }),
+        Err(error) => Err(required_checksum_error(
+            asset_name,
+            checksum_url,
+            &error.to_string(),
+        )),
     }
+}
+
+fn required_checksum_error(asset_name: &str, checksum_url: &str, error: &str) -> String {
+    format!(
+        "eudkit-lsp release asset '{asset_name}' is missing its required .sha256 companion at \
+         {checksum_url} ({error}). Refusing to install an unverified binary. Set {ENV_OVERRIDE} \
+         to a locally built eudkit-lsp or put eudkit-lsp on PATH."
+    )
+}
+
+/// Cache layout is pinned to the extension version: `eudkit-lsp-<version>/<asset>`.
+fn versioned_binary_relative_path(version: &str, asset_name: &str) -> String {
+    format!(
+        "eudkit-lsp-{}/{}",
+        version.trim_start_matches('v'),
+        asset_name
+    )
 }
 
 fn sha256_hex(contents: &[u8]) -> String {
@@ -447,7 +469,148 @@ mod tests {
         assert!(error.contains(wrong), "{error}");
     }
 
+    #[test]
+    fn pins_download_url_and_cache_to_the_package_version() {
+        let asset = "eudkit-lsp-linux-x86_64";
+        assert_eq!(RELEASE_VERSION, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            release_asset_url(RELEASE_VERSION, asset),
+            format!(
+                "https://github.com/Tb1281/eudplib/releases/download/v{RELEASE_VERSION}/{asset}"
+            )
+        );
+        assert_eq!(
+            versioned_binary_relative_path(RELEASE_VERSION, asset),
+            format!("eudkit-lsp-{RELEASE_VERSION}/{asset}")
+        );
+        assert_eq!(
+            versioned_binary_relative_path("v0.1.0", asset),
+            "eudkit-lsp-0.1.0/eudkit-lsp-linux-x86_64"
+        );
+    }
+
+    #[test]
+    fn extension_manifest_version_matches_the_cargo_package() {
+        let manifest = include_str!("../extension.toml");
+        let version_line = manifest
+            .lines()
+            .find(|line| line.trim_start().starts_with("version ="))
+            .expect("extension.toml should declare a version");
+        assert_eq!(
+            version_line.trim(),
+            format!("version = \"{RELEASE_VERSION}\"")
+        );
+    }
+
+    #[test]
+    fn missing_checksums_are_reported_as_required() {
+        let error = required_checksum_error(
+            "eudkit-lsp-linux-x86_64",
+            "https://example.invalid/eudkit-lsp-linux-x86_64.sha256",
+            "HTTP 404",
+        );
+        assert!(error.contains("required .sha256 companion"), "{error}");
+        assert!(error.contains("HTTP 404"), "{error}");
+        assert!(error.contains("eudkit-lsp-linux-x86_64.sha256"), "{error}");
+    }
+
     fn release_asset_name(os: Os, arch: Architecture) -> Result<&'static str> {
         ReleasePlatform::for_target(os, arch).map(ReleasePlatform::asset_name)
+    }
+
+    fn manifest_section<'a>(manifest: &'a str, section: &str) -> Vec<&'a str> {
+        let mut lines = Vec::new();
+        let mut in_section = false;
+        for raw_line in manifest.lines() {
+            let line = raw_line.trim();
+            if let Some(name) = line
+                .strip_prefix('[')
+                .and_then(|rest| rest.strip_suffix(']'))
+            {
+                in_section = name == section;
+                continue;
+            }
+            if in_section && !line.is_empty() && !line.starts_with('#') {
+                lines.push(line);
+            }
+        }
+        lines
+    }
+
+    fn manifest_languages(manifest: &str) -> Vec<&str> {
+        let languages_line = manifest_section(manifest, "language_servers.eudkit-lsp")
+            .into_iter()
+            .find(|line| line.starts_with("languages ="))
+            .expect("extension.toml should declare language server languages");
+        let (_, values) = languages_line
+            .split_once('=')
+            .expect("languages should be a key/value pair");
+        values
+            .trim()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(',')
+            .map(|value| value.trim().trim_matches('"'))
+            .filter(|value| !value.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn registers_python_typescript_and_javascript_languages() {
+        let manifest = include_str!("../extension.toml");
+
+        assert_eq!(
+            manifest_languages(manifest),
+            ["Python", "TypeScript", "TSX", "JavaScript"]
+        );
+    }
+
+    fn manifest_language_ids(manifest: &str) -> std::collections::BTreeMap<&str, &str> {
+        manifest_section(manifest, "language_servers.eudkit-lsp.language_ids")
+            .into_iter()
+            .map(|line| {
+                let (language, language_id) = line
+                    .split_once('=')
+                    .expect("language_ids entries should be key/value pairs");
+                (
+                    language.trim().trim_matches('"'),
+                    language_id.trim().trim_matches('"'),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn maps_each_registered_language_to_a_shared_lsp_language_id() {
+        let manifest = include_str!("../extension.toml");
+        let language_ids = manifest_language_ids(manifest);
+
+        assert_eq!(
+            language_ids,
+            [
+                ("Python", "python"),
+                ("TypeScript", "typescript"),
+                ("TSX", "typescriptreact"),
+                ("JavaScript", "javascript"),
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(
+            language_ids.len(),
+            manifest_languages(manifest).len(),
+            "every registered language should have an explicit LSP language id"
+        );
+    }
+
+    #[test]
+    fn manifest_defines_no_input_map_setting() {
+        let manifest = include_str!("../extension.toml").to_ascii_lowercase();
+
+        assert!(
+            !manifest.contains("inputmap") && !manifest.contains("input_map"),
+            "the Zed extension must not define an eudkit.inputMap setting; the shared \
+             eudkit-lsp discovers eudkit.toml from the document path"
+        );
     }
 }

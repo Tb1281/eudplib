@@ -2,7 +2,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /** Where a resolved `eudkit-lsp` executable came from. */
-export type ServerSource = "setting" | "environment" | "path" | "bundled";
+export type ServerSource =
+  | "setting"
+  | "environment"
+  | "path"
+  | "bundled"
+  | "download";
 
 export interface SearchAttempt {
   readonly source: ServerSource;

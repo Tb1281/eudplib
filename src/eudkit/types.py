@@ -93,6 +93,12 @@ DEATHS_BASE_ADDR = 0x0058A364
 
 
 def EPD(address: ExprLike) -> int | Expr:
+    """Converts a virtual memory address to its EPD index.
+
+    EPDs index 4-byte dwords relative to the deaths table base ``0x58A364``:
+    ``(address - 0x58A364) // 4``. Accepts an integer address or an
+    ``Expr``/``Var`` holding a runtime address.
+    """
     if isinstance(address, (int, float)):
         return (int(address) - DEATHS_BASE_ADDR) // 4
     return (address - DEATHS_BASE_ADDR) // 4
@@ -355,7 +361,10 @@ class Expr(_ExprOpsMixin):
 
 
 class Condition:
-    """Represents one or more conjunctive StarCraft conditions (`AND`)."""
+    """Represents one or more conjunctive StarCraft conditions (``AND``).
+
+    Combine conditions with ``&`` to require all of them.
+    """
 
     def __init__(
         self,
@@ -641,7 +650,11 @@ ExprLike = int | Expr | Var | MaskedVar
 
 
 class ActionSpec:
-    """Represents a StarCraft trigger action (either emitted via `session.do` or passed to `session.trigger`)."""
+    """Represents a StarCraft trigger action.
+
+    The builder is resolved when the action is emitted with ``Session.do`` or
+    passed to ``Session.trigger``.
+    """
 
     def __init__(
         self, builder: Callable[[Session], _rust_eudkit.RawAction]
@@ -674,10 +687,12 @@ def _resolve_switch(session: Session, switch: int | str) -> int:
 
 
 def Always() -> Condition:
+    """Condition that is always satisfied (StarCraft "Always")."""
     return Condition.from_raw(_rust_eudkit.RawCondition.always())
 
 
 def Never() -> Condition:
+    """Condition that is never satisfied (StarCraft "Never")."""
     return Condition.from_raw(_rust_eudkit.RawCondition.never())
 
 
@@ -689,6 +704,13 @@ def IsUserCP() -> Condition:
 def Deaths(
     player: ExprLike, comparison: int, amount: ExprLike, unit: int | str = 0
 ) -> Condition:
+    """Condition on a player's death counter for one unit type.
+
+    True when ``player`` has suffered ``comparison`` ``amount`` deaths of
+    ``unit``. ``comparison`` is ``AtLeast``, ``AtMost``, or ``Exactly``;
+    ``unit`` is a unit ID or a map-context unit name (stock ID 0 is Terran
+    Marine). ``player`` may be a player ID or an expression evaluating to one.
+    """
     if isinstance(player, int) and isinstance(amount, int):
         return Condition(
             [
@@ -720,6 +742,12 @@ def DeathsX(
     unit: int | str = 0,
     mask: int = 0xFFFFFFFF,
 ) -> Condition:
+    """Masked variant of :func:`Deaths` using EUD extended death counters.
+
+    Compares the selected bits of the death counter against ``amount``:
+    ``(deaths & mask) <comparison> amount``. ``unit`` is a unit ID or a
+    map-context unit name.
+    """
     if isinstance(player, int) and isinstance(amount, int):
         return Condition(
             [
@@ -746,6 +774,11 @@ def DeathsX(
 
 
 def Memory(address: int, comparison: int, value: ExprLike) -> Condition:
+    """Condition on the 32-bit dword at an absolute virtual address.
+
+    True when ``memory[address] <comparison> value``. ``address`` is a raw
+    virtual address, not an EPD.
+    """
     if isinstance(value, int):
         return Condition.from_raw(
             _rust_eudkit.RawCondition.memory(
@@ -769,6 +802,11 @@ def Memory(address: int, comparison: int, value: ExprLike) -> Condition:
 def MemoryX(
     address: int, comparison: int, value: ExprLike, mask: int
 ) -> Condition:
+    """Masked condition on the dword at an absolute virtual address.
+
+    Compares ``(memory[address] & mask) <comparison> value``. ``address`` is a
+    raw virtual address, not an EPD.
+    """
     if isinstance(value, int):
         return Condition.from_raw(
             _rust_eudkit.RawCondition.memory_x(
@@ -793,6 +831,11 @@ def MemoryX(
 def Accumulate(
     player: int, comparison: int, amount: int, resource: int = Ore
 ) -> Condition:
+    """Condition on a player's accumulated resources.
+
+    True when ``player`` has ``comparison`` ``amount`` of ``resource``
+    (``Ore``, ``Gas``, or ``OreAndGas``).
+    """
     return Condition.from_raw(
         _rust_eudkit.RawCondition.accumulate(
             int(player),
@@ -806,6 +849,11 @@ def Accumulate(
 def Command(
     player: int, comparison: int, amount: int, unit: int | str = 0
 ) -> Condition:
+    """Condition on how many units a player commands.
+
+    True when ``player`` commands ``comparison`` ``amount`` units of type
+    ``unit`` (a unit ID or map-context unit name).
+    """
     return Condition(
         [
             lambda s: _rust_eudkit.RawCondition.command(
@@ -825,6 +873,12 @@ def Bring(
     unit: int | str,
     location: int | str,
 ) -> Condition:
+    """Condition on units a player brings to a location.
+
+    True when ``player`` has ``comparison`` ``amount`` units of type ``unit``
+    inside ``location``. Both ``unit`` and ``location`` accept IDs or
+    map-context names.
+    """
     return Condition(
         [
             lambda s: _rust_eudkit.RawCondition.bring(
@@ -839,6 +893,11 @@ def Bring(
 
 
 def Switch(switch: int | str, state: int = Set) -> Condition:
+    """Condition on a switch's state.
+
+    True when ``switch`` (a switch ID or map-context switch name) is in
+    ``state``: ``Set`` or ``Cleared``.
+    """
     return Condition(
         [
             lambda s: _rust_eudkit.RawCondition.switch(
@@ -849,6 +908,11 @@ def Switch(switch: int | str, state: int = Set) -> Condition:
 
 
 def ElapsedTime(comparison: int, seconds: int) -> Condition:
+    """Condition on elapsed scenario time.
+
+    True when the game has run ``comparison`` ``seconds`` game seconds since
+    the scenario started.
+    """
     return Condition(
         [
             lambda s: _rust_eudkit.RawCondition.elapsed_time(
@@ -861,6 +925,12 @@ def ElapsedTime(comparison: int, seconds: int) -> Condition:
 def Score(
     player: int, score_type: int, comparison: int, amount: int
 ) -> Condition:
+    """Condition on one of a player's score counters.
+
+    True when ``player``'s ``score_type`` counter (``Total``, ``Units``,
+    ``Buildings``, ``UnitsAndBuildings``, ``Kills``, ``Razings``,
+    ``KillsAndRazings``, or ``Custom``) is ``comparison`` ``amount``.
+    """
     return Condition(
         [
             lambda s: _rust_eudkit.RawCondition.score(
@@ -876,6 +946,12 @@ def Score(
 def SetDeaths(
     player: ExprLike, modifier: int, value: ExprLike, unit: int | str = 0
 ) -> ActionSpec:
+    """Action that modifies a player's death counter for one unit type.
+
+    Applies ``modifier`` (``SetTo``, ``Add``, or ``Subtract``) with ``value``
+    to ``player``'s death counter for ``unit``. ``unit`` is a unit ID or a
+    map-context unit name.
+    """
     if isinstance(player, int) and isinstance(value, int):
         return ActionSpec(
             lambda s: _rust_eudkit.RawAction.set_deaths(
@@ -900,6 +976,12 @@ def SetDeathsX(
     unit: int | str = 0,
     mask: int = 0xFFFFFFFF,
 ) -> ActionSpec:
+    """Masked variant of :func:`SetDeaths` using EUD extended death counters.
+
+    Applies ``modifier`` with ``value`` only to the counter bits selected by
+    ``mask``; unselected bits are preserved. ``unit`` is a unit ID or a
+    map-context unit name.
+    """
     if isinstance(player, int) and isinstance(value, int):
         return ActionSpec(
             lambda s: _rust_eudkit.RawAction.set_deaths_x(
@@ -922,6 +1004,11 @@ def SetDeathsX(
 
 
 def SetMemory(address: int, modifier: int, value: ExprLike) -> ActionSpec:
+    """Action that modifies the 32-bit dword at an absolute virtual address.
+
+    Applies ``modifier`` (``SetTo``, ``Add``, or ``Subtract``) with ``value``
+    to ``memory[address]``. ``address`` is a raw virtual address, not an EPD.
+    """
     if isinstance(value, int):
         return ActionSpec(
             lambda _s: _rust_eudkit.RawAction.set_memory(
@@ -941,6 +1028,11 @@ def SetMemory(address: int, modifier: int, value: ExprLike) -> ActionSpec:
 def SetMemoryX(
     address: int, modifier: int, value: ExprLike, mask: int
 ) -> ActionSpec:
+    """Masked action that modifies the dword at an absolute virtual address.
+
+    Applies ``modifier`` with ``value`` only to the bits selected by ``mask``;
+    ``address`` is a raw virtual address, not an EPD.
+    """
     if isinstance(value, int):
         return ActionSpec(
             lambda _s: _rust_eudkit.RawAction.set_memory_x(
@@ -963,6 +1055,11 @@ def SetMemoryX(
 def SetResources(
     player: int, modifier: int, amount: int, resource: int = Ore
 ) -> ActionSpec:
+    """Action that modifies a player's resources.
+
+    Applies ``modifier`` (``SetTo``, ``Add``, or ``Subtract``) with ``amount``
+    to ``resource`` (``Ore``, ``Gas``, or ``OreAndGas``).
+    """
     return ActionSpec(
         lambda _s: _rust_eudkit.RawAction.set_resources(
             int(player), int(modifier), int(amount) & 0xFFFFFFFF, int(resource)
@@ -1182,6 +1279,13 @@ def _build_format_template_and_args(
 
 
 def f_eprintln(*args: Any, always_display: bool = True) -> ActionSpec:
+    """Formats values and displays the result in the chat log.
+
+    Accepts a ``%d``/``%x``/``%i``/``%u``/``%p`` style template followed by
+    expression arguments, or a sequence of literal strings and expressions that
+    are concatenated with ``%d`` placeholders. ``always_display`` sets the
+    action's always-display flag.
+    """
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.format_display_text(
             *_build_format_template_and_args(args, s),
@@ -1191,6 +1295,12 @@ def f_eprintln(*args: Any, always_display: bool = True) -> ActionSpec:
 
 
 def displayText(*args: Any, always_display: bool = True) -> ActionSpec:
+    """Displays literal text or formatted values in the chat log.
+
+    A single plain string or :class:`MapString` is displayed as-is. Anything
+    else is routed through :func:`f_eprintln` for ``%d``-style formatting or
+    string/expression concatenation.
+    """
     if (
         len(args) == 1
         and isinstance(args[0], str)
@@ -1231,6 +1341,12 @@ print_at = display_at
 
 
 def DisplayTextId(string_id: int, always_display: bool = True) -> ActionSpec:
+    """Displays a map string by its STRx string ID in the chat log.
+
+    Use this for strings already registered in the map's string table; for new
+    text prefer :func:`displayText` or the dynamic string API
+    (``session.string``).
+    """
     return ActionSpec(
         lambda _s: _rust_eudkit.RawAction.display_text_id(
             int(string_id), bool(always_display)
@@ -1241,6 +1357,11 @@ def DisplayTextId(string_id: int, always_display: bool = True) -> ActionSpec:
 def CreateUnit(
     count: int, unit: int | str, location: int | str, player: int
 ) -> ActionSpec:
+    """Creates ``count`` units of a type at a location for a player.
+
+    ``unit`` and ``location`` accept IDs or map-context names. The action has
+    no effect while the game is paused.
+    """
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.create_unit(
             int(count),
@@ -1254,6 +1375,12 @@ def CreateUnit(
 def KillUnitAt(
     count: int, unit: int | str, location: int | str, player: int
 ) -> ActionSpec:
+    """Kills up to ``count`` units of a type at a location for a player.
+
+    ``count`` is ``All`` or a positive number; ``unit`` and ``location`` accept
+    IDs or map-context names. Unlike :func:`KillUnit`, this affects only units
+    inside ``location`` and only up to ``count`` of them.
+    """
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.kill_unit_at(
             int(count),
@@ -1265,6 +1392,10 @@ def KillUnitAt(
 
 
 def MinimapPing(location: int | str) -> ActionSpec:
+    """Pings the minimap at ``location`` for all players.
+
+    ``location`` is a location ID or map-context location name.
+    """
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.minimap_ping(_resolve_location(s, location))
     )
@@ -1273,6 +1404,12 @@ def MinimapPing(location: int | str) -> ActionSpec:
 def SetScore(
     player: int, modifier: int, amount: int, score_type: int = Custom
 ) -> ActionSpec:
+    """Action that modifies one of a player's score counters.
+
+    Applies ``modifier`` (``SetTo``, ``Add``, or ``Subtract``) with ``amount``
+    to ``score_type`` (``Total``, ``Units``, ``Buildings``, ``Kills``,
+    ``Razings``, ``KillsAndRazings``, ``Custom``, ...).
+    """
     return ActionSpec(
         lambda _s: _rust_eudkit.RawAction.set_score(
             int(player), int(modifier), int(amount) & 0xFFFFFFFF, int(score_type)
@@ -1281,6 +1418,11 @@ def SetScore(
 
 
 def SetSwitch(switch: int | str, state: int) -> ActionSpec:
+    """Action that changes a switch's state.
+
+    ``switch`` is a switch ID or map-context switch name. ``state`` uses the
+    switch action constants: ``Set``, ``Clear``, ``Toggle``, or ``Random``.
+    """
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.set_switch(
             _resolve_switch(s, switch), int(state)
@@ -1291,6 +1433,12 @@ def SetSwitch(switch: int | str, state: int) -> ActionSpec:
 def MoveLocation(
     location: int | str, unit: int | str, player: int, dest_location: int | str
 ) -> ActionSpec:
+    """Centers a location on units of a type owned by a player.
+
+    Moves ``location`` to center on a ``unit`` unit owned by ``player`` that is
+    inside the search area ``dest_location``. If no matching unit is found,
+    ``location`` moves to the center of ``dest_location``.
+    """
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.move_location(
             _resolve_location(s, location),
@@ -1304,6 +1452,12 @@ def MoveLocation(
 def RemoveUnitAt(
     count: int, unit: int | str, location: int | str, player: int
 ) -> ActionSpec:
+    """Removes up to ``count`` units of a type at a location for a player.
+
+    Works like :func:`KillUnitAt`, but the units disappear without dying and
+    without incrementing death counters. ``count`` is ``All`` or a positive
+    number.
+    """
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.remove_unit_at(
             int(count),
@@ -1315,6 +1469,13 @@ def RemoveUnitAt(
 
 
 def KillUnit(unit: int | str, player: int) -> ActionSpec:
+    """Kills all units of a type owned by a player.
+
+    The eudkit wrapper order is ``KillUnit(unit, player)``. The underlying
+    StarCraft raw trigger action is ``(player, unit, amount)``; ``amount`` is
+    unused, and the action affects every unit of ``unit`` owned by ``player``.
+    Has no effect while the game is paused.
+    """
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.kill_unit(
             _resolve_unit(s, unit),
@@ -1330,6 +1491,12 @@ def MoveUnit(
     start_location: int | str,
     dest_location: int | str,
 ) -> ActionSpec:
+    """Teleports up to ``count`` units of a type between locations.
+
+    Moves ``unit`` units owned by ``player`` from ``start_location`` to
+    ``dest_location``. ``count`` is ``All`` or a positive number; both
+    locations accept IDs or map-context names.
+    """
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.move_unit(
             int(count),
@@ -1348,6 +1515,11 @@ def GiveUnits(
     location: int | str,
     new_player: int,
 ) -> ActionSpec:
+    """Transfers units from one player to another.
+
+    Gives up to ``count`` ``unit`` units owned by ``player`` inside ``location``
+    to ``new_player``. ``count`` is ``All`` or a positive number.
+    """
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.give_units(
             int(count),
@@ -1380,6 +1552,12 @@ def Order(
     order_type: int | str,
     dest_location: int | str,
 ) -> ActionSpec:
+    """Orders units at a location to move, patrol, or attack a destination.
+
+    Applies to ``unit`` units owned by ``player`` inside ``start_location``.
+    ``order_type`` accepts ``Move``/``Patrol``/``Attack`` or the strings
+    ``"move"``/``"patrol"``/``"attack"``.
+    """
     return ActionSpec(
         lambda s: _rust_eudkit.RawAction.order(
             _resolve_unit(s, unit),
@@ -1392,22 +1570,37 @@ def Order(
 
 
 def PlayWAV(path: str) -> ActionSpec:
+    """Plays a WAV sound file bundled with the map.
+
+    ``path`` is the sound file name or relative path understood by StarCraft.
+    """
     return ActionSpec(lambda _s: _rust_eudkit.RawAction.play_wav(str(path)))
 
 
 def Comment(text: str) -> ActionSpec:
+    """Adds a comment to the trigger, shown in the trigger editor.
+
+    Comments have no runtime effect on the game.
+    """
     return ActionSpec(lambda _s: _rust_eudkit.RawAction.comment(str(text)))
 
 
 def PreserveTrigger() -> ActionSpec:
+    """Action that keeps the enclosing trigger running on later loop passes.
+
+    Without ``PreserveTrigger``, a StarCraft trigger removes itself after it
+    fires once.
+    """
     return ActionSpec(lambda _s: _rust_eudkit.RawAction.preserve_trigger())
 
 
 def Victory() -> ActionSpec:
+    """Action that ends the scenario in victory for the trigger owner."""
     return ActionSpec(lambda _s: _rust_eudkit.RawAction.victory())
 
 
 def Defeat() -> ActionSpec:
+    """Action that ends the scenario in defeat for the trigger owner."""
     return ActionSpec(lambda _s: _rust_eudkit.RawAction.defeat())
 
 
@@ -1533,6 +1726,11 @@ def bread_epd(
 def dwwrite_epd(
     epd: ExprLike, value: ExprLike, *, session: Session | None = None
 ) -> None:
+    """Writes a 32-bit dword at an EPD, using the current session.
+
+    Implemented as a ``SetDeaths(epd, SetTo, value, 0)`` action, so it uses the
+    EUD memory write path. ``session`` defaults to the active builder session.
+    """
     sess = session or _active_builder_session.get()
     if sess is None:
         if isinstance(epd, Var):
@@ -1548,6 +1746,11 @@ def dwwrite_epd(
 def wwrite_epd(
     epd: ExprLike, subp: int, value: ExprLike, *, session: Session | None = None
 ) -> None:
+    """Writes a 16-bit word at an EPD without disturbing the other half.
+
+    ``subp`` 0 writes the low word (bits 0..15); any other value writes the high
+    word (bits 16..31). The write is emitted as a masked ``SetDeathsX`` action.
+    """
     sess = session or _active_builder_session.get()
     if sess is None:
         if isinstance(epd, Var):
@@ -1569,6 +1772,11 @@ def wwrite_epd(
 def bwrite_epd(
     epd: ExprLike, subp: int, value: ExprLike, *, session: Session | None = None
 ) -> None:
+    """Writes an 8-bit byte at an EPD without disturbing the other bytes.
+
+    ``subp`` selects the byte within the dword: 0 is bits 0..7, 1 is bits 8..15,
+    2 is bits 16..23, and 3 is bits 24..31. Emitted as a masked ``SetDeathsX``.
+    """
     sess = session or _active_builder_session.get()
     if sess is None:
         if isinstance(epd, Var):
@@ -1590,6 +1798,11 @@ def dwread(
     ret: Var | Sequence[Var] | None = None,
     session: Session | None = None,
 ) -> Var:
+    """Reads a 32-bit dword from an absolute virtual address.
+
+    Converts ``address`` with :func:`EPD`, then delegates to :func:`dwread_epd`.
+    Pass ``ret`` to choose the destination variable.
+    """
     return dwread_epd(EPD(address), ret=ret, session=session)
 
 
@@ -1599,6 +1812,11 @@ def wread(
     ret: Var | Sequence[Var] | None = None,
     session: Session | None = None,
 ) -> Var:
+    """Reads a 16-bit word from an absolute virtual address.
+
+    The half-word is selected from the address alignment (``(address % 4) // 2``)
+    and then read through :func:`wread_epd`.
+    """
     return wread_epd(EPD(address), (address % 4) // 2, ret=ret, session=session)
 
 
@@ -1608,6 +1826,11 @@ def bread(
     ret: Var | Sequence[Var] | None = None,
     session: Session | None = None,
 ) -> Var:
+    """Reads an 8-bit byte from an absolute virtual address.
+
+    The byte lane is selected from the address alignment (``address % 4``) and
+    then read through :func:`bread_epd`.
+    """
     return bread_epd(EPD(address), address % 4, ret=ret, session=session)
 
 
@@ -1617,6 +1840,11 @@ def dwwrite(
     *,
     session: Session | None = None,
 ) -> None:
+    """Writes a 32-bit dword to an absolute virtual address.
+
+    Converts ``address`` with :func:`EPD`, then delegates to
+    :func:`dwwrite_epd`.
+    """
     dwwrite_epd(EPD(address), value, session=session)
 
 
@@ -1626,6 +1854,11 @@ def wwrite(
     *,
     session: Session | None = None,
 ) -> None:
+    """Writes a 16-bit word to an absolute virtual address.
+
+    Selects the half-word from the address alignment and delegates to
+    :func:`wwrite_epd`.
+    """
     wwrite_epd(EPD(address), (address % 4) // 2, value, session=session)
 
 
@@ -1635,11 +1868,21 @@ def bwrite(
     *,
     session: Session | None = None,
 ) -> None:
+    """Writes an 8-bit byte to an absolute virtual address.
+
+    Selects the byte lane from the address alignment and delegates to
+    :func:`bwrite_epd`.
+    """
     bwrite_epd(EPD(address), address % 4, value, session=session)
 
 
 class Array:
-    """EPD-addressed contiguous dword array supporting constant and dynamic indexing."""
+    """EPD-addressed contiguous dword array supporting constant and dynamic indexing.
+
+    Pass a length to allocate zeroed slots, or a sequence of initial dword
+    values. ``epd`` optionally supplies the base EPD. Reads go through the
+    session ReadTable; writes are emitted as ``SetDeaths`` actions.
+    """
 
     def __init__(
         self,
@@ -1678,7 +1921,11 @@ class Array:
 
 
 class VArray:
-    """Unified 72-byte-stride VProc trigger array supporting constant and dynamic indexing."""
+    """Unified 72-byte-stride VProc trigger array supporting constant and dynamic indexing.
+
+    Pass a length or a sequence of initial values. Indexing reads and writes the
+    value field of each 72-byte trigger slot, so dynamic copies remain possible.
+    """
 
     def __init__(
         self,
@@ -1783,7 +2030,12 @@ _UNSUPPORTED_CUNIT_MEMBERS = {
 
 
 class CUnit:
-    """Typed handle to a StarCraft: Remastered CUnit structure (0x59CCA8, 336 bytes)."""
+    """Typed handle to a StarCraft: Remastered CUnit structure (0x59CCA8, 336 bytes).
+
+    ``epd_or_ptr`` accepts a CUnit array index (below 1700), a virtual pointer
+    (0x500000 or above), an EPD, or an expression evaluating to one. Array
+    indices and pointers are converted to EPD form automatically.
+    """
 
     def __init__(
         self,
@@ -1940,7 +2192,11 @@ _CSPRITE_STRIDE = 36
 
 
 class CSprite:
-    """Typed handle to a StarCraft: Remastered CSprite structure (0x629D98, 36 bytes)."""
+    """Typed handle to a StarCraft: Remastered CSprite structure (0x629D98, 36 bytes).
+
+    ``epd_or_ptr`` accepts a sprite array index (below 2500), a virtual pointer
+    (0x500000 or above), an EPD, or an expression evaluating to one.
+    """
 
     def __init__(
         self,
@@ -2001,7 +2257,10 @@ class CSprite:
 
 
 class Player:
-    """Typed accessor for player properties (minerals, gas, deaths)."""
+    """Typed accessor for player resources (minerals and gas).
+
+    ``player_id`` is the zero-based player slot, so ``Player1`` is 0.
+    """
 
     def __init__(self, player_id: int, *, session: Session | None = None) -> None:
         self.id = player_id

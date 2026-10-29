@@ -1,10 +1,10 @@
 [package]
 name = "eudkit-zed"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 publish = false
 license = "MIT"
-description = "Zed extension that runs the shared eudkit-lsp server for Python"
+description = "Zed extension that runs the shared eudkit-lsp server for Python, TypeScript, TSX, and JavaScript"
 repository = "https://github.com/Tb1281/eudplib"
 
 [lib]

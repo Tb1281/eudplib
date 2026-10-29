@@ -13,6 +13,13 @@ For easy-to-use executable, see https://github.com/armoha/euddraft/releases
 - Edit input map to compile output EUD map
 - `epScript`, scripting language for StarCraft Trigger similar to JavaScript
 
+## eudkit editor support
+
+`eudkit-lsp` provides canonical unit completion, Map Context symbols, and
+advisory diagnostics for Python, TypeScript, and JavaScript in VS Code and Zed.
+See the [eudkit LSP user guide](docs/eudkit-lsp-user-guide.md) for installation,
+first run, and troubleshooting.
+
 ## Where is the issue tracker?
 
 The eudplib issue tracker lives in [euddraft repository](https://github.com/armoha/euddraft/issues/).

@@ -2,13 +2,17 @@
   "name": "eudkit-vscode",
   "displayName": "eudkit LSP",
   "description": "Canonical unit completion for eudplib Python, TypeScript, and JavaScript Frontend files from eudkit-lsp.",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "publisher": "eudkit",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/armoha/eudplib.git",
+    "url": "https://github.com/Tb1281/eudplib",
     "directory": "editors/vscode"
+  },
+  "homepage": "https://github.com/Tb1281/eudplib/tree/main/editors/vscode",
+  "bugs": {
+    "url": "https://github.com/Tb1281/eudplib/issues"
   },
   "engines": {
     "vscode": "^1.91.0"
@@ -55,11 +59,12 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "npm run test:unit && npm run test:types",
-    "test:unit": "esbuild test/serverPath.test.ts --bundle --platform=node --format=cjs --outfile=dist-test/serverPath.test.cjs && node --test dist-test/serverPath.test.cjs",
+    "test:unit": "esbuild test/serverPath.test.ts test/release.test.ts --bundle --platform=node --format=cjs --outdir=dist-test && node --test dist-test/serverPath.test.js dist-test/release.test.js",
     "test:types": "tsc --noEmit -p test/fixtures/tsconfig.json",
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "package": "npm run check && npm run build -- --production && vsce package --no-dependencies --out dist/eudkit-vscode-0.1.0.vsix"
+    "verify:vsix": "node scripts/verify-vsix.mjs",
+    "package": "npm run check && npm run build -- --production && node scripts/package-vsix.mjs"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
