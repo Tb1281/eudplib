@@ -11,6 +11,50 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 use std::collections::HashMap;
 
+const EPD_BASE_ADDR: i32 = 0x0058_A364;
+
+const MEM_READ_FNS: [&str; 7] = [
+    "dwread_epd",
+    "dwread",
+    "epdread_epd",
+    "bread_epd",
+    "bread",
+    "wread_epd",
+    "wread",
+];
+
+struct MemReadSpec {
+    epd: HirExpr,
+    mask: u32,
+    initial_val: i32,
+}
+
+fn call_callee_name<'a, 'b>(call: &'a CallExpression<'b>) -> Option<&'b str> {
+    match &call.callee {
+        Expression::Identifier(ident) => Some(ident.name.as_str()),
+        Expression::StaticMemberExpression(mem) => match &mem.object {
+            Expression::Identifier(obj) if obj.name.as_str() == "eudkit" => {
+                Some(mem.property.name.as_str())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn address_to_epd(ptr: HirExpr) -> HirExpr {
+    HirExpr::BinOp {
+        op: HirBinOp::Div,
+        lhs: Box::new(HirExpr::BinOp {
+            op: HirBinOp::Sub,
+            lhs: Box::new(ptr),
+            rhs: Box::new(HirExpr::Const(EPD_BASE_ADDR)),
+        }),
+        rhs: Box::new(HirExpr::Const(4)),
+    }
+    .fold_constants()
+}
+
 pub struct TsCompiler<'a> {
     builder: HirBuilder,
     map_ctx: &'a MapContext,
@@ -599,176 +643,17 @@ impl<'a> TsCompiler<'a> {
                         }
 
                         if let Expression::CallExpression(call) = init {
-                            let fn_name = match &call.callee {
-                                Expression::Identifier(call_ident) => {
-                                    Some(call_ident.name.as_str())
-                                }
-                                Expression::StaticMemberExpression(mem) => {
-                                    if let Expression::Identifier(obj) = &mem.object {
-                                        if obj.name.as_str() == "eudkit" {
-                                            Some(mem.property.name.as_str())
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                }
-                                _ => None,
-                            };
-                            if let Some(fname) = fn_name {
-                                match fname {
-                                    "dwread_epd" => {
-                                        if let Some(arg0) =
-                                            call.arguments.first().and_then(|a| a.as_expression())
-                                        {
-                                            let epd = self.lower_expr(arg0)?;
-                                            let vid = self.builder.add_var(var_name, 0);
-                                            self.vars.insert(var_name.to_string(), vid);
-                                            out.push(HirStmt::MemRead {
-                                                dst: vid,
-                                                epd,
-                                                mask: 0xFFFF_FFFF,
-                                                shift: 0,
-                                                initial_val: 0,
-                                            });
-                                            continue;
-                                        }
-                                    }
-                                    "dwread" => {
-                                        if let Some(arg0) =
-                                            call.arguments.first().and_then(|a| a.as_expression())
-                                        {
-                                            let ptr = self.lower_expr(arg0)?;
-                                            let epd = HirExpr::BinOp {
-                                                op: HirBinOp::Div,
-                                                lhs: Box::new(HirExpr::BinOp {
-                                                    op: HirBinOp::Sub,
-                                                    lhs: Box::new(ptr),
-                                                    rhs: Box::new(HirExpr::Const(0x0058A364)),
-                                                }),
-                                                rhs: Box::new(HirExpr::Const(4)),
-                                            }
-                                            .fold_constants();
-                                            let vid = self.builder.add_var(var_name, 0);
-                                            self.vars.insert(var_name.to_string(), vid);
-                                            out.push(HirStmt::MemRead {
-                                                dst: vid,
-                                                epd,
-                                                mask: 0xFFFF_FFFF,
-                                                shift: 0,
-                                                initial_val: 0,
-                                            });
-                                            continue;
-                                        }
-                                    }
-                                    "epdread_epd" => {
-                                        if let Some(arg0) =
-                                            call.arguments.first().and_then(|a| a.as_expression())
-                                        {
-                                            let epd = self.lower_expr(arg0)?;
-                                            let vid = self.builder.add_var(var_name, 0);
-                                            self.vars.insert(var_name.to_string(), vid);
-                                            out.push(HirStmt::MemRead {
-                                                dst: vid,
-                                                epd,
-                                                mask: 0xFFFF_FFFF,
-                                                shift: 0,
-                                                initial_val: -(0x0058A364 / 4),
-                                            });
-                                            continue;
-                                        }
-                                    }
-                                    "bread_epd" => {
-                                        if let Some(arg0) =
-                                            call.arguments.first().and_then(|a| a.as_expression())
-                                        {
-                                            let epd = self.lower_expr(arg0)?;
-                                            let vid = self.builder.add_var(var_name, 0);
-                                            self.vars.insert(var_name.to_string(), vid);
-                                            out.push(HirStmt::MemRead {
-                                                dst: vid,
-                                                epd,
-                                                mask: 0xFF,
-                                                shift: 0,
-                                                initial_val: 0,
-                                            });
-                                            continue;
-                                        }
-                                    }
-                                    "bread" => {
-                                        if let Some(arg0) =
-                                            call.arguments.first().and_then(|a| a.as_expression())
-                                        {
-                                            let ptr = self.lower_expr(arg0)?;
-                                            let epd = HirExpr::BinOp {
-                                                op: HirBinOp::Div,
-                                                lhs: Box::new(HirExpr::BinOp {
-                                                    op: HirBinOp::Sub,
-                                                    lhs: Box::new(ptr),
-                                                    rhs: Box::new(HirExpr::Const(0x0058A364)),
-                                                }),
-                                                rhs: Box::new(HirExpr::Const(4)),
-                                            }
-                                            .fold_constants();
-                                            let vid = self.builder.add_var(var_name, 0);
-                                            self.vars.insert(var_name.to_string(), vid);
-                                            out.push(HirStmt::MemRead {
-                                                dst: vid,
-                                                epd,
-                                                mask: 0xFF,
-                                                shift: 0,
-                                                initial_val: 0,
-                                            });
-                                            continue;
-                                        }
-                                    }
-                                    "wread_epd" => {
-                                        if let Some(arg0) =
-                                            call.arguments.first().and_then(|a| a.as_expression())
-                                        {
-                                            let epd = self.lower_expr(arg0)?;
-                                            let vid = self.builder.add_var(var_name, 0);
-                                            self.vars.insert(var_name.to_string(), vid);
-                                            out.push(HirStmt::MemRead {
-                                                dst: vid,
-                                                epd,
-                                                mask: 0xFFFF,
-                                                shift: 0,
-                                                initial_val: 0,
-                                            });
-                                            continue;
-                                        }
-                                    }
-                                    "wread" => {
-                                        if let Some(arg0) =
-                                            call.arguments.first().and_then(|a| a.as_expression())
-                                        {
-                                            let ptr = self.lower_expr(arg0)?;
-                                            let epd = HirExpr::BinOp {
-                                                op: HirBinOp::Div,
-                                                lhs: Box::new(HirExpr::BinOp {
-                                                    op: HirBinOp::Sub,
-                                                    lhs: Box::new(ptr),
-                                                    rhs: Box::new(HirExpr::Const(0x0058A364)),
-                                                }),
-                                                rhs: Box::new(HirExpr::Const(4)),
-                                            }
-                                            .fold_constants();
-                                            let vid = self.builder.add_var(var_name, 0);
-                                            self.vars.insert(var_name.to_string(), vid);
-                                            out.push(HirStmt::MemRead {
-                                                dst: vid,
-                                                epd,
-                                                mask: 0xFFFF,
-                                                shift: 0,
-                                                initial_val: 0,
-                                            });
-                                            continue;
-                                        }
-                                    }
-                                    _ => {}
-                                }
+                            if let Some(spec) = self.try_lower_mem_read_call(call)? {
+                                let vid = self.builder.add_var(var_name, 0);
+                                self.vars.insert(var_name.to_string(), vid);
+                                out.push(HirStmt::MemRead {
+                                    dst: vid,
+                                    epd: spec.epd,
+                                    mask: spec.mask,
+                                    shift: 0,
+                                    initial_val: spec.initial_val,
+                                });
+                                continue;
                             }
                         }
 
@@ -1064,6 +949,34 @@ impl<'a> TsCompiler<'a> {
         Ok(())
     }
 
+    fn try_lower_mem_read_call(&mut self, call: &CallExpression) -> Result<Option<MemReadSpec>> {
+        let Some(fname) = call_callee_name(call) else {
+            return Ok(None);
+        };
+        if !MEM_READ_FNS.contains(&fname) {
+            return Ok(None);
+        }
+        let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
+            return Ok(None);
+        };
+
+        let (epd, mask, initial_val) = match fname {
+            "dwread_epd" => (self.lower_expr(arg0)?, 0xFFFF_FFFF, 0),
+            "dwread" => (address_to_epd(self.lower_expr(arg0)?), 0xFFFF_FFFF, 0),
+            "epdread_epd" => (self.lower_expr(arg0)?, 0xFFFF_FFFF, -(EPD_BASE_ADDR / 4)),
+            "bread_epd" => (self.lower_expr(arg0)?, 0xFF, 0),
+            "bread" => (address_to_epd(self.lower_expr(arg0)?), 0xFF, 0),
+            "wread_epd" => (self.lower_expr(arg0)?, 0xFFFF, 0),
+            "wread" => (address_to_epd(self.lower_expr(arg0)?), 0xFFFF, 0),
+            _ => return Ok(None),
+        };
+        Ok(Some(MemReadSpec {
+            epd,
+            mask,
+            initial_val,
+        }))
+    }
+
     fn lower_assignment(
         &mut self,
         assign: &AssignmentExpression,
@@ -1092,173 +1005,32 @@ impl<'a> TsCompiler<'a> {
         if let Some(var_id) = resolved_var_id {
             if assign.operator == AssignmentOperator::Assign {
                 if let Expression::CallExpression(call) = &assign.right {
-                    let fn_name = match &call.callee {
-                        Expression::Identifier(call_ident) => Some(call_ident.name.as_str()),
-                        Expression::StaticMemberExpression(mem) => {
-                            if let Expression::Identifier(obj) = &mem.object {
-                                if obj.name.as_str() == "eudkit" {
-                                    Some(mem.property.name.as_str())
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        }
-                        _ => None,
-                    };
-                    if let Some(fname) = fn_name {
-                        match fname {
-                            "dwread_epd" => {
-                                if let Some(arg0) =
-                                    call.arguments.first().and_then(|a| a.as_expression())
-                                {
-                                    let epd = self.lower_expr(arg0)?;
-                                    out.push(HirStmt::MemRead {
-                                        dst: var_id,
-                                        epd,
-                                        mask: 0xFFFF_FFFF,
-                                        shift: 0,
-                                        initial_val: 0,
-                                    });
-                                    return Ok(());
-                                }
-                            }
-                            "dwread" => {
-                                if let Some(arg0) =
-                                    call.arguments.first().and_then(|a| a.as_expression())
-                                {
-                                    let ptr = self.lower_expr(arg0)?;
-                                    let epd = HirExpr::BinOp {
-                                        op: HirBinOp::Div,
-                                        lhs: Box::new(HirExpr::BinOp {
-                                            op: HirBinOp::Sub,
-                                            lhs: Box::new(ptr),
-                                            rhs: Box::new(HirExpr::Const(0x0058A364)),
-                                        }),
-                                        rhs: Box::new(HirExpr::Const(4)),
+                    if let Some(spec) = self.try_lower_mem_read_call(call)? {
+                        out.push(HirStmt::MemRead {
+                            dst: var_id,
+                            epd: spec.epd,
+                            mask: spec.mask,
+                            shift: 0,
+                            initial_val: spec.initial_val,
+                        });
+                        return Ok(());
+                    }
+
+                    if let Some(fname) = call_callee_name(call) {
+                        if !MEM_READ_FNS.contains(&fname) {
+                            if let Some(&fn_idx) = self.functions.get(fname) {
+                                let mut args = Vec::new();
+                                for a in &call.arguments {
+                                    if let Some(e) = a.as_expression() {
+                                        args.push(self.lower_expr(e)?);
                                     }
-                                    .fold_constants();
-                                    out.push(HirStmt::MemRead {
-                                        dst: var_id,
-                                        epd,
-                                        mask: 0xFFFF_FFFF,
-                                        shift: 0,
-                                        initial_val: 0,
-                                    });
-                                    return Ok(());
                                 }
-                            }
-                            "epdread_epd" => {
-                                if let Some(arg0) =
-                                    call.arguments.first().and_then(|a| a.as_expression())
-                                {
-                                    let epd = self.lower_expr(arg0)?;
-                                    out.push(HirStmt::MemRead {
-                                        dst: var_id,
-                                        epd,
-                                        mask: 0xFFFF_FFFF,
-                                        shift: 0,
-                                        initial_val: -(0x0058A364 / 4),
-                                    });
-                                    return Ok(());
-                                }
-                            }
-                            "bread_epd" => {
-                                if let Some(arg0) =
-                                    call.arguments.first().and_then(|a| a.as_expression())
-                                {
-                                    let epd = self.lower_expr(arg0)?;
-                                    out.push(HirStmt::MemRead {
-                                        dst: var_id,
-                                        epd,
-                                        mask: 0xFF,
-                                        shift: 0,
-                                        initial_val: 0,
-                                    });
-                                    return Ok(());
-                                }
-                            }
-                            "bread" => {
-                                if let Some(arg0) =
-                                    call.arguments.first().and_then(|a| a.as_expression())
-                                {
-                                    let ptr = self.lower_expr(arg0)?;
-                                    let epd = HirExpr::BinOp {
-                                        op: HirBinOp::Div,
-                                        lhs: Box::new(HirExpr::BinOp {
-                                            op: HirBinOp::Sub,
-                                            lhs: Box::new(ptr),
-                                            rhs: Box::new(HirExpr::Const(0x0058A364)),
-                                        }),
-                                        rhs: Box::new(HirExpr::Const(4)),
-                                    }
-                                    .fold_constants();
-                                    out.push(HirStmt::MemRead {
-                                        dst: var_id,
-                                        epd,
-                                        mask: 0xFF,
-                                        shift: 0,
-                                        initial_val: 0,
-                                    });
-                                    return Ok(());
-                                }
-                            }
-                            "wread_epd" => {
-                                if let Some(arg0) =
-                                    call.arguments.first().and_then(|a| a.as_expression())
-                                {
-                                    let epd = self.lower_expr(arg0)?;
-                                    out.push(HirStmt::MemRead {
-                                        dst: var_id,
-                                        epd,
-                                        mask: 0xFFFF,
-                                        shift: 0,
-                                        initial_val: 0,
-                                    });
-                                    return Ok(());
-                                }
-                            }
-                            "wread" => {
-                                if let Some(arg0) =
-                                    call.arguments.first().and_then(|a| a.as_expression())
-                                {
-                                    let ptr = self.lower_expr(arg0)?;
-                                    let epd = HirExpr::BinOp {
-                                        op: HirBinOp::Div,
-                                        lhs: Box::new(HirExpr::BinOp {
-                                            op: HirBinOp::Sub,
-                                            lhs: Box::new(ptr),
-                                            rhs: Box::new(HirExpr::Const(0x0058A364)),
-                                        }),
-                                        rhs: Box::new(HirExpr::Const(4)),
-                                    }
-                                    .fold_constants();
-                                    out.push(HirStmt::MemRead {
-                                        dst: var_id,
-                                        epd,
-                                        mask: 0xFFFF,
-                                        shift: 0,
-                                        initial_val: 0,
-                                    });
-                                    return Ok(());
-                                }
-                            }
-                            _ => {
-                                if let Some(&fn_idx) = self.functions.get(fname) {
-                                    let mut args = Vec::new();
-                                    for a in &call.arguments {
-                                        if let Some(e) = a.as_expression() {
-                                            args.push(self.lower_expr(e)?);
-                                        }
-                                    }
-                                    out.push(HirStmt::Call {
-                                        callee: eudkit_core::hir::FuncId(fn_idx as u32),
-                                        args,
-                                        rets: vec![var_id],
-                                    });
-                                    return Ok(());
-                                }
+                                out.push(HirStmt::Call {
+                                    callee: eudkit_core::hir::FuncId(fn_idx as u32),
+                                    args,
+                                    rets: vec![var_id],
+                                });
+                                return Ok(());
                             }
                         }
                     }

@@ -388,3 +388,98 @@ export function main() {
         "must compile If(IsUserCP()) with DisplayText and PrintAt actions"
     );
 }
+
+#[test]
+fn compiles_typescript_memory_reads_consistently_for_declarations_and_assignments() {
+    let map_path = repo_root().join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_ctx = session.map_context();
+
+    let ts_source = r#"
+import {
+    dwread_epd,
+    dwread,
+    epdread_epd,
+    bread_epd,
+    bread,
+    wread_epd,
+    wread,
+} from "@eudkit/sdk";
+
+export function main() {
+    let v0 = dwread_epd(100);
+    let v1 = dwread(100);
+    let v2 = epdread_epd(100);
+    let v3 = bread_epd(100);
+    let v4 = bread(100);
+    let v5 = wread_epd(100);
+    let v6 = wread(100);
+
+    v0 = eudkit.dwread_epd(100);
+    v1 = eudkit.dwread(100);
+    v2 = eudkit.epdread_epd(100);
+    v3 = eudkit.bread_epd(100);
+    v4 = eudkit.bread(100);
+    v5 = eudkit.wread_epd(100);
+    v6 = eudkit.wread(100);
+}
+"#;
+
+    let hir = compile_ts_to_hir(ts_source, "ts_mem_read_test", map_ctx)
+        .expect("should compile TS memory reads");
+    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
+    let reads: Vec<&HirStmt> = main_fn.blocks[0]
+        .stmts
+        .iter()
+        .filter(|stmt| matches!(stmt, HirStmt::MemRead { .. }))
+        .collect();
+
+    assert_eq!(
+        reads.len(),
+        14,
+        "seven declaration reads and seven assignment reads"
+    );
+
+    let expected = [
+        (0xFFFF_FFFFu32, 0i32),
+        (0xFFFF_FFFF, 0),
+        (0xFFFF_FFFF, -(0x0058_A364 / 4)),
+        (0xFF, 0),
+        (0xFF, 0),
+        (0xFFFF, 0),
+        (0xFFFF, 0),
+    ];
+
+    for (index, (mask, initial_val)) in expected.iter().enumerate() {
+        let (
+            HirStmt::MemRead {
+                epd: decl_epd,
+                mask: decl_mask,
+                shift: decl_shift,
+                initial_val: decl_init,
+                ..
+            },
+            HirStmt::MemRead {
+                epd: assign_epd,
+                mask: assign_mask,
+                shift: assign_shift,
+                initial_val: assign_init,
+                ..
+            },
+        ) = (reads[index], reads[index + 7])
+        else {
+            panic!("expected MemRead statements for memory-read rule {index}");
+        };
+
+        assert_eq!(
+            decl_epd, assign_epd,
+            "declaration and assignment must lower the same EPD expression for rule {index}"
+        );
+        assert_eq!(decl_mask, assign_mask);
+        assert_eq!(decl_shift, assign_shift);
+        assert_eq!(decl_init, assign_init);
+        assert_eq!(*decl_mask, *mask);
+        assert_eq!(*decl_init, *initial_val);
+    }
+}
