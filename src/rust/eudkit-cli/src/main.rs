@@ -86,7 +86,7 @@ fn cmd_inspect(args: &[String]) -> Result<(), String> {
         .ok_or_else(|| "usage: eudkit inspect <map.scx> [--dts <output.d.ts>]".to_string())?;
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .map_err(|e| e.to_string())?;
-    let ctx = session.map_context();
+    let ctx = session.map_data();
 
     let named_locations = ctx.locations().iter().filter(|l| l.name.is_some()).count();
     let cuwp_used = ctx.cuwp_slots().iter().filter(|s| s.in_use).count();
@@ -133,7 +133,7 @@ fn cmd_inspect(args: &[String]) -> Result<(), String> {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("map");
-        let dts = ctx.generate_dts(mod_name);
+        let dts = eudkit_core::dts::generate_dts(ctx, session.canonical_symbols(), mod_name);
         if let Some(parent) = dts_path.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -384,7 +384,7 @@ fn execute_python_build(
             })?;
 
     Ok(eudkit_core::CompilationReport {
-        trigger_count: session.map_context().triggers().len(),
+        trigger_count: session.map_data().triggers().len(),
         byte_buf_count: 0,
         payload_offset: 0,
         payload_size: 0,
@@ -417,7 +417,11 @@ fn execute_build(proj_cfg: &ProjectConfig) -> Result<eudkit_core::CompilationRep
             .map_err(|e| e.to_string())?;
 
     if let Some(dts_path) = &proj_cfg.dts {
-        let dts = session.map_context().generate_dts(&proj_cfg.name);
+        let dts = eudkit_core::dts::generate_dts(
+            session.map_data(),
+            session.canonical_symbols(),
+            &proj_cfg.name,
+        );
         if let Some(parent) = dts_path.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;

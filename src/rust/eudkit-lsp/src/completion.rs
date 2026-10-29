@@ -4,7 +4,8 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use crate::analysis::{symbol_slot_at, ts_symbol_slot_at, ParsedDocument, SymbolKind, TsLanguage};
-use eudkit_core::map_context::{MapContext, CANONICAL_UNIT_NAMES};
+use eudkit_core::canonical::CANONICAL_UNIT_NAMES;
+use eudkit_core::map_context::MapContext;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionTextEdit, Position, Range as LspRange, TextEdit,
 };

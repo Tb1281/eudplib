@@ -1,4 +1,4 @@
-use eudkit_core::map_context::CANONICAL_UNIT_NAMES;
+use eudkit_core::canonical::CANONICAL_UNIT_NAMES;
 use eudkit_core::{Chk, CompilationConfig, CompilationSession};
 use eudplib_stormlib::{Archive, OpenArchiveFlags};
 use serde_json::{json, Value};

@@ -1,7 +1,9 @@
 pub mod allocator;
+pub mod canonical;
 pub mod chk;
 pub mod config;
 pub mod cp_string;
+pub mod dts;
 pub mod error;
 pub mod hir;
 pub mod injector;
@@ -14,6 +16,7 @@ pub mod session;
 pub use allocator::{
     allocate_lir_module, allocate_lir_module_with_seed, stack_objects, AllocatedPayload,
 };
+pub use canonical::{CanonicalSymbols, CanonicalUnit};
 pub use chk::Chk;
 pub use config::ProjectConfig;
 pub use cp_string::{
@@ -26,5 +29,5 @@ pub use hir::{
 };
 pub use injector::{inject_payload_into_chk, CompilationReport};
 pub use lir::{FieldRef, LirModule};
-pub use map_context::{MapContext, MapString};
+pub use map_context::{MapContext, MapData, MapString, MapSymbol};
 pub use session::{CompilationConfig, CompilationSession};

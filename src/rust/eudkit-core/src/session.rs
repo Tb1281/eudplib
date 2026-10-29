@@ -1,9 +1,10 @@
+use crate::canonical::CanonicalSymbols;
 use crate::chk::Chk;
 use crate::error::{EudkitError, Result};
 use crate::hir::HirModule;
 use crate::injector::CompilationReport;
 use crate::lir::{lower_hir_to_lir, LirModule, LirObject};
-use crate::map_context::{MapContext, MapString};
+use crate::map_context::{MapContext, MapData, MapString};
 use eudplib_stormlib::{Archive, OpenArchiveFlags};
 use std::fs;
 use std::io::Write;
@@ -90,6 +91,21 @@ impl CompilationSession {
 
     pub fn map_context_mut(&mut self) -> &mut MapContext {
         &mut self.map_context
+    }
+
+    /// Returns the map-dependent half of the Map Context.
+    pub fn map_data(&self) -> &MapData {
+        self.map_context.data()
+    }
+
+    /// Returns the mutable map-dependent half of the Map Context.
+    pub fn map_data_mut(&mut self) -> &mut MapData {
+        self.map_context.data_mut()
+    }
+
+    /// Returns the canonical half of the Map Context.
+    pub fn canonical_symbols(&self) -> &CanonicalSymbols {
+        self.map_context.canonical_symbols()
     }
 
     pub fn config(&self) -> &CompilationConfig {

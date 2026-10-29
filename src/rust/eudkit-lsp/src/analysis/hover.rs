@@ -5,7 +5,8 @@
 //! expressions; Pylance, tsserver, and basedpyright remain the source of
 //! general type information.
 
-use eudkit_core::map_context::{stock_unit_id, MapContext, CANONICAL_UNIT_NAMES};
+use eudkit_core::canonical::{stock_unit_id, CANONICAL_UNIT_NAMES};
+use eudkit_core::map_context::MapContext;
 
 use crate::analysis::function_docs::function_doc;
 use crate::analysis::validation::{canonical_location_id, canonical_switch_id};

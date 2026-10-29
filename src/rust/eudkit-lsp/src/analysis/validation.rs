@@ -7,7 +7,8 @@
 
 use std::ops::Range;
 
-use eudkit_core::map_context::{stock_unit_id, MapContext};
+use eudkit_core::canonical::stock_unit_id;
+use eudkit_core::map_context::MapContext;
 
 use crate::analysis::document::ParsedDocument;
 use crate::analysis::symbol_slot::{symbol_slots, SymbolKind};
