@@ -1,6 +1,7 @@
-use eudkit_core::hir::{HirStmt, Modifier, PlayerId, StockAction};
+use eudkit_core::hir::{HirModule, HirStmt, Modifier, PlayerId, ReactiveRule, StockAction};
 use eudkit_core::{CompilationConfig, CompilationSession};
 use eudkit_ts::compile_ts_to_hir;
+use std::fs;
 use std::path::PathBuf;
 
 fn repo_root() -> PathBuf {
@@ -387,4 +388,138 @@ export function main() {
         has_if_user_cp,
         "must compile If(IsUserCP()) with DisplayText and PrintAt actions"
     );
+}
+
+fn collect_reactive_rules(stmts: &[HirStmt], out: &mut Vec<ReactiveRule>) {
+    for stmt in stmts {
+        match stmt {
+            HirStmt::Reactive(rule) => {
+                out.push(rule.clone());
+                let body = match rule {
+                    ReactiveRule::Once { body, .. }
+                    | ReactiveRule::When { body, .. }
+                    | ReactiveRule::Until { body, .. }
+                    | ReactiveRule::After { body, .. }
+                    | ReactiveRule::Every { body, .. } => body,
+                };
+                collect_reactive_rules(body, out);
+            }
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_reactive_rules(then_body, out);
+                collect_reactive_rules(else_body, out);
+            }
+            HirStmt::While { body, .. } => collect_reactive_rules(body, out),
+            _ => {}
+        }
+    }
+}
+
+fn reactive_rules(hir: &HirModule) -> Vec<ReactiveRule> {
+    let mut rules = Vec::new();
+    for function in &hir.functions {
+        for block in &function.blocks {
+            collect_reactive_rules(&block.stmts, &mut rules);
+        }
+    }
+    rules
+}
+
+#[test]
+fn reactive_conformance_fixture_matches_shared_golden_rules() {
+    let root = repo_root();
+    let fixture_dir = root.join("tests/fixtures/reactive_conformance");
+    let map_path = root.join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let source = fs::read_to_string(fixture_dir.join("main.ts"))
+        .expect("should read the TypeScript conformance fixture");
+
+    let hir = compile_ts_to_hir(&source, "reactive_conformance", session.map_context())
+        .expect("should compile the TypeScript conformance fixture");
+    let actual = serde_json::to_value(reactive_rules(&hir)).expect("rules should serialize");
+    let expected: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(fixture_dir.join("expected_rules.json"))
+            .expect("should read the shared expected rules"),
+    )
+    .expect("expected_rules.json should be valid JSON");
+
+    assert_eq!(
+        actual, expected,
+        "TypeScript reactive rules must match the shared Python/TypeScript fixture"
+    );
+
+    let second = compile_ts_to_hir(&source, "reactive_conformance", session.map_context())
+        .expect("should compile the conformance fixture twice");
+    assert_eq!(
+        serde_json::to_value(&hir).unwrap(),
+        serde_json::to_value(&second).unwrap(),
+        "compiling the same reactive fixture twice must emit identical HIR"
+    );
+}
+
+#[test]
+fn reactive_primitives_support_namespaced_calls_and_reject_invalid_shapes() {
+    let root = repo_root();
+    let map_path = root.join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_ctx = session.map_context();
+
+    let namespaced = r#"
+import { var_, DisplayText } from "@eudkit/sdk";
+let flag = var_(0, "flag");
+export function main() {
+    eud.once(() => { DisplayText("eud once"); });
+    eudkit.when(flag.atLeast(1), () => { DisplayText("eudkit when"); });
+    once(null, () => { DisplayText("null once"); });
+    once(undefined, () => { DisplayText("undefined once"); });
+}
+"#;
+    let hir = compile_ts_to_hir(namespaced, "namespaced_reactive", map_ctx)
+        .expect("namespaced and nullish reactive forms should compile");
+    let rules = reactive_rules(&hir);
+    assert_eq!(rules.len(), 4, "must emit one rule per reactive call");
+    assert!(matches!(rules[0], ReactiveRule::Once { .. }));
+    assert!(matches!(rules[1], ReactiveRule::When { .. }));
+    for rule in &rules[2..] {
+        match rule {
+            ReactiveRule::Once { cond, .. } => {
+                assert!(cond.is_empty(), "nullish once must have no condition");
+            }
+            other => panic!("expected a nullish once rule, got {other:?}"),
+        }
+    }
+
+    let invalid_cases = [
+        ("once()", "once expects"),
+        ("once(1)", "once expects a function callback"),
+        ("once(flag.atLeast(1))", "once expects a function callback"),
+        (
+            "once(() => {}, () => {})",
+            "once(condition, callback) expects a condition",
+        ),
+        ("when(flag.atLeast(1))", "when expects"),
+        ("until(flag.atLeast(1))", "until expects"),
+        ("after(24)", "after expects"),
+        ("after(-1, () => {})", "non-negative"),
+        ("every(12)", "every expects"),
+        ("every(12, 42)", "every expects a function callback"),
+    ];
+
+    for (call, expected_message) in invalid_cases {
+        let source = format!(
+            "import {{ var_, DisplayText }} from \"@eudkit/sdk\";\nlet flag = var_(0, \"flag\");\nexport function main() {{ {call}; }}"
+        );
+        let error = compile_ts_to_hir(&source, "invalid_reactive", map_ctx)
+            .expect_err("an invalid reactive shape must fail instead of being ignored")
+            .to_string();
+        assert!(
+            error.contains(expected_message),
+            "expected {expected_message:?} in {error:?} for `{call}`"
+        );
+    }
 }

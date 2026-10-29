@@ -1,0 +1,129 @@
+[
+  {
+    "Once": {
+      "cond": [],
+      "body": [
+        {
+          "Action": {
+            "DisplayText": {
+              "text": "once without condition",
+              "always_display": true
+            }
+          }
+        },
+        {
+          "Action": {
+            "SetResources": {
+              "player": "Player1",
+              "modifier": "Add",
+              "amount": 50,
+              "resource": "Ore"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "Once": {
+      "cond": [
+        {
+          "VarCmp": {
+            "var": 2,
+            "comparison": "AtLeast",
+            "value": 100,
+            "mask": null
+          }
+        }
+      ],
+      "body": [
+        {
+          "Action": {
+            "DisplayText": {
+              "text": "once with condition",
+              "always_display": true
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "When": {
+      "cond": [
+        {
+          "VarCmp": {
+            "var": 0,
+            "comparison": "AtLeast",
+            "value": 10,
+            "mask": null
+          }
+        }
+      ],
+      "body": [
+        {
+          "Action": {
+            "DisplayText": {
+              "text": "when condition",
+              "always_display": true
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "Until": {
+      "cond": [
+        {
+          "VarCmp": {
+            "var": 1,
+            "comparison": "Exactly",
+            "value": 0,
+            "mask": null
+          }
+        }
+      ],
+      "body": [
+        {
+          "Action": {
+            "DisplayText": {
+              "text": "until condition",
+              "always_display": true
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "After": {
+      "delay_ticks": 24,
+      "body": [
+        {
+          "Action": {
+            "DisplayText": {
+              "text": "after delay",
+              "always_display": true
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "Every": {
+      "period_ticks": 12,
+      "body": [
+        {
+          "Action": {
+            "DisplayText": {
+              "text": "every period",
+              "always_display": true
+            }
+          }
+        }
+      ]
+    }
+  }
+]

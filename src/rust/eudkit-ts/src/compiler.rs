@@ -1564,100 +1564,152 @@ impl<'a> TsCompiler<'a> {
             _ => return Ok(None),
         };
 
-        match fn_name {
-            "once" => {
-                let (cond_opt, cb_arg) = if call.arguments.len() == 1 {
-                    (None, call.arguments.first())
-                } else if call.arguments.len() >= 2 {
-                    let first = call.arguments.first().and_then(|a| a.as_expression());
-                    let is_null_or_undef = match first {
-                        Some(Expression::NullLiteral(_)) => true,
-                        Some(Expression::Identifier(id)) if id.name.as_str() == "undefined" => true,
-                        _ => false,
-                    };
-                    if is_null_or_undef {
-                        (None, call.arguments.get(1))
-                    } else {
-                        (first, call.arguments.get(1))
-                    }
-                } else {
-                    return Ok(None);
-                };
+        // Only the five known primitives are reactive. Any other name is a
+        // normal call and must keep its previous lowering path.
+        if !matches!(fn_name, "once" | "when" | "until" | "after" | "every") {
+            return Ok(None);
+        }
 
-                let mut conds = Vec::new();
-                if let Some(cond_expr) = cond_opt {
-                    conds.extend(self.lower_condition(cond_expr)?);
+        // From here on the call names a reactive primitive. A malformed call is
+        // a diagnostic; silently returning `None` would drop the user's rule.
+        let args = reactive_arguments(call, fn_name)?;
+        match fn_name {
+            "once" => self.lower_reactive_once(&args),
+            "when" => self.lower_reactive_when(&args),
+            "until" => self.lower_reactive_until(&args),
+            "after" => self.lower_reactive_after(&args),
+            "every" => self.lower_reactive_every(&args),
+            _ => unreachable!("reactive primitive was checked above"),
+        }
+    }
+
+    fn lower_reactive_once(&mut self, args: &[&Expression]) -> Result<Option<Vec<HirStmt>>> {
+        let (condition, callback) = match args {
+            [callback] => (None, *callback),
+            [condition, callback] => {
+                if self.is_reactive_callback(condition) {
+                    return Err(EudkitTsError::Compile(
+                        "once(condition, callback) expects a condition as its first argument; use once(callback) for an unguarded rule".to_string(),
+                    ));
                 }
-                let mut body = Vec::new();
-                if let Some(cb) = cb_arg.and_then(|a| a.as_expression()) {
-                    self.lower_callback(cb, &mut body)?;
-                }
-                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Once {
-                    cond: conds,
-                    body,
-                })]))
+                let condition = if is_null_or_undefined(condition) {
+                    None
+                } else {
+                    Some(*condition)
+                };
+                (condition, *callback)
             }
-            "when" => {
-                let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let conds = self.lower_condition(arg0)?;
-                let mut body = Vec::new();
-                self.lower_callback(arg1, &mut body)?;
-                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::When {
-                    cond: conds,
-                    body,
-                })]))
+            _ => {
+                return Err(EudkitTsError::Compile(format!(
+                    "once expects once(callback) or once(condition, callback), got {} argument(s)",
+                    args.len()
+                )));
             }
-            "until" => {
-                let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let conds = self.lower_condition(arg0)?;
-                let mut body = Vec::new();
-                self.lower_callback(arg1, &mut body)?;
-                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Until {
-                    cond: conds,
-                    body,
-                })]))
-            }
-            "after" => {
-                let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let loops_val = self.eval_const_expr(arg0)?;
-                let mut body = Vec::new();
-                self.lower_callback(arg1, &mut body)?;
-                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::After {
-                    delay_ticks: loops_val as u32,
-                    body,
-                })]))
-            }
-            "every" => {
-                let Some(arg0) = call.arguments.first().and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let Some(arg1) = call.arguments.get(1).and_then(|a| a.as_expression()) else {
-                    return Ok(None);
-                };
-                let loops_val = self.eval_const_expr(arg0)?;
-                let mut body = Vec::new();
-                self.lower_callback(arg1, &mut body)?;
-                Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Every {
-                    period_ticks: loops_val as u32,
-                    body,
-                })]))
-            }
-            _ => Ok(None),
+        };
+
+        self.ensure_reactive_callback(callback, "once")?;
+        let conds = match condition {
+            Some(condition) => self.lower_condition(condition)?,
+            None => Vec::new(),
+        };
+        let mut body = Vec::new();
+        self.lower_callback(callback, &mut body)?;
+        Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Once {
+            cond: conds,
+            body,
+        })]))
+    }
+
+    fn lower_reactive_when(&mut self, args: &[&Expression]) -> Result<Option<Vec<HirStmt>>> {
+        let (condition, callback) = reactive_condition_and_callback(args, "when")?;
+        self.ensure_reactive_condition(condition, "when")?;
+        self.ensure_reactive_callback(callback, "when")?;
+        let conds = self.lower_condition(condition)?;
+        let mut body = Vec::new();
+        self.lower_callback(callback, &mut body)?;
+        Ok(Some(vec![HirStmt::Reactive(ReactiveRule::When {
+            cond: conds,
+            body,
+        })]))
+    }
+
+    fn lower_reactive_until(&mut self, args: &[&Expression]) -> Result<Option<Vec<HirStmt>>> {
+        let (condition, callback) = reactive_condition_and_callback(args, "until")?;
+        self.ensure_reactive_condition(condition, "until")?;
+        self.ensure_reactive_callback(callback, "until")?;
+        let conds = self.lower_condition(condition)?;
+        let mut body = Vec::new();
+        self.lower_callback(callback, &mut body)?;
+        Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Until {
+            cond: conds,
+            body,
+        })]))
+    }
+
+    fn lower_reactive_after(&mut self, args: &[&Expression]) -> Result<Option<Vec<HirStmt>>> {
+        let (loops, callback) = reactive_loop_and_callback(args, "after")?;
+        let loops = self.reactive_loop_count(loops, "after")?;
+        self.ensure_reactive_callback(callback, "after")?;
+        let mut body = Vec::new();
+        self.lower_callback(callback, &mut body)?;
+        Ok(Some(vec![HirStmt::Reactive(ReactiveRule::After {
+            delay_ticks: loops,
+            body,
+        })]))
+    }
+
+    fn lower_reactive_every(&mut self, args: &[&Expression]) -> Result<Option<Vec<HirStmt>>> {
+        let (loops, callback) = reactive_loop_and_callback(args, "every")?;
+        let loops = self.reactive_loop_count(loops, "every")?;
+        self.ensure_reactive_callback(callback, "every")?;
+        let mut body = Vec::new();
+        self.lower_callback(callback, &mut body)?;
+        Ok(Some(vec![HirStmt::Reactive(ReactiveRule::Every {
+            period_ticks: loops,
+            body,
+        })]))
+    }
+
+    fn reactive_loop_count(&mut self, loops: &Expression, primitive: &str) -> Result<u32> {
+        if self.is_reactive_callback(loops) {
+            return Err(EudkitTsError::Compile(format!(
+                "{primitive}(loops, callback) expects a compile-time loop count as its first argument, not a function"
+            )));
+        }
+        let loops = self.eval_const_expr(loops)?;
+        if loops < 0 {
+            return Err(EudkitTsError::Compile(format!(
+                "{primitive} loop count must be non-negative, got {loops}"
+            )));
+        }
+        Ok(loops as u32)
+    }
+
+    fn ensure_reactive_condition(&self, expr: &Expression, primitive: &str) -> Result<()> {
+        if self.is_reactive_callback(expr) {
+            Err(EudkitTsError::Compile(format!(
+                "{primitive}(condition, callback) expects a condition as its first argument, not a function"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_reactive_callback(&self, expr: &Expression, primitive: &str) -> Result<()> {
+        if self.is_reactive_callback(expr) {
+            Ok(())
+        } else {
+            Err(EudkitTsError::Compile(format!(
+                "{primitive} expects a function callback as its final argument"
+            )))
+        }
+    }
+
+    fn is_reactive_callback(&self, expr: &Expression) -> bool {
+        match expr {
+            Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => true,
+            Expression::Identifier(id) => self.functions.contains_key(id.name.as_str()),
+            _ => false,
         }
     }
 
@@ -1689,9 +1741,19 @@ impl<'a> TsCompiler<'a> {
                         args: Vec::new(),
                         rets: Vec::new(),
                     });
+                } else {
+                    return Err(EudkitTsError::Compile(format!(
+                        "unknown reactive callback function '{}'",
+                        id.name
+                    )));
                 }
             }
-            _ => {}
+            _ => {
+                return Err(EudkitTsError::Compile(
+                    "reactive callback must be an arrow function, a function expression, or a function name"
+                        .to_string(),
+                ));
+            }
         }
         Ok(())
     }
@@ -2960,6 +3022,56 @@ impl<'a> TsCompiler<'a> {
         }
         let val = self.eval_const_expr(expr)?;
         Ok(val as u32)
+    }
+}
+
+fn reactive_arguments<'a>(
+    call: &'a CallExpression<'a>,
+    primitive: &str,
+) -> Result<Vec<&'a Expression<'a>>> {
+    let mut args = Vec::with_capacity(call.arguments.len());
+    for argument in &call.arguments {
+        let Some(expression) = argument.as_expression() else {
+            return Err(EudkitTsError::Compile(format!(
+                "{primitive} does not accept spread arguments"
+            )));
+        };
+        args.push(expression);
+    }
+    Ok(args)
+}
+
+fn reactive_condition_and_callback<'a>(
+    args: &[&'a Expression<'a>],
+    primitive: &str,
+) -> Result<(&'a Expression<'a>, &'a Expression<'a>)> {
+    match args {
+        [condition, callback] => Ok((*condition, *callback)),
+        _ => Err(EudkitTsError::Compile(format!(
+            "{primitive} expects {primitive}(condition, callback), got {} argument(s)",
+            args.len()
+        ))),
+    }
+}
+
+fn reactive_loop_and_callback<'a>(
+    args: &[&'a Expression<'a>],
+    primitive: &str,
+) -> Result<(&'a Expression<'a>, &'a Expression<'a>)> {
+    match args {
+        [loops, callback] => Ok((*loops, *callback)),
+        _ => Err(EudkitTsError::Compile(format!(
+            "{primitive} expects {primitive}(loops, callback), got {} argument(s)",
+            args.len()
+        ))),
+    }
+}
+
+fn is_null_or_undefined(expr: &Expression) -> bool {
+    match expr {
+        Expression::NullLiteral(_) => true,
+        Expression::Identifier(id) => id.name.as_str() == "undefined",
+        _ => false,
     }
 }
 
