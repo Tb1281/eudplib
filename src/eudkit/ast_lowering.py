@@ -602,27 +602,26 @@ class AstToHirLowerer:
                 if cb_ast is not None and isinstance(cb_ast, ast.Lambda):
                     if func_name == "once":
                         conds = coerce_conditions(self.eval_expr(cond_ast), self.session) if cond_ast else []
-                        self.session._raw.begin_once(conds)
+                        begin = lambda: self.session._raw.begin_once(conds)
                     elif func_name == "when":
                         conds = coerce_conditions(self.eval_expr(cond_ast), self.session)
-                        self.session._raw.begin_when(conds)
+                        begin = lambda: self.session._raw.begin_when(conds)
                     elif func_name == "until":
                         conds = coerce_conditions(self.eval_expr(cond_ast), self.session)
-                        self.session._raw.begin_until(conds)
+                        begin = lambda: self.session._raw.begin_until(conds)
                     elif func_name == "after":
                         loops_val = int(self.eval_expr(loops_ast))
-                        self.session._raw.begin_after(loops_val)
-                    elif func_name == "every":
-                        loops_val = int(self.eval_expr(loops_ast))
-                        self.session._raw.begin_every(loops_val)
-
-                    if isinstance(cb_ast.body, (ast.Tuple, ast.List)):
-                        for el in cb_ast.body.elts:
-                            self._lower_expr_stmt(el)
+                        begin = lambda: self.session._raw.begin_after(loops_val)
                     else:
-                        self._lower_expr_stmt(cb_ast.body)
+                        loops_val = int(self.eval_expr(loops_ast))
+                        begin = lambda: self.session._raw.begin_every(loops_val)
 
-                    self.session._raw.end_reactive()
+                    with self.session._scope(begin, self.session._raw.end_reactive):
+                        if isinstance(cb_ast.body, (ast.Tuple, ast.List)):
+                            for el in cb_ast.body.elts:
+                                self._lower_expr_stmt(el)
+                        else:
+                            self._lower_expr_stmt(cb_ast.body)
                     return
 
             fn = self.eval_expr(expr.func)
@@ -671,25 +670,32 @@ class AstToHirLowerer:
     def _lower_if(self, node: ast.If) -> None:
         clauses, final_else = self._expand_if_clauses(node)
         first_test, first_body = clauses[0]
-        self.session._raw.begin_if(self.eval_conditions(first_test))
-        self.lower_stmt_list(first_body)
-        self.session._raw.end_if()
+        with self.session._scope(
+            lambda: self.session._raw.begin_if(self.eval_conditions(first_test)),
+            self.session._raw.end_if,
+        ):
+            self.lower_stmt_list(first_body)
 
         for elif_test, elif_body in clauses[1:]:
-            self.session._raw.begin_elif(self.eval_conditions(elif_test))
-            self.lower_stmt_list(elif_body)
-            self.session._raw.end_elif()
+            with self.session._scope(
+                lambda: self.session._raw.begin_elif(self.eval_conditions(elif_test)),
+                self.session._raw.end_elif,
+            ):
+                self.lower_stmt_list(elif_body)
 
         if final_else:
-            self.session._raw.begin_else()
-            self.lower_stmt_list(final_else)
-            self.session._raw.end_else()
+            with self.session._scope(
+                self.session._raw.begin_else, self.session._raw.end_else
+            ):
+                self.lower_stmt_list(final_else)
 
     def _lower_while(self, node: ast.While) -> None:
         conds = self.eval_conditions(node.test)
-        self.session._raw.begin_while(conds)
-        self.lower_stmt_list(node.body)
-        self.session._raw.end_while()
+        with self.session._scope(
+            lambda: self.session._raw.begin_while(conds),
+            self.session._raw.end_while,
+        ):
+            self.lower_stmt_list(node.body)
 
     def _lower_for(self, node: ast.For) -> None:
         if not isinstance(node.target, ast.Name):
@@ -721,10 +727,12 @@ class AstToHirLowerer:
                 if iter_obj.step > 0
                 else (loop_var > iter_obj.stop)
             )
-            self.session._raw.begin_while(cond.resolve(self.session))
-            self.lower_stmt_list(node.body)
-            loop_var.add(iter_obj.step, session=self.session)
-            self.session._raw.end_while()
+            with self.session._scope(
+                lambda: self.session._raw.begin_while(cond.resolve(self.session)),
+                self.session._raw.end_while,
+            ):
+                self.lower_stmt_list(node.body)
+                loop_var.add(iter_obj.step, session=self.session)
             return
 
         raise TypeError(f"Unsupported for-loop iterable in @eud.fn: {iter_obj!r}")
@@ -773,44 +781,29 @@ class AstToHirLowerer:
                 except Exception:
                     pass
 
+            begin: Callable[[], None] | None = None
             if is_once:
                 conds = []
                 if once_cond_ast is not None:
                     evaluated_cond = self.eval_expr(once_cond_ast)
                     conds = coerce_conditions(evaluated_cond, self.session)
-                self.session._raw.begin_once(conds)
-                self.lower_stmt_list(node.body)
-                self.session._raw.end_reactive()
-                return
-
-            if is_when:
-                evaluated_cond = self.eval_expr(when_cond_ast)
-                conds = coerce_conditions(evaluated_cond, self.session)
-                self.session._raw.begin_when(conds)
-                self.lower_stmt_list(node.body)
-                self.session._raw.end_reactive()
-                return
-
-            if is_until:
-                evaluated_cond = self.eval_expr(until_cond_ast)
-                conds = coerce_conditions(evaluated_cond, self.session)
-                self.session._raw.begin_until(conds)
-                self.lower_stmt_list(node.body)
-                self.session._raw.end_reactive()
-                return
-
-            if is_after:
+                begin = lambda: self.session._raw.begin_once(conds)
+            elif is_when:
+                conds = coerce_conditions(self.eval_expr(when_cond_ast), self.session)
+                begin = lambda: self.session._raw.begin_when(conds)
+            elif is_until:
+                conds = coerce_conditions(self.eval_expr(until_cond_ast), self.session)
+                begin = lambda: self.session._raw.begin_until(conds)
+            elif is_after:
                 loops_val = int(self.eval_expr(after_loops_ast))
-                self.session._raw.begin_after(loops_val)
-                self.lower_stmt_list(node.body)
-                self.session._raw.end_reactive()
-                return
-
-            if is_every:
+                begin = lambda: self.session._raw.begin_after(loops_val)
+            elif is_every:
                 loops_val = int(self.eval_expr(every_loops_ast))
-                self.session._raw.begin_every(loops_val)
-                self.lower_stmt_list(node.body)
-                self.session._raw.end_reactive()
+                begin = lambda: self.session._raw.begin_every(loops_val)
+
+            if begin is not None:
+                with self.session._scope(begin, self.session._raw.end_reactive):
+                    self.lower_stmt_list(node.body)
                 return
 
         raise TypeError(f"Unsupported with-statement in @eud.fn: {ast.dump(node)}")

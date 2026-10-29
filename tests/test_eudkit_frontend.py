@@ -1,3 +1,4 @@
+import contextlib
 import json
 import tempfile
 import time
@@ -154,6 +155,64 @@ class TestEudkitPythonFrontend(unittest.TestCase):
             self.assertEqual(report.vproc_count, 0)
             self.assertEqual(report.byte_buf_count, 2)
             self.assertTrue(out_map.exists())
+
+    def test_session_scope_scaffold_delegates_all_managers(self):
+        import eudkit
+        from eudkit.types import _active_builder_session
+
+        session = eudkit.Session(TESTMAP_PATH)
+        flag = session.var(0, name="scope_flag")
+        other = session.var(0, name="scope_other")
+        previous = _active_builder_session.get()
+        entered = 0
+        original_scope = session._scope
+
+        @contextlib.contextmanager
+        def spy(begin, end):
+            nonlocal entered
+            entered += 1
+            with original_scope(begin, end):
+                yield
+
+        session._scope = spy
+
+        with session.main_loop():
+            self.assertIs(_active_builder_session.get(), session)
+            with session.if_(flag == 0):
+                self.assertIs(_active_builder_session.get(), session)
+            with session.elif_(flag == 1):
+                pass
+            with session.else_():
+                pass
+            with session.while_(flag < 1):
+                flag += 1
+            with session.once():
+                pass
+            with session.when(other == 0):
+                pass
+            with session.until(other == 1):
+                pass
+            with session.after(1):
+                pass
+            with session.every(1):
+                pass
+
+        self.assertEqual(entered, 10)
+        self.assertIs(_active_builder_session.get(), previous)
+
+    def test_session_scope_restores_ambient_session_after_exception(self):
+        import eudkit
+        from eudkit.types import _active_builder_session
+
+        session = eudkit.Session(TESTMAP_PATH)
+        flag = session.var(0, name="scope_exc_flag")
+        previous = _active_builder_session.get()
+
+        with self.assertRaises(RuntimeError):
+            with session.if_(flag == 0):
+                raise RuntimeError("boom")
+
+        self.assertIs(_active_builder_session.get(), previous)
 
     def test_v2_vs_v1_differential_budget_gate(self):
         import eudkit
