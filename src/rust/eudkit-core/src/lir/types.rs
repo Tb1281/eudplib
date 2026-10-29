@@ -4,10 +4,12 @@ use std::fmt::{self, Write};
 
 pub const EUDX_SIGNATURE: u16 = 0x4353; // b"SC"
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct ObjectId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum CondField {
     LocId,
     Player,
@@ -28,7 +30,7 @@ impl CondField {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ActField {
     LocId1,
     StrId,
@@ -55,7 +57,7 @@ impl ActField {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum VProcSlotField {
     TriggerBase,
     NextPtr,
@@ -79,7 +81,7 @@ impl VProcSlotField {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TriggerSlotField {
     PrevPtr,
     NextPtr,
@@ -109,7 +111,7 @@ impl TriggerSlotField {
 }
 
 /// Typed LIR pointer to a specific field inside a trigger, condition, action slot, or buffer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct FieldRef {
     pub object: ObjectId,
     pub field: TriggerSlotField,

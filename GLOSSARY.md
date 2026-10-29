@@ -8,6 +8,22 @@ A compiler, intermediate representation, and multi-language SDK for programming 
 A host-language authoring layer (such as the Python DSL or TypeScript DSL) that captures a mapmaker's intent and emits an IR Module.
 _Avoid_: Script, transpiler, wrapper
 
+**Host Execution**:
+Running a Frontend script in its native language runtime at synthesis time, so build-time code can use ordinary language features and libraries, as opposed to parse-only lowering.
+_Avoid_: Runtime frontend, interpreted build
+
+**Static Frontend**:
+A Frontend that parses source and evaluates a documented subset without executing the host language, such as the TypeScript `oxc` pipeline.
+_Avoid_: Parse-only compiler, sandbox
+
+**Synthesis**:
+The Frontend phase that executes or parses an authoring script and emits a frozen HIR Plan.
+_Avoid_: Build, transpile
+
+**HIR Plan (`.eudhir`)**:
+A versioned, canonical serialization of an HIR Module plus a Map Context fingerprint, produced by a Frontend and consumed by the Backend without executing the authoring language.
+_Avoid_: AST dump, bytecode, manifest
+
 **IR (Intermediate Representation)**:
 The language-agnostic program and map-mutation representation linking any Frontend to the Backend, consisting of **HIR** (structured control flow, variables, and game intents) and **LIR** (low-level triggers, memory objects, and relocation symbols).
 _Avoid_: AST, bytecode, payload
@@ -73,7 +89,7 @@ A StarCraft trigger that overflows the unit field of a `Deaths` condition or `Se
 _Avoid_: Bring trigger, memory trigger
 
 **EUD Turbo Trigger**:
-An EUD memory technique that continuously resets StarCraft's trigger loop countdown byte (`0x6509A0`) to 0, forcing trigger evaluation to execute every single game frame (~24 times per second on Fastest speed).
+An EUD memory technique that continuously resets StarCraft's 4-byte Trigger Execution Timer (`0x6509A0`) to 0, forcing trigger evaluation to execute every single game frame (~24 times per second on Fastest speed).
 _Avoid_: Hyper trigger hack, turbo tick
 
 **Reactive Rule**:

@@ -92,6 +92,12 @@ impl CompilationSession {
         &mut self.map_context
     }
 
+    /// Stable identity of the input map's `scenario.chk`, used to bind a
+    /// frozen HIR plan to the Map Context it was synthesized against.
+    pub fn map_fingerprint(&self) -> String {
+        crate::plan::fingerprint_bytes(&self.chk.to_bytes())
+    }
+
     pub fn config(&self) -> &CompilationConfig {
         &self.config
     }

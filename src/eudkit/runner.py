@@ -18,6 +18,7 @@ def run_build(
     obscurate_seed: int | None = None,
     dump_hir: bool = False,
     dump_lir: bool = False,
+    plan: str | Path | None = None,
 ) -> Any:
     input_path = Path(input_map).resolve()
     if not input_path.exists():
@@ -40,6 +41,12 @@ def run_build(
                 sys.path.insert(0, entry_dir)
 
             runpy.run_path(str(entry_path), run_name="__main__")
+
+        if plan is not None:
+            plan_path = Path(plan).resolve()
+            sess.write_plan(plan_path)
+            print(f"Wrote HIR plan {plan_path}")
+            return None
 
         if dump_hir:
             print(sess.dump_hir())
@@ -85,6 +92,9 @@ def main() -> None:
     parser.add_argument(
         "--dump-lir", action="store_true", help="Dump Low-Level IR (LIR)"
     )
+    parser.add_argument(
+        "--plan", help="Write the canonical HIR plan artifact (.eudhir)"
+    )
 
     args = parser.parse_args()
 
@@ -97,6 +107,7 @@ def main() -> None:
             obscurate_seed=args.seed,
             dump_hir=args.dump_hir,
             dump_lir=args.dump_lir,
+            plan=args.plan,
         )
         if report is not None:
             print(

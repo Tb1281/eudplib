@@ -19,19 +19,21 @@ pub const fn epd(address: u32) -> i32 {
     ((address as i64) - (DEATHS_BASE_ADDR as i64)).div_euclid(4) as i32
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct FuncId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct BlockId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ByteBufId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct VarId(pub u32);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HirVar {
     pub id: VarId,
     pub name: String,
@@ -48,7 +50,7 @@ impl HirVar {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PlayerId {
     Player1,
     Player2,
@@ -155,7 +157,7 @@ impl fmt::Display for PlayerId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Comparison {
     AtLeast,
     AtMost,
@@ -182,7 +184,7 @@ impl fmt::Display for Comparison {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CmpOp {
     Eq,
     Ne,
@@ -192,7 +194,7 @@ pub enum CmpOp {
     Ge,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SwitchState {
     Set,
     Cleared,
@@ -207,7 +209,7 @@ impl SwitchState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SwitchAction {
     Set,
     Clear,
@@ -226,7 +228,7 @@ impl SwitchAction {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Modifier {
     SetTo,
     Add,
@@ -253,7 +255,7 @@ impl fmt::Display for Modifier {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ResourceType {
     Ore,
     Gas,
@@ -280,7 +282,7 @@ impl fmt::Display for ResourceType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HirValue {
     Const(i32),
     ByteBufAddress(ByteBufId, u32),
@@ -305,7 +307,7 @@ impl fmt::Display for HirValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum HirUnaryOp {
     Neg,
     BitNot,
@@ -320,7 +322,7 @@ impl fmt::Display for HirUnaryOp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum HirBinOp {
     Add,
     Sub,
@@ -353,7 +355,7 @@ impl fmt::Display for HirBinOp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HirExpr {
     Const(i32),
     Var(VarId),
@@ -564,7 +566,7 @@ impl fmt::Display for HirExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StockCondition {
     Always,
     Never,
@@ -1098,14 +1100,14 @@ impl fmt::Display for StockCondition {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FormatPart {
     Text(String),
     Decimal(HirExpr),
     Hex(HirExpr),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PrintTarget {
     DisplayText,
     ScreenLine(u8),
@@ -1168,7 +1170,7 @@ pub fn parse_format_template(template: &str, args: &[HirExpr]) -> Result<Vec<For
     Ok(parts)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StockAction {
     SetDeaths {
         player: PlayerId,
@@ -1481,7 +1483,7 @@ impl fmt::Display for StockAction {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum InlineHint {
     #[default]
     Auto,
@@ -1489,10 +1491,12 @@ pub enum InlineHint {
     Never,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct FuncPtrId(pub u32);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HirFuncPtr {
     pub id: FuncPtrId,
     pub name: String,
@@ -1500,7 +1504,7 @@ pub struct HirFuncPtr {
     pub initial_target: Option<FuncId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ReactiveRule {
     Once {
         cond: Vec<StockCondition>,
@@ -1524,7 +1528,7 @@ pub enum ReactiveRule {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HirStmt {
     Trigger {
         label: Option<String>,
@@ -1591,7 +1595,7 @@ pub enum HirStmt {
     Reactive(ReactiveRule),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HirTerminator {
     Jump(BlockId),
     Branch {
@@ -1602,7 +1606,7 @@ pub enum HirTerminator {
     Return,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HirBasicBlock {
     pub id: BlockId,
     pub label: String,
@@ -1629,7 +1633,7 @@ impl HirBasicBlock {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HirFunction {
     pub id: FuncId,
     pub name: String,
@@ -1688,7 +1692,7 @@ impl HirFunction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HirByteBuf {
     pub id: ByteBufId,
     pub name: String,
@@ -1705,7 +1709,7 @@ impl HirByteBuf {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HirModule {
     pub name: String,
     pub functions: Vec<HirFunction>,

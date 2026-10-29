@@ -9,6 +9,7 @@ pub mod inlining;
 pub mod lir;
 pub mod map_context;
 pub mod obscurate;
+pub mod plan;
 pub mod session;
 
 pub use allocator::{
@@ -27,4 +28,5 @@ pub use hir::{
 pub use injector::{inject_payload_into_chk, CompilationReport};
 pub use lir::{FieldRef, LirModule};
 pub use map_context::{MapContext, MapString};
+pub use plan::{fingerprint_bytes, HirPlan, PlanMap, HIR_PLAN_FORMAT, HIR_PLAN_SCHEMA_VERSION};
 pub use session::{CompilationConfig, CompilationSession};

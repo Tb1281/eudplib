@@ -619,3 +619,135 @@ fn cli_builds_all_typescript_showcase_examples_cleanly() {
         );
     }
 }
+
+#[test]
+fn cli_synth_plan_then_compile_is_byte_identical_to_source_build() {
+    let root = repo_root();
+    let testmap = root.join("tests/unittests/testmap.scx");
+
+    let temp = tempfile::tempdir().unwrap();
+    let ts_file = temp.path().join("main.ts");
+    let plan_file = temp.path().join("plan.eudhir");
+    let from_plan = temp.path().join("from_plan.scx");
+    let from_source = temp.path().join("from_source.scx");
+
+    fs::write(
+        &ts_file,
+        r#"
+import { var_, SetDeaths, SetResources, PreserveTrigger, Player1, Ore, Add } from "@eudkit/sdk";
+
+const counter = var_(10);
+const minerals = var_(500);
+
+export function main() {
+    counter.add(1);
+    if (counter.atLeast(15)) {
+        minerals.add(100);
+        SetResources(Player1, Add, 100, Ore);
+    }
+    for (let i = 0; i < 3; i++) {
+        SetDeaths(Player1, Add, 5, 0);
+    }
+    PreserveTrigger();
+}
+"#,
+    )
+    .unwrap();
+
+    let synth = Command::new(eudkit_bin())
+        .arg("synth")
+        .arg("--input")
+        .arg(&testmap)
+        .arg("--entry")
+        .arg(&ts_file)
+        .arg("--plan")
+        .arg(&plan_file)
+        .output()
+        .expect("should execute eudkit synth");
+    assert!(
+        synth.status.success(),
+        "synth failed: {}",
+        String::from_utf8_lossy(&synth.stderr)
+    );
+    assert!(plan_file.exists(), "synth must write the HIR plan");
+
+    let check = Command::new(eudkit_bin())
+        .arg("synth")
+        .arg("--input")
+        .arg(&testmap)
+        .arg("--entry")
+        .arg(&ts_file)
+        .arg("--plan")
+        .arg(&plan_file)
+        .arg("--check")
+        .output()
+        .expect("should execute eudkit synth --check");
+    assert!(
+        check.status.success(),
+        "synth --check failed: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    let compile = Command::new(eudkit_bin())
+        .arg("compile")
+        .arg("--plan")
+        .arg(&plan_file)
+        .arg("--input")
+        .arg(&testmap)
+        .arg("--output")
+        .arg(&from_plan)
+        .output()
+        .expect("should execute eudkit compile --plan");
+    assert!(
+        compile.status.success(),
+        "compile --plan failed: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let build = Command::new(eudkit_bin())
+        .arg("build")
+        .arg("--input")
+        .arg(&testmap)
+        .arg("--output")
+        .arg(&from_source)
+        .arg("--entry")
+        .arg(&ts_file)
+        .output()
+        .expect("should execute eudkit build");
+    assert!(
+        build.status.success(),
+        "source build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    assert_eq!(
+        fs::read(&from_plan).unwrap(),
+        fs::read(&from_source).unwrap(),
+        "compiling a frozen HIR plan must produce the same map bytes as a source build"
+    );
+
+    let modified = fs::read_to_string(&ts_file)
+        .unwrap()
+        .replace("counter.add(1);", "counter.add(2);");
+    fs::write(&ts_file, modified).unwrap();
+    let drift = Command::new(eudkit_bin())
+        .arg("synth")
+        .arg("--input")
+        .arg(&testmap)
+        .arg("--entry")
+        .arg(&ts_file)
+        .arg("--plan")
+        .arg(&plan_file)
+        .arg("--check")
+        .output()
+        .expect("should execute eudkit synth --check after drift");
+    assert!(
+        !drift.status.success(),
+        "synth --check must fail when the committed plan is stale"
+    );
+    assert!(
+        String::from_utf8_lossy(&drift.stderr).contains("out of date"),
+        "drift diagnostic should explain the stale plan: {}",
+        String::from_utf8_lossy(&drift.stderr)
+    );
+}

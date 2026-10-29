@@ -3,6 +3,7 @@ use eudkit_core::hir::{
     HirUnaryOp, HirValue, Modifier, PlayerId, PrintTarget, ResourceType, StockAction,
     StockCondition, SwitchAction, SwitchState, VarId,
 };
+use eudkit_core::plan::{HirPlan, PlanMap};
 use eudkit_core::{CompilationConfig, CompilationSession, EudkitError, HirBuilder};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -1066,6 +1067,48 @@ impl PyCompilationSession {
     fn dump_hir(&mut self) -> PyResult<String> {
         self.sync_hir()?;
         Ok(self.session.dump_hir())
+    }
+
+    fn dump_plan(&mut self) -> PyResult<String> {
+        self.sync_hir()?;
+        let module = self
+            .session
+            .hir_module()
+            .ok_or_else(|| PyRuntimeError::new_err("no HIR module is available"))?
+            .clone();
+        let mut plan = HirPlan::new(module);
+        let mut map = PlanMap::new(self.session.map_fingerprint());
+        if let Some(name) = self
+            .session
+            .input_map_path()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+        {
+            map = map.with_name(name);
+        }
+        plan = plan.with_map(map);
+        plan.to_json().map_err(to_py_err)
+    }
+
+    fn write_plan(&mut self, path: &str) -> PyResult<()> {
+        let json = self.dump_plan()?;
+        let output = std::path::Path::new(path);
+        if let Some(parent) = output.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    PyRuntimeError::new_err(format!(
+                        "failed to create plan directory {}: {e}",
+                        parent.display()
+                    ))
+                })?;
+            }
+        }
+        std::fs::write(output, json).map_err(|e| {
+            PyRuntimeError::new_err(format!(
+                "failed to write HIR plan {}: {e}",
+                output.display()
+            ))
+        })
     }
 
     fn dump_lir(&mut self) -> PyResult<String> {
