@@ -494,3 +494,114 @@ export function main() {
         assert_eq!(*decl_init, *initial_val);
     }
 }
+
+#[test]
+fn compiles_player_groups_without_lossy_epd_fallback() {
+    let map_path = repo_root().join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_ctx = session.map_context();
+
+    let ts_source = r#"
+import {
+    Add,
+    Allies,
+    AllPlayers,
+    Foes,
+    Force1,
+    Force2,
+    Force3,
+    Force4,
+    NeutralPlayers,
+    NonAlliedVictoryPlayers,
+    SetDeaths,
+} from "@eudkit/sdk";
+
+export function main() {
+    SetDeaths(Foes, Add, 1, "Terran Marine");
+    SetDeaths(Allies, Add, 1, "Terran Marine");
+    SetDeaths(NeutralPlayers, Add, 1, "Terran Marine");
+    SetDeaths(AllPlayers, Add, 1, "Terran Marine");
+    SetDeaths(Force1, Add, 1, "Terran Marine");
+    SetDeaths(Force2, Add, 1, "Terran Marine");
+    SetDeaths(Force3, Add, 1, "Terran Marine");
+    SetDeaths(Force4, Add, 1, "Terran Marine");
+    SetDeaths(NonAlliedVictoryPlayers, Add, 1, "Terran Marine");
+}
+"#;
+
+    let hir = compile_ts_to_hir(ts_source, "player_group_test", map_ctx)
+        .expect("should compile player groups");
+
+    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
+    let players: Vec<PlayerId> = main_fn.blocks[0]
+        .stmts
+        .iter()
+        .filter_map(|stmt| match stmt {
+            HirStmt::Action(StockAction::SetDeaths { player, .. }) => Some(*player),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        players,
+        vec![
+            PlayerId::Foes,
+            PlayerId::Allies,
+            PlayerId::NeutralPlayers,
+            PlayerId::AllPlayers,
+            PlayerId::Force1,
+            PlayerId::Force2,
+            PlayerId::Force3,
+            PlayerId::Force4,
+            PlayerId::NonAlliedVictoryPlayers,
+        ]
+    );
+}
+
+#[test]
+fn rejects_invalid_switch_actions_and_keeps_valid_aliases() {
+    let map_path = repo_root().join("tests/unittests/testmap.scx");
+    let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
+        .expect("should load testmap.scx");
+    let map_ctx = session.map_context();
+
+    let error = compile_ts_to_hir(
+        r#"
+import { SetSwitch } from "@eudkit/sdk";
+
+export function main() {
+    SetSwitch(0, 8);
+}
+"#,
+        "invalid_switch_action",
+        map_ctx,
+    )
+    .expect_err("invalid switch action must be a compile error");
+    assert!(
+        error.to_string().contains("invalid switch action 8"),
+        "unexpected error: {error}"
+    );
+
+    let hir = compile_ts_to_hir(
+        r#"
+import { Random, SetSwitch } from "@eudkit/sdk";
+
+export function main() {
+    SetSwitch(0, Random);
+}
+"#,
+        "valid_switch_action",
+        map_ctx,
+    )
+    .expect("valid switch action alias should compile");
+
+    let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
+    assert!(main_fn.blocks[0].stmts.iter().any(|stmt| matches!(
+        stmt,
+        HirStmt::Action(StockAction::SetSwitch {
+            action: eudkit_core::hir::SwitchAction::Random,
+            ..
+        })
+    )));
+}

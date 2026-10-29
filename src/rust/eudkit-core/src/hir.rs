@@ -94,52 +94,17 @@ pub enum PlayerId {
 }
 
 impl PlayerId {
+    /// Decodes a zero-based player slot.
+    ///
+    /// This is a compatibility wrapper over [`PlayerId::from_code`], which also
+    /// decodes every player group such as `Force1` and `Foes`.
     pub const fn from_player_slot(slot: u8) -> Self {
-        match slot {
-            0 => Self::Player1,
-            1 => Self::Player2,
-            2 => Self::Player3,
-            3 => Self::Player4,
-            4 => Self::Player5,
-            5 => Self::Player6,
-            6 => Self::Player7,
-            7 => Self::Player8,
-            8 => Self::Player9,
-            9 => Self::Player10,
-            10 => Self::Player11,
-            11 => Self::Player12,
-            13 => Self::CurrentPlayer,
-            17 => Self::AllPlayers,
-            other => Self::Epd(other as i32),
-        }
+        Self::from_code(slot as i32)
     }
 
+    /// Returns the canonical HIR code for this player selector.
     pub const fn encode(self) -> i32 {
-        match self {
-            Self::Player1 => 0,
-            Self::Player2 => 1,
-            Self::Player3 => 2,
-            Self::Player4 => 3,
-            Self::Player5 => 4,
-            Self::Player6 => 5,
-            Self::Player7 => 6,
-            Self::Player8 => 7,
-            Self::Player9 => 8,
-            Self::Player10 => 9,
-            Self::Player11 => 10,
-            Self::Player12 => 11,
-            Self::CurrentPlayer => 13,
-            Self::Foes => 14,
-            Self::Allies => 15,
-            Self::NeutralPlayers => 16,
-            Self::AllPlayers => 17,
-            Self::Force1 => 18,
-            Self::Force2 => 19,
-            Self::Force3 => 20,
-            Self::Force4 => 21,
-            Self::NonAlliedVictoryPlayers => 26,
-            Self::Epd(v) => v,
-        }
+        self.code()
     }
 }
 
@@ -181,12 +146,9 @@ pub enum Comparison {
 }
 
 impl Comparison {
+    /// Returns the canonical HIR code for this comparison.
     pub const fn encode(self) -> u8 {
-        match self {
-            Self::AtLeast => 0,
-            Self::AtMost => 1,
-            Self::Exactly => 10,
-        }
+        self.code()
     }
 }
 
@@ -217,11 +179,9 @@ pub enum SwitchState {
 }
 
 impl SwitchState {
+    /// Returns the canonical HIR code for this switch state.
     pub const fn encode(self) -> u8 {
-        match self {
-            Self::Set => 2,
-            Self::Cleared => 3,
-        }
+        self.code()
     }
 }
 
@@ -234,13 +194,9 @@ pub enum SwitchAction {
 }
 
 impl SwitchAction {
+    /// Returns the canonical HIR code for this switch action.
     pub const fn encode(self) -> u8 {
-        match self {
-            Self::Set => 4,
-            Self::Clear => 5,
-            Self::Toggle => 6,
-            Self::Random => 11,
-        }
+        self.code()
     }
 }
 
@@ -252,12 +208,9 @@ pub enum Modifier {
 }
 
 impl Modifier {
+    /// Returns the canonical HIR code for this modifier.
     pub const fn encode(self) -> u8 {
-        match self {
-            Self::SetTo => 7,
-            Self::Add => 8,
-            Self::Subtract => 9,
-        }
+        self.code()
     }
 }
 
@@ -279,12 +232,9 @@ pub enum ResourceType {
 }
 
 impl ResourceType {
+    /// Returns the canonical HIR code for this resource type.
     pub const fn encode(self) -> u8 {
-        match self {
-            Self::Ore => 0,
-            Self::Gas => 1,
-            Self::OreAndGas => 2,
-        }
+        self.code()
     }
 }
 

@@ -14,6 +14,7 @@ pub mod map_context;
 pub mod obscurate;
 pub mod session;
 pub mod symbols;
+pub mod vocabulary;
 
 pub use allocator::{
     allocate_lir_module, allocate_lir_module_with_seed, stack_objects, AllocatedPayload,
@@ -33,3 +34,6 @@ pub use injector::{inject_payload_into_chk, CompilationReport};
 pub use lir::{FieldRef, LirModule};
 pub use map_context::{MapData, MapString, MapSymbol};
 pub use session::{CompilationConfig, CompilationSession};
+pub use vocabulary::{
+    frontend_constant, frontend_constants, FrontendConstant, OrderType, ScoreType, VocabEntry,
+};

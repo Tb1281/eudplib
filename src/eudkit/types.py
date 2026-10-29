@@ -14,81 +14,85 @@ _active_builder_session: contextvars.ContextVar[Session | None] = (
     contextvars.ContextVar("eudkit_active_builder_session", default=None)
 )
 
+# The Rust Backend owns the one Frontend vocabulary manifest. Re-export its
+# spellings here so Python constants cannot drift from the compiler.
+_VOCABULARY: dict[str, int] = _rust_eudkit.vocabulary_constants()
+
 # Player IDs
-Player1 = 0
-Player2 = 1
-Player3 = 2
-Player4 = 3
-Player5 = 4
-Player6 = 5
-Player7 = 6
-Player8 = 7
-Player9 = 8
-Player10 = 9
-Player11 = 10
-Player12 = 11
-P1 = 0
-P2 = 1
-P3 = 2
-P4 = 3
-P5 = 4
-P6 = 5
-P7 = 6
-P8 = 7
-P9 = 8
-P10 = 9
-P11 = 10
-P12 = 11
-CurrentPlayer = 13
-Foes = 14
-Allies = 15
-NeutralPlayers = 16
-AllPlayers = 17
-Force1 = 18
-Force2 = 19
-Force3 = 20
-Force4 = 21
-NonAlliedVictoryPlayers = 26
+Player1 = _VOCABULARY["Player1"]
+Player2 = _VOCABULARY["Player2"]
+Player3 = _VOCABULARY["Player3"]
+Player4 = _VOCABULARY["Player4"]
+Player5 = _VOCABULARY["Player5"]
+Player6 = _VOCABULARY["Player6"]
+Player7 = _VOCABULARY["Player7"]
+Player8 = _VOCABULARY["Player8"]
+Player9 = _VOCABULARY["Player9"]
+Player10 = _VOCABULARY["Player10"]
+Player11 = _VOCABULARY["Player11"]
+Player12 = _VOCABULARY["Player12"]
+P1 = _VOCABULARY["P1"]
+P2 = _VOCABULARY["P2"]
+P3 = _VOCABULARY["P3"]
+P4 = _VOCABULARY["P4"]
+P5 = _VOCABULARY["P5"]
+P6 = _VOCABULARY["P6"]
+P7 = _VOCABULARY["P7"]
+P8 = _VOCABULARY["P8"]
+P9 = _VOCABULARY["P9"]
+P10 = _VOCABULARY["P10"]
+P11 = _VOCABULARY["P11"]
+P12 = _VOCABULARY["P12"]
+CurrentPlayer = _VOCABULARY["CurrentPlayer"]
+Foes = _VOCABULARY["Foes"]
+Allies = _VOCABULARY["Allies"]
+NeutralPlayers = _VOCABULARY["NeutralPlayers"]
+AllPlayers = _VOCABULARY["AllPlayers"]
+Force1 = _VOCABULARY["Force1"]
+Force2 = _VOCABULARY["Force2"]
+Force3 = _VOCABULARY["Force3"]
+Force4 = _VOCABULARY["Force4"]
+NonAlliedVictoryPlayers = _VOCABULARY["NonAlliedVictoryPlayers"]
 
 # Comparisons
-AtLeast = 0
-AtMost = 1
-Exactly = 10
+AtLeast = _VOCABULARY["AtLeast"]
+AtMost = _VOCABULARY["AtMost"]
+Exactly = _VOCABULARY["Exactly"]
 
 # Quantities / Counts
 All = 0
 
 # Modifiers
-SetTo = 7
-Add = 8
-Subtract = 9
+SetTo = _VOCABULARY["SetTo"]
+Add = _VOCABULARY["Add"]
+Subtract = _VOCABULARY["Subtract"]
 
 # Resources
-Ore = 0
-Gas = 1
-OreAndGas = 2
+Ore = _VOCABULARY["Ore"]
+Gas = _VOCABULARY["Gas"]
+OreAndGas = _VOCABULARY["OreAndGas"]
 
 # Switch states & actions
-Set = 2
-Cleared = 3
-Clear = 5
-Toggle = 6
-Random = 7
+Set = _VOCABULARY["Set"]
+Cleared = _VOCABULARY["Cleared"]
+Clear = _VOCABULARY["Clear"]
+Toggle = _VOCABULARY["Toggle"]
+Random = _VOCABULARY["Random"]
 
 # Order types
-Move = 0
-Patrol = 1
-Attack = 2
+Move = _VOCABULARY["Move"]
+Patrol = _VOCABULARY["Patrol"]
+Attack = _VOCABULARY["Attack"]
 
 # Score types
-Total = 0
-Units = 1
-Buildings = 2
-UnitsAndBuildings = 3
-Kills = 4
-Razings = 5
-KillsAndRazings = 6
-Custom = 7
+Total = _VOCABULARY["Total"]
+Units = _VOCABULARY["Units"]
+Buildings = _VOCABULARY["Buildings"]
+UnitsAndBuildings = _VOCABULARY["UnitsAndBuildings"]
+Kills = _VOCABULARY["Kills"]
+Razings = _VOCABULARY["Razings"]
+KillsAndRazings = _VOCABULARY["KillsAndRazings"]
+Custom = _VOCABULARY["Custom"]
 
 DEATHS_BASE_ADDR = 0x0058A364
 

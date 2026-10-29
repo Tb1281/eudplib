@@ -24,86 +24,32 @@ fn to_py_err(err: EudkitError) -> PyErr {
 }
 
 fn decode_comparison(code: u8) -> PyResult<Comparison> {
-    match code {
-        0 => Ok(Comparison::AtLeast),
-        1 => Ok(Comparison::AtMost),
-        10 => Ok(Comparison::Exactly),
-        other => Err(PyValueError::new_err(format!(
-            "invalid comparison code: {other}"
-        ))),
-    }
+    Comparison::from_code(code)
+        .ok_or_else(|| PyValueError::new_err(format!("invalid comparison code: {code}")))
 }
 
 fn decode_modifier(code: u8) -> PyResult<Modifier> {
-    match code {
-        7 => Ok(Modifier::SetTo),
-        8 => Ok(Modifier::Add),
-        9 => Ok(Modifier::Subtract),
-        other => Err(PyValueError::new_err(format!(
-            "invalid modifier code: {other}"
-        ))),
-    }
+    Modifier::from_code(code)
+        .ok_or_else(|| PyValueError::new_err(format!("invalid modifier code: {code}")))
 }
 
 fn decode_resource(code: u8) -> PyResult<ResourceType> {
-    match code {
-        0 => Ok(ResourceType::Ore),
-        1 => Ok(ResourceType::Gas),
-        2 => Ok(ResourceType::OreAndGas),
-        other => Err(PyValueError::new_err(format!(
-            "invalid resource code: {other}"
-        ))),
-    }
+    ResourceType::from_code(code)
+        .ok_or_else(|| PyValueError::new_err(format!("invalid resource code: {code}")))
 }
 
 fn decode_switch_state(code: u8) -> PyResult<SwitchState> {
-    match code {
-        2 => Ok(SwitchState::Set),
-        3 => Ok(SwitchState::Cleared),
-        other => Err(PyValueError::new_err(format!(
-            "invalid switch state code: {other}"
-        ))),
-    }
+    SwitchState::from_code(code)
+        .ok_or_else(|| PyValueError::new_err(format!("invalid switch state code: {code}")))
 }
 
 fn decode_switch_action(code: u8) -> PyResult<SwitchAction> {
-    match code {
-        4 | 2 => Ok(SwitchAction::Set),
-        5 | 3 => Ok(SwitchAction::Clear),
-        6 => Ok(SwitchAction::Toggle),
-        11 | 7 => Ok(SwitchAction::Random),
-        other => Err(PyValueError::new_err(format!(
-            "invalid switch action code: {other}"
-        ))),
-    }
+    SwitchAction::from_code(code)
+        .ok_or_else(|| PyValueError::new_err(format!("invalid switch action code: {code}")))
 }
 
 fn decode_player(code: i32) -> PlayerId {
-    match code {
-        0 => PlayerId::Player1,
-        1 => PlayerId::Player2,
-        2 => PlayerId::Player3,
-        3 => PlayerId::Player4,
-        4 => PlayerId::Player5,
-        5 => PlayerId::Player6,
-        6 => PlayerId::Player7,
-        7 => PlayerId::Player8,
-        8 => PlayerId::Player9,
-        9 => PlayerId::Player10,
-        10 => PlayerId::Player11,
-        11 => PlayerId::Player12,
-        13 => PlayerId::CurrentPlayer,
-        14 => PlayerId::Foes,
-        15 => PlayerId::Allies,
-        16 => PlayerId::NeutralPlayers,
-        17 => PlayerId::AllPlayers,
-        18 => PlayerId::Force1,
-        19 => PlayerId::Force2,
-        20 => PlayerId::Force3,
-        21 => PlayerId::Force4,
-        26 => PlayerId::NonAlliedVictoryPlayers,
-        other => PlayerId::Epd(other),
-    }
+    PlayerId::from_code(code)
 }
 
 fn decode_bin_op(code: u8) -> PyResult<HirBinOp> {
@@ -1144,6 +1090,19 @@ impl PyCompilationSession {
     }
 }
 
+/// Returns the shared Frontend vocabulary constants.
+///
+/// The Python Frontend uses this manifest instead of maintaining a second copy
+/// of player, comparison, modifier, switch, resource, order, and score names.
+#[pyfunction]
+pub(crate) fn vocabulary_constants(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
+    let constants = PyDict::new(py);
+    for constant in eudkit_core::vocabulary::frontend_constants() {
+        constants.set_item(constant.name, constant.code)?;
+    }
+    Ok(constants)
+}
+
 /// Resolves `eudkit.toml` and flag overrides into one build configuration.
 ///
 /// Python Frontends call this instead of parsing `eudkit.toml` themselves, so
@@ -1206,6 +1165,7 @@ fn path_string(path: Option<&Path>) -> Option<String> {
 pub(crate) mod eudkit_mod {
     #[pymodule_export]
     use super::{
-        PyAction, PyCompilationReport, PyCompilationSession, PyCondition, PyExpr, PyMapString,
+        vocabulary_constants, PyAction, PyCompilationReport, PyCompilationSession, PyCondition,
+        PyExpr, PyMapString,
     };
 }
