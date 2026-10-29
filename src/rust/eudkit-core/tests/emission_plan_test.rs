@@ -498,7 +498,7 @@ fn plan_matches_emitted_lir_trigger_spans_patch_sites_and_object_ids() {
         .expect("should load testmap.scx");
 
     let plan = EmissionPlan::build(&hir, &expanded, main_id);
-    let lir = emit_lir(&hir, expanded, session.map_context_mut()).expect("emit LIR");
+    let lir = emit_lir(&hir, expanded, session.map_data_mut()).expect("emit LIR");
 
     assert_eq!(lir.trigger_count() as u32, plan.trigger_count());
     assert_eq!(lir.entry_trigger, plan.block(0).first_trigger);

@@ -500,7 +500,8 @@ fn compiles_player_groups_without_lossy_epd_fallback() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let ts_source = r#"
 import {
@@ -530,7 +531,7 @@ export function main() {
 }
 "#;
 
-    let hir = compile_ts_to_hir(ts_source, "player_group_test", map_ctx)
+    let hir = compile_ts_to_hir(ts_source, "player_group_test", map_data, canonical_symbols)
         .expect("should compile player groups");
 
     let main_fn = hir.functions().iter().find(|f| f.name == "main").unwrap();
@@ -564,7 +565,8 @@ fn rejects_invalid_switch_actions_and_keeps_valid_aliases() {
     let map_path = repo_root().join("tests/unittests/testmap.scx");
     let session = CompilationSession::from_map(&map_path, CompilationConfig::default())
         .expect("should load testmap.scx");
-    let map_ctx = session.map_context();
+    let map_data = session.map_data();
+    let canonical_symbols = session.canonical_symbols();
 
     let error = compile_ts_to_hir(
         r#"
@@ -575,7 +577,8 @@ export function main() {
 }
 "#,
         "invalid_switch_action",
-        map_ctx,
+        map_data,
+        canonical_symbols,
     )
     .expect_err("invalid switch action must be a compile error");
     assert!(
@@ -592,7 +595,8 @@ export function main() {
 }
 "#,
         "valid_switch_action",
-        map_ctx,
+        map_data,
+        canonical_symbols,
     )
     .expect("valid switch action alias should compile");
 
